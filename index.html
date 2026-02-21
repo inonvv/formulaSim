@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FormulaSim — 3D Racing Car Simulator</title>
+  <link rel="stylesheet" href="css/styles.css" />
+  <meta name="theme-color" content="#0a0a0f" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="FormulaSim" />
+</head>
+<body>
+
+  <!-- ── Canvas ────────────────────────────────────────────────── -->
+  <canvas id="canvas"></canvas>
+
+  <!-- ── HUD / Speedometer ──────────────────────────────────────── -->
+  <div id="hud">
+    <div id="speed-display">
+      <span id="speed-value">0</span>
+      <span id="speed-unit">km/h</span>
+    </div>
+    <div id="rpm-bar-wrap">
+      <div id="rpm-label">RPM</div>
+      <div id="rpm-bar"><div id="rpm-fill"></div></div>
+    </div>
+    <div id="gear-display">N</div>
+  </div>
+
+  <!-- ── Info overlay (top-left) ───────────────────────────────── -->
+  <div id="car-badge">
+    <span id="car-badge-type">F1</span>
+    <span id="car-badge-name">Formula One</span>
+  </div>
+
+  <!-- ── Camera label ──────────────────────────────────────────── -->
+  <div id="camera-label">ORBIT</div>
+
+  <!-- ── Active effects chips ──────────────────────────────────── -->
+  <div id="effects-chips"></div>
+
+  <!-- ── Control Panel ─────────────────────────────────────────── -->
+  <div id="panel">
+    <div id="panel-header">
+      <span class="panel-title">FormulaSim</span>
+      <button id="panel-toggle" title="Collapse">&#8249;</button>
+    </div>
+
+    <div id="panel-body">
+
+      <!-- Car selection -->
+      <section class="ctrl-group">
+        <label class="group-label">CAR</label>
+        <div class="btn-row" id="car-btns">
+          <button class="car-btn active" data-car="F1">F1</button>
+          <button class="car-btn" data-car="F2">F2</button>
+          <button class="car-btn" data-car="F3">F3</button>
+          <button class="car-btn" data-car="GT">GT</button>
+        </div>
+      </section>
+
+      <!-- Speed -->
+      <section class="ctrl-group">
+        <label class="group-label">SPEED — <span id="speed-label-val">0</span> km/h</label>
+        <input type="range" id="speed-slider" min="0" max="350" step="5" value="0" />
+        <div class="btn-row" id="speed-presets">
+          <button class="preset-btn" data-speed="0">IDLE</button>
+          <button class="preset-btn" data-speed="80">SLOW</button>
+          <button class="preset-btn" data-speed="180">MED</button>
+          <button class="preset-btn" data-speed="280">FAST</button>
+          <button class="preset-btn" data-speed="350">MAX</button>
+        </div>
+      </section>
+
+      <!-- Environment -->
+      <section class="ctrl-group">
+        <label class="group-label">ENVIRONMENT</label>
+        <div class="toggle-row">
+          <button class="env-btn" id="btn-airflow" data-env="airflow">
+            <span class="env-icon">🌬</span> Airflow
+          </button>
+          <button class="env-btn" id="btn-rain" data-env="rain">
+            <span class="env-icon">🌧</span> Rain
+          </button>
+          <button class="env-btn" id="btn-optimal" data-env="optimal">
+            <span class="env-icon">☀</span> Optimal
+          </button>
+        </div>
+      </section>
+
+      <!-- Camera -->
+      <section class="ctrl-group">
+        <label class="group-label">CAMERA</label>
+        <div class="btn-row" id="cam-btns">
+          <button class="cam-btn active" data-cam="orbit">Orbit</button>
+          <button class="cam-btn" data-cam="trackside">Trackside</button>
+          <button class="cam-btn" data-cam="cockpit">Cockpit</button>
+          <button class="cam-btn" data-cam="drone">Drone</button>
+        </div>
+      </section>
+
+      <!-- Playback -->
+      <section class="ctrl-group">
+        <label class="group-label">PLAYBACK</label>
+        <div class="btn-row">
+          <button id="play-pause-btn" class="play-btn">&#9646;&#9646; PAUSE</button>
+          <button id="reset-btn" class="reset-btn">&#8635; RESET</button>
+        </div>
+      </section>
+
+    </div><!-- /panel-body -->
+  </div><!-- /panel -->
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

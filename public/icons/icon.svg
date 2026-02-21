@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#0a0a0f"/>
+  <!-- Main body -->
+  <ellipse cx="256" cy="256" rx="160" ry="52" fill="#e8132a"/>
+  <!-- Nose cone -->
+  <polygon points="416,256 360,236 360,276" fill="#c0102a"/>
+  <!-- Front wing -->
+  <rect x="340" y="222" width="60" height="12" rx="4" fill="#e8132a"/>
+  <rect x="340" y="278" width="60" height="12" rx="4" fill="#e8132a"/>
+  <!-- Rear wing -->
+  <rect x="110" y="210" width="70" height="14" rx="4" fill="#e8132a"/>
+  <rect x="110" y="288" width="70" height="14" rx="4" fill="#e8132a"/>
+  <rect x="138" y="210" width="12" height="92" rx="3" fill="#c0102a"/>
+  <!-- Cockpit -->
+  <ellipse cx="235" cy="252" rx="34" ry="20" fill="#1a1a2e"/>
+  <ellipse cx="235" cy="252" rx="28" ry="14" fill="#0d0d1a"/>
+  <!-- Front tyres -->
+  <ellipse cx="330" cy="222" rx="18" ry="28" fill="#222"/>
+  <ellipse cx="330" cy="290" rx="18" ry="28" fill="#222"/>
+  <!-- Rear tyres -->
+  <ellipse cx="175" cy="218" rx="22" ry="34" fill="#222"/>
+  <ellipse cx="175" cy="294" rx="22" ry="34" fill="#222"/>
+  <!-- Halo -->
+  <path d="M210,248 Q240,228 270,248" stroke="#888" stroke-width="5" fill="none" stroke-linecap="round"/>
+</svg>
