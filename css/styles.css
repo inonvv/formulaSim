@@ -496,5 +496,8 @@ body {
   #orbit-hint { bottom: 140px; }
 
   /* ── Safe-area padding for iPhone home bar ── */
-  #panel-header { padding-bottom: max(14px, env(safe-area-inset-bottom)); }
+  #panel-header {
+    min-height: 56px;
+    padding-bottom: max(14px, env(safe-area-inset-bottom));
+  }
 }

@@ -515,6 +515,12 @@ panelToggle.addEventListener('click', () => {
   }
 });
 
+// Auto-collapse panel on mobile so the car is visible on load
+if (window.innerWidth <= 640) {
+  panel.classList.add('collapsed');
+  panelToggle.title = 'Expand';
+}
+
 /* ── Orbit hint ─────────────────────────────────────────────────── */
 const hintEl = document.createElement('div');
 hintEl.id = 'orbit-hint';
