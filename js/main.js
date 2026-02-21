@@ -507,7 +507,12 @@ const camLabel   = document.getElementById('camera-label');
 panelToggle.addEventListener('click', () => {
   const collapsed = panel.classList.toggle('collapsed');
   panelToggle.title = collapsed ? 'Expand' : 'Collapse';
-  camLabel.style.right = collapsed ? '32px' : '312px'; // 280px panel + 32px gap
+  // Desktop only — on mobile the label is positioned by CSS, not inline style
+  if (window.innerWidth > 640) {
+    camLabel.style.right = collapsed ? '32px' : 'calc(var(--panel-w) + 32px)';
+  } else {
+    camLabel.style.right = '';   // let CSS rule take over
+  }
 });
 
 /* ── Orbit hint ─────────────────────────────────────────────────── */

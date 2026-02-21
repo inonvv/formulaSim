@@ -430,3 +430,71 @@ body {
 #panel-body::-webkit-scrollbar { width: 4px; }
 #panel-body::-webkit-scrollbar-track { background: transparent; }
 #panel-body::-webkit-scrollbar-thumb { background: var(--panel-border); border-radius: 2px; }
+
+/* ─── Responsive: tablet ≤ 900px ────────────────────────────────── */
+@media (max-width: 900px) {
+  :root { --panel-w: 220px; }
+  #speed-value { font-size: 2.2rem; }
+  #gear-display { font-size: 1.5rem; }
+  #rpm-bar { width: 90px; }
+  #hud { gap: 14px; padding: 10px 18px; }
+  #camera-label { right: calc(var(--panel-w) + 20px); }
+}
+
+/* ─── Responsive: mobile ≤ 640px ────────────────────────────────── */
+@media (max-width: 640px) {
+  /* ── Panel: right-side → bottom drawer ── */
+  #panel {
+    top: auto;
+    bottom: 0;
+    right: 0;
+    left: 0;
+    width: 100%;
+    height: auto;
+    max-height: 65vh;
+    border-left: none;
+    border-top: 1px solid var(--panel-border);
+    /* Expanded by default: translateY(0) */
+    transform: translateY(0);
+    transition: transform 0.3s ease;
+  }
+  /* Collapsed: slide down, expose only the 56px header */
+  #panel.collapsed {
+    transform: translateY(calc(100% - 56px));
+  }
+  /* Toggle chevron: point up when expanded, down when collapsed */
+  #panel-toggle { transform: rotate(90deg); }
+  #panel.collapsed #panel-toggle { transform: rotate(-90deg); }
+
+  /* Panel body: constrained height + scroll */
+  #panel-body {
+    max-height: calc(65vh - 56px);
+    overflow-y: auto;
+  }
+
+  /* ── HUD: raise above the drawer strip ── */
+  #hud {
+    bottom: 80px;
+    gap: 10px;
+    padding: 8px 14px;
+  }
+  #speed-value { font-size: 1.8rem; min-width: 3ch; }
+  #gear-display { font-size: 1.4rem; }
+  #rpm-bar { width: 70px; }
+
+  /* ── Camera label: top-right, not panel-relative ── */
+  #camera-label { right: 16px; top: 16px; }
+
+  /* ── Car badge: smaller ── */
+  #car-badge { top: 16px; left: 16px; }
+  #car-badge-type { font-size: 1.6rem; }
+
+  /* ── Effects chips: tighten ── */
+  #effects-chips { top: 16px; }
+
+  /* ── Orbit hint: raise above drawer ── */
+  #orbit-hint { bottom: 140px; }
+
+  /* ── Safe-area padding for iPhone home bar ── */
+  #panel-header { padding-bottom: max(14px, env(safe-area-inset-bottom)); }
+}
