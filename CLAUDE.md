@@ -32,3 +32,5 @@ Never allow inconsistent trip state. Validation must protect data integrity. Sta
 ## Development Approach — TDD
 
 Follow test-driven development. Write tests **before** developing features or fixing bugs.
+
+
