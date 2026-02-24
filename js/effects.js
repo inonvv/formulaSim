@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import {
   traceStreamlinePath, topViewVelocity, pressureCoeff,
-  cpToColor, vortexVelocity, sideViewVelocity,
+  cpToColor, vortexVelocity, sideViewVelocity, applyWingStall,
 } from './airflow-core.js';
 
 /* ── Utility ───────────────────────────────────────────────────── */
@@ -387,6 +387,18 @@ export class AirflowEffect {
   setVisible(v) {
     this._visible = v;
     this.group.visible = v;
+  }
+
+  /**
+   * Switch between normal and stalled (wing-flip) aerodynamic profile.
+   * Rebuilds all geometry to reflect separated flow.
+   */
+  setWingStall(isStalled) {
+    this._wingStalled = isStalled;
+    this._disposeAll();
+    const profile = applyWingStall(getProfile(this._type), isStalled);
+    this._build(profile);
+    this.group.visible = this._visible;
   }
 
   update(dt, t) {

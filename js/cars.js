@@ -244,22 +244,41 @@ function buildF1({ color }) {
   // Layer 3: upper section (narrows above driver knees)
   grp.add(mesh(rBox(0.50, 0.18, 1.80, 0.09), matBody, 0, 0.47, -0.12));
 
-  /* ── SIDEPODS ─────────────────────────────────────────────── */
+  /* ── SIDEPODS — 2022+ sharp-sidepod geometry ─────────────── */
   for (const s of [-1, 1]) {
-    // Main pod volume — sculpted rBox
-    grp.add(mesh(rBox(0.31, 0.36, 1.80), matBody, s * 0.535, 0.23, 0.28));
-    // Pod top surface
-    grp.add(mesh(rBox(0.30, 0.07, 1.75), matBody, s * 0.535, 0.43, 0.30));
-    // Undercut scallop (bottom-outer edge)
-    grp.add(mesh(box(0.11, 0.20, 1.70), matCarbon, s * 0.595, 0.11, 0.32));
-    // Inlet rectangular mouth
-    grp.add(mesh(box(0.055, 0.30, 0.055), matCockpit, s * 0.520, 0.23, -0.62));
-    // Inlet vane leading edge
-    grp.add(mesh(box(0.022, 0.28, 0.12), matCarbon, s * 0.475, 0.23, -0.60));
-    // Heat exchanger exit louvers (2 rows)
-    for (let li = 0; li < 3; li++) {
-      grp.add(mesh(box(0.22, 0.038, 0.38), matCarbon, s * 0.490, 0.42, 0.72 + li * 0.30));
+    // Main pod volume — near-square section, sharp edges
+    grp.add(mesh(rBox(0.34, 0.32, 1.85, 0.015), matBody, s * 0.545, 0.22, 0.28));
+    // Shoulder crease line (upper ridge transition)
+    grp.add(mesh(rBox(0.33, 0.055, 1.82, 0.012), matBody, s * 0.540, 0.385, 0.28));
+    // Top surface panel
+    grp.add(mesh(rBox(0.31, 0.06, 1.78, 0.010), matBody, s * 0.535, 0.435, 0.30));
+    // Undercut — angled lower panel (generates vortex seal)
+    const ucPanel = mesh(box(0.13, 0.18, 1.74), matCarbon, s * 0.610, 0.10, 0.30);
+    ucPanel.rotation.z = s * 0.35;
+    grp.add(ucPanel);
+    // Inlet mouth — sharp rectangular opening
+    grp.add(mesh(rBox(0.065, 0.32, 0.060, 0.008), matCockpit, s * 0.528, 0.22, -0.64));
+    // Carbon fibre inlet surround lip
+    grp.add(mesh(rBox(0.080, 0.340, 0.016, 0.005), matCarbon, s * 0.528, 0.22, -0.64));
+    // Central divider vane inside inlet
+    grp.add(mesh(box(0.010, 0.30, 0.048), matCarbon, s * 0.528, 0.22, -0.64));
+    // Leading edge wedge — toed outward
+    const ledge = mesh(rBox(0.018, 0.34, 0.10, 0.006), matCarbon, s * 0.490, 0.22, -0.67);
+    ledge.rotation.y = s * 0.12;
+    grp.add(ledge);
+    // Louver mounting rail
+    grp.add(mesh(box(0.24, 0.012, 0.46), matCarbon, s * 0.490, 0.428, 0.68));
+    // Heat exchanger exit louvers — 5 slats, each angled
+    for (let li = 0; li < 5; li++) {
+      const louver = mesh(box(0.22, 0.028, 0.36), matCarbon, s * 0.490, 0.420 - li * 0.012, 0.70 + li * 0.26);
+      louver.rotation.x = -0.15;
+      grp.add(louver);
     }
+    // Top winglet fin — angled inward
+    const finGeo = wingGeo(0.18, 0.12, 0.018);
+    const fin = mesh(finGeo, matCarbon, s * 0.530, 0.460, 0.22);
+    fin.rotation.y = s * 0.22;
+    grp.add(fin);
     // Bargeboard stack (in front of sidepod)
     for (let bi = 0; bi < 4; bi++) {
       const v = mesh(box(0.022, 0.22, 0.16), matCarbon, s * (0.38 + bi * 0.06), 0.08, -0.66 + bi * 0.05);
@@ -348,21 +367,26 @@ function buildF1({ color }) {
     grp.add(mesh(cyl(0.017, 0.020, 0.24, 8), matCarbon, s * 0.22, -0.082, -2.60));
   }
 
-  /* ── REAR WING — two-element DRS airfoil ──────────────────── */
-  grp.add(mesh(wingGeo(1.92, 0.36, 0.100), matBody, 0, 0.98, 1.95));
-  // DRS flap
-  grp.add(mesh(wingGeo(1.92, 0.26, 0.080), matBody, 0, 0.87, 1.89));
+  /* ── REAR WING — two-element DRS airfoil (named group for flip) */
+  const rearWingGrp = new THREE.Group();
+  rearWingGrp.name = 'rearWing';
+  rearWingGrp.position.set(0, 0.98, 1.95);   // pivot at main-plane leading edge
+  // Main plane at pivot origin
+  rearWingGrp.add(mesh(wingGeo(1.92, 0.36, 0.100), matBody, 0, 0, 0));
+  // DRS flap (local offsets from pivot)
+  rearWingGrp.add(mesh(wingGeo(1.92, 0.26, 0.080), matBody, 0, -0.11, -0.06));
   // Endplates (tall, louvred)
   for (const s of [-1, 1]) {
-    grp.add(mesh(box(0.040, 0.56, 0.40), matCarbon, s * 0.96, 0.77, 1.95));
+    rearWingGrp.add(mesh(box(0.040, 0.56, 0.40), matCarbon, s * 0.96, -0.21, 0));
     for (let li = 0; li < 5; li++) {
-      grp.add(mesh(box(0.026, 0.048, 0.042), matCfrp, s * 0.972, 0.98 - li * 0.08, 1.78 + li * 0.04));
+      rearWingGrp.add(mesh(box(0.026, 0.048, 0.042), matCfrp, s * 0.972, -li * 0.08, -0.17 + li * 0.04));
     }
   }
   // Rear wing main pillar
-  grp.add(mesh(cyl(0.036, 0.054, 0.72, 10), matCarbon, 0, 0.64, 1.95));
+  rearWingGrp.add(mesh(cyl(0.036, 0.054, 0.72, 10), matCarbon, 0, -0.34, 0));
   // Beam wing (lower element)
-  grp.add(mesh(wingGeo(0.94, 0.24, 0.060), matCarbon, 0, 0.56, 1.89));
+  rearWingGrp.add(mesh(wingGeo(0.94, 0.24, 0.060), matCarbon, 0, -0.42, -0.06));
+  grp.add(rearWingGrp);
 
   /* ── REAR DIFFUSER ────────────────────────────────────────── */
   const diff = mesh(box(1.14, 0.060, 1.00), matCarbon, 0, -0.044, 1.93);
@@ -436,13 +460,42 @@ function buildF2({ color }) {
   grp.add(mesh(rBox(0.62, 0.22, 2.65, 0.06), matBody, 0, 0.28, -0.06));
   grp.add(mesh(rBox(0.48, 0.17, 1.70, 0.08), matBody, 0, 0.44, -0.10));
 
-  /* ── SIDEPODS ─────────────────────────────────────────────── */
+  /* ── SIDEPODS — 2022+ sharp-sidepod geometry (F2 ~85% scale) ─ */
   for (const s of [-1, 1]) {
-    grp.add(mesh(rBox(0.30, 0.30, 1.55), matBody, s * 0.500, 0.20, 0.26));
-    grp.add(mesh(rBox(0.28, 0.065, 1.50), matBody, s * 0.500, 0.37, 0.28));
-    grp.add(mesh(box(0.10, 0.17, 1.45), matCarbon, s * 0.555, 0.10, 0.30));
-    grp.add(mesh(box(0.050, 0.26, 0.050), matCockpit, s * 0.490, 0.20, -0.55));
-    // Bargeboard (3 vanes)
+    // Main pod volume
+    grp.add(mesh(rBox(0.29, 0.27, 1.57, 0.015), matBody, s * 0.465, 0.19, 0.26));
+    // Shoulder crease line
+    grp.add(mesh(rBox(0.28, 0.048, 1.55, 0.012), matBody, s * 0.462, 0.328, 0.26));
+    // Top surface panel
+    grp.add(mesh(rBox(0.265, 0.052, 1.51, 0.010), matBody, s * 0.455, 0.370, 0.28));
+    // Undercut angled panel
+    const ucPanel = mesh(box(0.11, 0.15, 1.48), matCarbon, s * 0.520, 0.085, 0.28);
+    ucPanel.rotation.z = s * 0.35;
+    grp.add(ucPanel);
+    // Inlet mouth — sharp rectangular
+    grp.add(mesh(rBox(0.055, 0.272, 0.051, 0.008), matCockpit, s * 0.449, 0.19, -0.55));
+    // Carbon fibre inlet surround lip
+    grp.add(mesh(rBox(0.068, 0.289, 0.014, 0.005), matCarbon, s * 0.449, 0.19, -0.55));
+    // Central divider vane
+    grp.add(mesh(box(0.009, 0.255, 0.041), matCarbon, s * 0.449, 0.19, -0.55));
+    // Leading edge wedge
+    const ledge = mesh(rBox(0.015, 0.289, 0.085, 0.006), matCarbon, s * 0.416, 0.19, -0.57);
+    ledge.rotation.y = s * 0.12;
+    grp.add(ledge);
+    // Louver mounting rail
+    grp.add(mesh(box(0.204, 0.010, 0.391), matCarbon, s * 0.416, 0.365, 0.58));
+    // Heat exchanger exit louvers — 5 slats
+    for (let li = 0; li < 5; li++) {
+      const louver = mesh(box(0.187, 0.024, 0.306), matCarbon, s * 0.416, 0.357 - li * 0.010, 0.595 + li * 0.221);
+      louver.rotation.x = -0.15;
+      grp.add(louver);
+    }
+    // Top winglet fin
+    const finGeo = wingGeo(0.153, 0.102, 0.015);
+    const fin = mesh(finGeo, matCarbon, s * 0.451, 0.391, 0.187);
+    fin.rotation.y = s * 0.22;
+    grp.add(fin);
+    // Bargeboard (3 vanes — F2 spec)
     for (let bi = 0; bi < 3; bi++) {
       const v = mesh(box(0.020, 0.19, 0.14), matCarbon, s * (0.36 + bi * 0.06), 0.07, -0.60 + bi * 0.04);
       v.rotation.y = s * (0.10 + bi * 0.06);
@@ -504,14 +557,18 @@ function buildF2({ color }) {
     grp.add(mesh(cyl(0.016, 0.018, 0.20, 8), matCarbon, s * 0.20, -0.076, -2.40));
   }
 
-  /* ── REAR WING — airfoil elements ────────────────────────── */
-  grp.add(mesh(wingGeo(1.74, 0.30, 0.090), matBody, 0, 0.90, 1.80));
-  grp.add(mesh(wingGeo(1.74, 0.22, 0.070), matBody, 0, 0.80, 1.74));
+  /* ── REAR WING — named group for flip animation ──────────── */
+  const rearWingGrp = new THREE.Group();
+  rearWingGrp.name = 'rearWing';
+  rearWingGrp.position.set(0, 0.90, 1.80);
+  rearWingGrp.add(mesh(wingGeo(1.74, 0.30, 0.090), matBody, 0, 0, 0));
+  rearWingGrp.add(mesh(wingGeo(1.74, 0.22, 0.070), matBody, 0, -0.10, -0.06));
   for (const s of [-1, 1]) {
-    grp.add(mesh(box(0.038, 0.48, 0.34), matCarbon, s * 0.87, 0.70, 1.80));
+    rearWingGrp.add(mesh(box(0.038, 0.48, 0.34), matCarbon, s * 0.87, -0.20, 0));
   }
-  grp.add(mesh(cyl(0.034, 0.050, 0.64, 10), matCarbon, 0, 0.60, 1.80));
-  grp.add(mesh(wingGeo(0.82, 0.20, 0.055), matCarbon, 0, 0.52, 1.74));
+  rearWingGrp.add(mesh(cyl(0.034, 0.050, 0.64, 10), matCarbon, 0, -0.30, 0));
+  rearWingGrp.add(mesh(wingGeo(0.82, 0.20, 0.055), matCarbon, 0, -0.38, -0.06));
+  grp.add(rearWingGrp);
 
   /* ── DIFFUSER ─────────────────────────────────────────────── */
   const diff = mesh(box(1.00, 0.054, 0.88), matCarbon, 0, -0.042, 1.80);
@@ -636,13 +693,17 @@ function buildF3({ color }) {
     grp.add(mesh(cyl(0.014, 0.016, 0.17, 8), matCarbon, s * 0.18, -0.066, -2.17));
   }
 
-  /* ── REAR WING — airfoil elements ────────────────────────── */
-  grp.add(mesh(wingGeo(1.56, 0.26, 0.080), matBody, 0, 0.82, 1.68));
-  grp.add(mesh(wingGeo(1.56, 0.18, 0.062), matBody, 0, 0.73, 1.63));
+  /* ── REAR WING — named group for flip animation ──────────── */
+  const rearWingGrp = new THREE.Group();
+  rearWingGrp.name = 'rearWing';
+  rearWingGrp.position.set(0, 0.82, 1.68);
+  rearWingGrp.add(mesh(wingGeo(1.56, 0.26, 0.080), matBody, 0, 0, 0));
+  rearWingGrp.add(mesh(wingGeo(1.56, 0.18, 0.062), matBody, 0, -0.09, -0.05));
   for (const s of [-1, 1]) {
-    grp.add(mesh(box(0.034, 0.42, 0.28), matCarbon, s * 0.78, 0.64, 1.68));
+    rearWingGrp.add(mesh(box(0.034, 0.42, 0.28), matCarbon, s * 0.78, -0.18, 0));
   }
-  grp.add(mesh(cyl(0.032, 0.046, 0.56, 10), matCarbon, 0, 0.54, 1.68));
+  rearWingGrp.add(mesh(cyl(0.032, 0.046, 0.56, 10), matCarbon, 0, -0.28, 0));
+  grp.add(rearWingGrp);
 
   /* ── DIFFUSER ─────────────────────────────────────────────── */
   const diff = mesh(box(0.88, 0.048, 0.76), matCarbon, 0, -0.038, 1.68);
@@ -822,25 +883,29 @@ function buildGT({ color }) {
     grp.add(mesh(cyl(0.048, 0.048, 0.020, 14), matChrome, ox, -0.090, 2.40));
   }
 
-  /* ── REAR WING — GT3 swan-neck, airfoil elements ──────────── */
-  // Main element
-  grp.add(mesh(wingGeo(1.76, 0.42, 0.110), matBody, 0, 0.84, 1.92));
+  /* ── REAR WING — GT3 swan-neck (named group for flip) ────── */
+  const rearWingGrp = new THREE.Group();
+  rearWingGrp.name = 'rearWing';
+  rearWingGrp.position.set(0, 0.84, 1.92);
+  // Main element at pivot origin
+  rearWingGrp.add(mesh(wingGeo(1.76, 0.42, 0.110), matBody, 0, 0, 0));
   // Second element (Gurney-like flap)
-  grp.add(mesh(wingGeo(1.76, 0.28, 0.075), matBody, 0, 0.74, 1.86));
+  rearWingGrp.add(mesh(wingGeo(1.76, 0.28, 0.075), matBody, 0, -0.10, -0.06));
   // Large endplates with louvres
   for (const s of [-1, 1]) {
-    grp.add(mesh(box(0.046, 0.48, 0.46), matCarbon, s * 0.88, 0.64, 1.92));
-    grp.add(mesh(box(0.042, 0.06, 0.40), matCarbon, s * 0.88, 0.96, 1.92));
+    rearWingGrp.add(mesh(box(0.046, 0.48, 0.46), matCarbon, s * 0.88, -0.20, 0));
+    rearWingGrp.add(mesh(box(0.042, 0.06, 0.40), matCarbon, s * 0.88,  0.12, 0));
     for (let li = 0; li < 4; li++) {
-      grp.add(mesh(box(0.030, 0.046, 0.040), makeMat(0x1a1a1a, 0.5, 0.5), s * 0.896, 0.86 - li * 0.07, 1.75 + li * 0.04));
+      rearWingGrp.add(mesh(box(0.030, 0.046, 0.040), makeMat(0x1a1a1a, 0.5, 0.5), s * 0.896, 0.02 - li * 0.07, -0.17 + li * 0.04));
     }
   }
   // Swan-neck mount pillars
   for (const s of [-1, 1]) {
-    const sn = mesh(cyl(0.026, 0.032, 0.40, 10), matCarbon, s * 0.32, 0.66, 1.92);
+    const sn = mesh(cyl(0.026, 0.032, 0.40, 10), matCarbon, s * 0.32, -0.18, 0);
     sn.rotation.x = 0.14;
-    grp.add(sn);
+    rearWingGrp.add(sn);
   }
+  grp.add(rearWingGrp);
 
   /* ── WHEEL ARCHES (GT enclosed wheel fenders) ─────────────── */
   for (const s of [-1, 1]) {

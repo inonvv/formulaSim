@@ -44,14 +44,24 @@
   <!-- ── Control Panel ─────────────────────────────────────────── -->
   <div id="panel">
     <div id="panel-header">
-      <span class="panel-title">FormulaSim</span>
       <button id="panel-toggle" title="Collapse">&#8249;</button>
+      <span class="panel-title">FormulaSim</span>
+
+      <!-- Mobile-only tab bar (hidden on desktop via CSS) -->
+      <div class="mobile-tabs">
+        <button class="tab-btn" data-section="section-car">🚗<span>Car</span></button>
+        <button class="tab-btn" data-section="section-speed">⚡<span>Speed</span></button>
+        <button class="tab-btn" data-section="section-cam">📷<span>Cam</span></button>
+        <button class="tab-btn" data-section="section-env">🌬<span>Env</span></button>
+        <button class="tab-btn" data-section="section-play">▶<span>Play</span></button>
+        <button id="mobile-menu-toggle" title="Show menu">&#8679;</button>
+      </div>
     </div>
 
     <div id="panel-body">
 
       <!-- Car selection -->
-      <section class="ctrl-group">
+      <section class="ctrl-group" id="section-car">
         <label class="group-label">CAR</label>
         <div class="btn-row" id="car-btns">
           <button class="car-btn active" data-car="F1">F1</button>
@@ -62,7 +72,7 @@
       </section>
 
       <!-- Speed -->
-      <section class="ctrl-group">
+      <section class="ctrl-group" id="section-speed">
         <label class="group-label">SPEED — <span id="speed-label-val">0</span> km/h</label>
         <input type="range" id="speed-slider" min="0" max="350" step="5" value="0" />
         <div class="btn-row" id="speed-presets">
@@ -75,7 +85,7 @@
       </section>
 
       <!-- Environment -->
-      <section class="ctrl-group">
+      <section class="ctrl-group" id="section-env">
         <label class="group-label">ENVIRONMENT</label>
         <div class="toggle-row">
           <button class="env-btn" id="btn-airflow" data-env="airflow">
@@ -87,11 +97,19 @@
           <button class="env-btn" id="btn-optimal" data-env="optimal">
             <span class="env-icon">☀</span> Optimal
           </button>
+          <button class="env-btn" id="btn-cfd" data-env="cfd">
+            <span class="env-icon">🔬</span> CFD
+          </button>
+        </div>
+        <div class="toggle-row">
+          <button class="env-btn" id="btn-wing-flip">
+            <span class="env-icon">↑</span> Wing Stall
+          </button>
         </div>
       </section>
 
       <!-- Camera -->
-      <section class="ctrl-group">
+      <section class="ctrl-group" id="section-cam">
         <label class="group-label">CAMERA</label>
         <div class="btn-row" id="cam-btns">
           <button class="cam-btn active" data-cam="orbit">Orbit</button>
@@ -102,7 +120,7 @@
       </section>
 
       <!-- Playback -->
-      <section class="ctrl-group">
+      <section class="ctrl-group" id="section-play">
         <label class="group-label">PLAYBACK</label>
         <div class="btn-row">
           <button id="play-pause-btn" class="play-btn">&#9646;&#9646; PAUSE</button>

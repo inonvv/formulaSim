@@ -151,6 +151,51 @@ export function sideViewVelocity(etaNorm, yNorm) {
 }
 
 /**
+ * Apply wing-stall modifications to an aerodynamic profile (pure function).
+ * Returns the original profile when isStalled=false; otherwise returns a new
+ * profile object with separated-flow characteristics:
+ *   • Rear-wing pressure blobs → 15% intensity, 2.2× radius, neutral colour
+ *   • Rear tip vortices removed
+ *   • Wake count ×1.8, wake width ×2.5
+ *   • Turbulent separation blob added behind wing
+ *
+ * @param {object}  profile   - CAR_AERO profile object
+ * @param {boolean} isStalled - whether wing is in stall pose (default true)
+ * @returns {object}
+ */
+export function applyWingStall(profile, isStalled = true) {
+  if (!isStalled) return profile;
+
+  const p = {
+    ...profile,
+    // Deep-copy arrays so we never mutate the original
+    pressureBlobs: profile.pressureBlobs.map(b => ({ ...b })),
+    vortexDefs:    profile.vortexDefs.map(d => ({ ...d })),
+  };
+
+  // Rear-wing blobs (z > 1.5) → stalled: weak, wide, neutral grey
+  p.pressureBlobs = p.pressureBlobs.map(b =>
+    b.pos[2] > 1.5
+      ? { ...b, intensity: b.intensity * 0.15, r: b.r * 2.2, color: 0x888888 }
+      : b
+  );
+
+  // Add turbulent separation wake blob behind the rear wing
+  p.pressureBlobs = [...p.pressureBlobs,
+    { color: 0x888888, r: 1.8, intensity: 0.4, pos: [0, 0.90, 3.5] },
+  ];
+
+  // Remove rear tip vortices (wz > 1.5)
+  p.vortexDefs = p.vortexDefs.filter(d => d.wz <= 1.5);
+
+  // Wider, denser wake
+  p.wakeCount  = Math.round(profile.wakeCount  * 1.8);
+  p.wakeWidthX = profile.wakeWidthX * 2.5;
+
+  return p;
+}
+
+/**
  * Rankine vortex velocity contribution at point (xi, eta)
  * from a vortex centred at (x0, e0) with circulation gamma
  * and core radius rc.

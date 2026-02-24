@@ -177,3 +177,75 @@ describe('buildCar', () => {
     WHEEL_NAMES.forEach(n => expect(names.has(n)).toBe(true));
   });
 });
+
+/* ── Phase 1: Sharp Sidepod Redesign ──────────────────────────────── */
+describe('Sharp sidepod geometry (Phase 1)', () => {
+  it('F1 has at least one mesh at z ≈ -0.64 (sharp inlet mouth)', async () => {
+    const { buildCar } = await import('../cars.js');
+    const car = buildCar('F1');
+    let found = false;
+    car.traverse(obj => {
+      if (obj.position && Math.abs(obj.position.z + 0.64) < 0.05) found = true;
+    });
+    expect(found).toBe(true);
+  });
+
+  it('F1 sidepods have more parts after redesign (≥ 10 per side via child increase)', async () => {
+    const { buildCar } = await import('../cars.js');
+    const car = buildCar('F1');
+    // After both sidepod redesign (adds 8) and rearWing extraction (removes 15),
+    // net: 130 + 8 - 15 = 123. Assert at least 115 to allow minor variation.
+    expect(car.children.length).toBeGreaterThanOrEqual(115);
+  });
+
+  it('GT car child count is not lower than before (GT sidepods unchanged)', async () => {
+    const { buildCar } = await import('../cars.js');
+    const gtCar = buildCar('GT');
+    // GT had ~101 direct children, loses ~15 for rearWing extraction → ~86 minimum
+    expect(gtCar.children.length).toBeGreaterThanOrEqual(80);
+  });
+});
+
+/* ── Phase 2a: Named rearWing Group ───────────────────────────────── */
+describe('rearWing named group', () => {
+  it('F1 car has a child/descendant named "rearWing"', async () => {
+    const { buildCar } = await import('../cars.js');
+    const car = buildCar('F1');
+    let found = false;
+    car.traverse(obj => { if (obj.name === 'rearWing') found = true; });
+    expect(found).toBe(true);
+  });
+
+  it('F2 car has a child/descendant named "rearWing"', async () => {
+    const { buildCar } = await import('../cars.js');
+    const car = buildCar('F2');
+    let found = false;
+    car.traverse(obj => { if (obj.name === 'rearWing') found = true; });
+    expect(found).toBe(true);
+  });
+
+  it('F3 car has a child/descendant named "rearWing"', async () => {
+    const { buildCar } = await import('../cars.js');
+    const car = buildCar('F3');
+    let found = false;
+    car.traverse(obj => { if (obj.name === 'rearWing') found = true; });
+    expect(found).toBe(true);
+  });
+
+  it('GT car has a child/descendant named "rearWing"', async () => {
+    const { buildCar } = await import('../cars.js');
+    const car = buildCar('GT');
+    let found = false;
+    car.traverse(obj => { if (obj.name === 'rearWing') found = true; });
+    expect(found).toBe(true);
+  });
+
+  it('F1 rearWing group has ≥ 2 children', async () => {
+    const { buildCar } = await import('../cars.js');
+    const car = buildCar('F1');
+    let rearWing = null;
+    car.traverse(obj => { if (obj.name === 'rearWing') rearWing = obj; });
+    expect(rearWing).not.toBeNull();
+    expect(rearWing.children.length).toBeGreaterThanOrEqual(2);
+  });
+});

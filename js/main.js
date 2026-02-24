@@ -14,6 +14,7 @@ import { OutputPass }      from 'three/addons/postprocessing/OutputPass.js';
 import { buildCar, getCarMeta, WHEEL_NAMES } from './cars.js';
 import { buildTrack }      from './track.js';
 import { AirflowEffect, RainEffect, OptimalWeatherEffect } from './effects.js';
+import { CfdEffect } from './cfd-effect.js';
 import { gearFromSpeed, wheelRotationRate, aeroSquishFactor, rpmRatio, lerpSpeed } from './physics.js';
 import {
   BACKGROUND_COLOR, AMBIENT_COLOR, AMBIENT_INTENSITY,
@@ -125,12 +126,17 @@ const state = {
   targetSpeed: 0,
   paused:     false,
   camMode:    'orbit',    // orbit | trackside | cockpit | drone
-  activeEnvs: new Set(),  // 'airflow' | 'rain' | 'optimal'
+  activeEnvs: new Set(),  // 'airflow' | 'rain' | 'optimal' | 'cfd'
   time:       0,
   carGroup:   null,
   wheels:     {},
   brakes:     {},
   camT:       0,          // camera path parameter for trackside/drone
+  // Wing flip
+  wingFlipped:  false,
+  wingFlipT:    0,
+  wingFlipping: false,
+  rearWing:     null,
 };
 
 /* ══════════════════════════════════════════════════════════════════
@@ -144,12 +150,25 @@ function spawnCar(type) {
   state.carGroup = grp;
   state.wheels   = {};
   state.brakes   = {};
+  state.rearWing = null;
   grp.traverse(obj => {
-    if (WHEEL_NAMES.includes(obj.name)) state.wheels[obj.name] = obj;
-    if (obj.name?.startsWith('brake_')) state.brakes[obj.name] = obj;
+    if (WHEEL_NAMES.includes(obj.name))    state.wheels[obj.name] = obj;
+    if (obj.name?.startsWith('brake_'))    state.brakes[obj.name] = obj;
+    if (obj.name === 'rearWing')           state.rearWing = obj;
   });
   scene.add(grp);
   airflow.setCarType(type);
+  cfd.setCarType(type);
+
+  // Reset wing flip state on car change
+  state.wingFlipped  = false;
+  state.wingFlipping = false;
+  state.wingFlipT    = 0;
+  if (state.rearWing) state.rearWing.rotation.x = 0;
+  airflow.setWingStall(false);
+  cfd.setWingStall(false);
+  const wingBtn = document.getElementById('btn-wing-flip');
+  if (wingBtn) wingBtn.classList.remove('active');
 
   // Update badge
   const meta = getCarMeta(type);
@@ -163,15 +182,18 @@ function spawnCar(type) {
 // Stub used if an effect fails to construct, so animate() always runs
 class EffectStub {
   setSpeed() {} setVisible() {} setCarType() {} update() {} dispose() {}
+  setWingStall() {}
 }
 
-let airflow, rain, optimal;
+let airflow, rain, optimal, cfd;
 try { airflow = new AirflowEffect(scene); }
 catch (e) { console.error('[AirflowEffect] constructor failed:', e); airflow = new EffectStub(); }
 try { rain = new RainEffect(scene); }
 catch (e) { console.error('[RainEffect] constructor failed:', e); rain = new EffectStub(); }
 try { optimal = new OptimalWeatherEffect(scene, renderer); }
 catch (e) { console.error('[OptimalWeatherEffect] constructor failed:', e); optimal = new EffectStub(); }
+try { cfd = new CfdEffect(scene); }
+catch (e) { console.error('[CfdEffect] constructor failed:', e); cfd = new EffectStub(); }
 
 spawnCar('F1');
 
@@ -180,9 +202,12 @@ function syncEffects() {
   airflow.setSpeed(sp);
   rain.setSpeed(sp);
   optimal.setSpeed(sp);
+  cfd.setSpeed(sp);
   airflow.setVisible(state.activeEnvs.has('airflow'));
   rain.setVisible(state.activeEnvs.has('rain'));
   optimal.setVisible(state.activeEnvs.has('optimal'));
+  cfd.setVisible(state.activeEnvs.has('cfd'));
+  cfd.setCarType(state.carType);
 
   // Lighting per weather mode — values from scene-config.js
   const w = state.activeEnvs.has('rain')    ? WEATHER.rain
@@ -296,7 +321,7 @@ function updateHUD(speed) {
 function updateChips() {
   const container = document.getElementById('effects-chips');
   container.innerHTML = '';
-  const labels = { airflow: '🌬 AIRFLOW', rain: '🌧 RAIN', optimal: '☀ OPTIMAL' };
+  const labels = { airflow: '🌬 AIRFLOW', rain: '🌧 RAIN', optimal: '☀ OPTIMAL', cfd: '🔬 CFD' };
   state.activeEnvs.forEach(env => {
     const chip = document.createElement('div');
     chip.className = `chip chip-${env}`;
@@ -340,6 +365,17 @@ function animateCar(dt) {
 
   // ─ Slight forward lean at speed
   state.carGroup.rotation.x = -rpmRatio(speed) * 0.025;
+
+  // ─ Wing flip animation
+  if (state.rearWing && state.wingFlipping) {
+    const FLIP_DURATION = 0.8;
+    state.wingFlipT = Math.min(1, state.wingFlipT + dt / FLIP_DURATION);
+    if (state.wingFlipT >= 1) state.wingFlipping = false;
+    const ease = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    const target = state.wingFlipped ? Math.PI : 0;
+    const start  = state.wingFlipped ? 0        : Math.PI;
+    state.rearWing.rotation.x = start + (target - start) * ease(state.wingFlipT);
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -399,6 +435,7 @@ function animate() {
     try { airflow.update(dt, state.time); } catch (e) { console.error('[airflow.update]', e); }
     try { rain.update(dt, state.time); }    catch (e) { console.error('[rain.update]', e); }
     try { optimal.update(dt, state.time); } catch (e) { console.error('[optimal.update]', e); }
+    try { cfd.update(dt, state.time); }     catch (e) { console.error('[cfd.update]', e); }
   }
 
   // HUD
@@ -461,6 +498,17 @@ document.querySelectorAll('.env-btn').forEach(btn => {
   });
 });
 
+/* ── Wing Stall button ──────────────────────────────────────────── */
+document.getElementById('btn-wing-flip').addEventListener('click', () => {
+  if (state.wingFlipping) return;
+  state.wingFlipped  = !state.wingFlipped;
+  state.wingFlipT    = 0;
+  state.wingFlipping = true;
+  document.getElementById('btn-wing-flip').classList.toggle('active', state.wingFlipped);
+  if (state.activeEnvs.has('airflow')) airflow.setWingStall(state.wingFlipped);
+  if (state.activeEnvs.has('cfd'))     cfd.setWingStall(state.wingFlipped);
+});
+
 /* ── Camera buttons ─────────────────────────────────────────────── */
 document.querySelectorAll('.cam-btn').forEach(btn => {
   btn.addEventListener('click', () => switchCamera(btn.dataset.cam));
@@ -492,33 +540,80 @@ document.getElementById('reset-btn').addEventListener('click', () => {
   orbit.target.set(0, 0.4, 0);
   camera.position.set(4.5, 2.5, 6);
 
-  // Deactivate all envs
+  // Deactivate all envs (including wing stall)
   state.activeEnvs.clear();
   document.querySelectorAll('.env-btn').forEach(b => b.classList.remove('active'));
+  state.wingFlipped  = false;
+  state.wingFlipping = false;
+  state.wingFlipT    = 0;
+  if (state.rearWing) state.rearWing.rotation.x = 0;
+  airflow.setWingStall(false);
+  cfd.setWingStall(false);
+  const wingBtnReset = document.getElementById('btn-wing-flip');
+  if (wingBtnReset) wingBtnReset.classList.remove('active');
   updateChips();
   syncEffects();
 });
 
-/* ── Panel collapse ─────────────────────────────────────────────── */
-const panel      = document.getElementById('panel');
+/* ── Panel collapse (desktop only) ─────────────────────────────── */
+const panel       = document.getElementById('panel');
 const panelToggle = document.getElementById('panel-toggle');
-const camLabel   = document.getElementById('camera-label');
+const camLabel    = document.getElementById('camera-label');
 
-panelToggle.addEventListener('click', () => {
-  const collapsed = panel.classList.toggle('collapsed');
-  panelToggle.title = collapsed ? 'Expand' : 'Collapse';
-  // Desktop only — on mobile the label is positioned by CSS, not inline style
-  if (window.innerWidth > 640) {
+if (window.innerWidth > 640) {
+  const panelHeader = document.getElementById('panel-header');
+  panelHeader.addEventListener('click', () => {
+    const collapsed = panel.classList.toggle('collapsed');
+    panelToggle.title = collapsed ? 'Expand' : 'Collapse';
     camLabel.style.right = collapsed ? '32px' : 'calc(var(--panel-w) + 32px)';
-  } else {
-    camLabel.style.right = '';   // let CSS rule take over
-  }
-});
+  });
+}
 
-// Auto-collapse panel on mobile so the car is visible on load
+/* ── Mobile tab bar ─────────────────────────────────────────────── */
 if (window.innerWidth <= 640) {
-  panel.classList.add('collapsed');
-  panelToggle.title = 'Expand';
+  const panelBody        = document.getElementById('panel-body');
+  const mobileMenuToggle = document.getElementById('mobile-menu-toggle');
+  const tabBtns          = document.querySelectorAll('.tab-btn');
+  const sections         = document.querySelectorAll('#panel-body .ctrl-group');
+  let activeSection      = null;
+
+  function openSection(sectionId) {
+    sections.forEach(s => s.classList.remove('active'));
+    tabBtns.forEach(b => b.classList.remove('active'));
+    const target = document.getElementById(sectionId);
+    if (target) target.classList.add('active');
+    panelBody.classList.add('open');
+    mobileMenuToggle.classList.add('open');
+    activeSection = sectionId;
+    const btn = document.querySelector(`.tab-btn[data-section="${sectionId}"]`);
+    if (btn) btn.classList.add('active');
+  }
+
+  function closePanel() {
+    panelBody.classList.remove('open');
+    mobileMenuToggle.classList.remove('open');
+    tabBtns.forEach(b => b.classList.remove('active'));
+    activeSection = null;
+  }
+
+  tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const sid = btn.dataset.section;
+      if (panelBody.classList.contains('open') && activeSection === sid) {
+        closePanel();
+      } else {
+        openSection(sid);
+      }
+    });
+  });
+
+  mobileMenuToggle.addEventListener('click', () => {
+    if (panelBody.classList.contains('open')) {
+      closePanel();
+    } else {
+      openSection(activeSection || 'section-car');
+    }
+  });
 }
 
 /* ── Orbit hint ─────────────────────────────────────────────────── */

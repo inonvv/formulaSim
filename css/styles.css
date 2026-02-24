@@ -184,6 +184,7 @@ body {
 .chip-airflow  { border-color: #5599ff; color: #88bbff; background: rgba(85,153,255,0.12); }
 .chip-rain     { border-color: #44aaff; color: #aaddff; background: rgba(68,170,255,0.12); }
 .chip-optimal  { border-color: #ffd700; color: #ffe866; background: rgba(255,215,0,0.10); }
+.chip-cfd      { border-color: #ff4400; color: #ff8855; background: rgba(255,68,0,0.10); }
 
 @keyframes chipIn {
   from { opacity:0; transform: translateY(-6px); }
@@ -219,6 +220,7 @@ body {
   padding: 18px 16px 14px;
   border-bottom: 1px solid var(--panel-border);
   flex-shrink: 0;
+  cursor: pointer;
 }
 
 .panel-title {
@@ -443,38 +445,113 @@ body {
 
 /* ─── Responsive: mobile ≤ 640px ────────────────────────────────── */
 @media (max-width: 640px) {
-  /* ── Panel: right-side → bottom drawer ── */
+
+  /* ── Tab bar: fixed 60px ruler at bottom ── */
   #panel {
     top: auto;
     bottom: 0;
     right: 0;
     left: 0;
     width: 100%;
-    height: auto;
-    max-height: 65vh;
+    height: 60px;
+    max-height: 60px;
+    overflow: visible;
     border-left: none;
     border-top: 1px solid var(--panel-border);
-    /* Expanded by default: translateY(0) */
-    transform: translateY(0);
-    transition: transform 0.3s ease;
+    transform: none;
+    transition: none;
   }
-  /* Collapsed: slide down, expose only the 56px header */
-  #panel.collapsed {
-    transform: translateY(calc(100% - 56px));
-  }
-  /* Toggle chevron: point up when expanded, down when collapsed */
-  #panel-toggle { transform: rotate(90deg); }
-  #panel.collapsed #panel-toggle { transform: rotate(-90deg); }
 
-  /* Panel body: constrained height + scroll */
+  /* Desktop header elements hidden on mobile */
+  .panel-title,
+  #panel-toggle { display: none; }
+
+  /* Header becomes the tab bar container */
+  #panel-header {
+    height: 60px;
+    min-height: 60px;
+    padding: 0;
+    border-bottom: none;
+    justify-content: stretch;
+    cursor: default;
+  }
+
+  .mobile-tabs {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    align-items: stretch;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .tab-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    font-size: 1.1rem;
+    color: var(--dim);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px 2px;
+    transition: color 0.15s;
+  }
+  .tab-btn span {
+    font-size: 0.55rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .tab-btn.active { color: var(--accent); }
+  .tab-btn:active { background: rgba(255,255,255,0.05); }
+
+  /* Up/down toggle button */
+  #mobile-menu-toggle {
+    width: 44px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.4rem;
+    color: var(--dim);
+    background: none;
+    border: none;
+    border-left: 1px solid var(--panel-border);
+    cursor: pointer;
+    transition: color 0.15s, transform 0.3s;
+  }
+  #mobile-menu-toggle.open {
+    color: var(--accent);
+    transform: rotate(180deg);
+  }
+
+  /* Popup panel above the tab bar */
   #panel-body {
-    max-height: calc(65vh - 56px);
+    position: absolute;
+    bottom: 60px;
+    left: 0;
+    right: 0;
+    background: var(--panel-bg);
+    border-top: 1px solid var(--panel-border);
+    backdrop-filter: blur(16px);
+    padding: 16px 14px;
+    display: none;
+    flex-direction: column;
+    gap: 16px;
+    max-height: 55vh;
     overflow-y: auto;
   }
+  #panel-body.open { display: flex; }
 
-  /* ── HUD: raise above the drawer strip ── */
+  /* Only active section is shown */
+  #panel-body .ctrl-group { display: none; }
+  #panel-body .ctrl-group.active { display: flex; }
+
+  /* ── HUD: above tab bar ── */
   #hud {
-    bottom: 80px;
+    bottom: 72px;
     gap: 10px;
     padding: 8px 14px;
   }
@@ -482,22 +559,21 @@ body {
   #gear-display { font-size: 1.4rem; }
   #rpm-bar { width: 70px; }
 
-  /* ── Camera label: top-right, not panel-relative ── */
+  /* ── Camera label ── */
   #camera-label { right: 16px; top: 16px; }
 
-  /* ── Car badge: smaller ── */
+  /* ── Car badge ── */
   #car-badge { top: 16px; left: 16px; }
   #car-badge-type { font-size: 1.6rem; }
 
-  /* ── Effects chips: tighten ── */
+  /* ── Effects chips ── */
   #effects-chips { top: 16px; }
 
-  /* ── Orbit hint: raise above drawer ── */
-  #orbit-hint { bottom: 140px; }
+  /* ── Orbit hint ── */
+  #orbit-hint { bottom: 72px; }
+}
 
-  /* ── Safe-area padding for iPhone home bar ── */
-  #panel-header {
-    min-height: 56px;
-    padding-bottom: max(14px, env(safe-area-inset-bottom));
-  }
+/* ── Desktop: hide mobile-only elements ── */
+@media (min-width: 641px) {
+  .mobile-tabs { display: none; }
 }
