@@ -132,11 +132,12 @@ const state = {
   wheels:     {},
   brakes:     {},
   camT:       0,          // camera path parameter for trackside/drone
-  // Wing flip
+  // Wing flip (only the top DRS flap element rotates)
   wingFlipped:  false,
   wingFlipT:    0,
   wingFlipping: false,
-  rearWing:     null,
+  rearWing:     null,   // whole group (kept for reference)
+  rearWingFlap: null,   // top flap mesh — the only thing that rotates
 };
 
 /* ══════════════════════════════════════════════════════════════════
@@ -150,11 +151,13 @@ function spawnCar(type) {
   state.carGroup = grp;
   state.wheels   = {};
   state.brakes   = {};
-  state.rearWing = null;
+  state.rearWing     = null;
+  state.rearWingFlap = null;
   grp.traverse(obj => {
     if (WHEEL_NAMES.includes(obj.name))    state.wheels[obj.name] = obj;
     if (obj.name?.startsWith('brake_'))    state.brakes[obj.name] = obj;
     if (obj.name === 'rearWing')           state.rearWing = obj;
+    if (obj.name === 'rearWingFlap')       state.rearWingFlap = obj;
   });
   scene.add(grp);
   airflow.setCarType(type);
@@ -164,7 +167,7 @@ function spawnCar(type) {
   state.wingFlipped  = false;
   state.wingFlipping = false;
   state.wingFlipT    = 0;
-  if (state.rearWing) state.rearWing.rotation.x = 0;
+  if (state.rearWingFlap) state.rearWingFlap.rotation.x = 0;
   airflow.setWingStall(false);
   cfd.setWingStall(false);
   const wingBtn = document.getElementById('btn-wing-flip');
@@ -366,15 +369,15 @@ function animateCar(dt) {
   // ─ Slight forward lean at speed
   state.carGroup.rotation.x = -rpmRatio(speed) * 0.025;
 
-  // ─ Wing flip animation
-  if (state.rearWing && state.wingFlipping) {
+  // ─ Wing flap animation (top DRS flap only)
+  if (state.rearWingFlap && state.wingFlipping) {
     const FLIP_DURATION = 0.8;
     state.wingFlipT = Math.min(1, state.wingFlipT + dt / FLIP_DURATION);
     if (state.wingFlipT >= 1) state.wingFlipping = false;
     const ease = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
     const target = state.wingFlipped ? Math.PI : 0;
     const start  = state.wingFlipped ? 0        : Math.PI;
-    state.rearWing.rotation.x = start + (target - start) * ease(state.wingFlipT);
+    state.rearWingFlap.rotation.x = start + (target - start) * ease(state.wingFlipT);
   }
 }
 
@@ -546,7 +549,7 @@ document.getElementById('reset-btn').addEventListener('click', () => {
   state.wingFlipped  = false;
   state.wingFlipping = false;
   state.wingFlipT    = 0;
-  if (state.rearWing) state.rearWing.rotation.x = 0;
+  if (state.rearWingFlap) state.rearWingFlap.rotation.x = 0;
   airflow.setWingStall(false);
   cfd.setWingStall(false);
   const wingBtnReset = document.getElementById('btn-wing-flip');

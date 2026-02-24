@@ -373,8 +373,10 @@ function buildF1({ color }) {
   rearWingGrp.position.set(0, 0.98, 1.95);   // pivot at main-plane leading edge
   // Main plane at pivot origin
   rearWingGrp.add(mesh(wingGeo(1.92, 0.36, 0.100), matBody, 0, 0, 0));
-  // DRS flap (local offsets from pivot)
-  rearWingGrp.add(mesh(wingGeo(1.92, 0.26, 0.080), matBody, 0, -0.11, -0.06));
+  // DRS flap — named so wing-stall animation rotates only this element
+  const f1Flap = mesh(wingGeo(1.92, 0.26, 0.080), matBody, 0, -0.11, -0.06);
+  f1Flap.name = 'rearWingFlap';
+  rearWingGrp.add(f1Flap);
   // Endplates (tall, louvred)
   for (const s of [-1, 1]) {
     rearWingGrp.add(mesh(box(0.040, 0.56, 0.40), matCarbon, s * 0.96, -0.21, 0));
@@ -562,7 +564,9 @@ function buildF2({ color }) {
   rearWingGrp.name = 'rearWing';
   rearWingGrp.position.set(0, 0.90, 1.80);
   rearWingGrp.add(mesh(wingGeo(1.74, 0.30, 0.090), matBody, 0, 0, 0));
-  rearWingGrp.add(mesh(wingGeo(1.74, 0.22, 0.070), matBody, 0, -0.10, -0.06));
+  const f2Flap = mesh(wingGeo(1.74, 0.22, 0.070), matBody, 0, -0.10, -0.06);
+  f2Flap.name = 'rearWingFlap';
+  rearWingGrp.add(f2Flap);
   for (const s of [-1, 1]) {
     rearWingGrp.add(mesh(box(0.038, 0.48, 0.34), matCarbon, s * 0.87, -0.20, 0));
   }
@@ -698,7 +702,9 @@ function buildF3({ color }) {
   rearWingGrp.name = 'rearWing';
   rearWingGrp.position.set(0, 0.82, 1.68);
   rearWingGrp.add(mesh(wingGeo(1.56, 0.26, 0.080), matBody, 0, 0, 0));
-  rearWingGrp.add(mesh(wingGeo(1.56, 0.18, 0.062), matBody, 0, -0.09, -0.05));
+  const f3Flap = mesh(wingGeo(1.56, 0.18, 0.062), matBody, 0, -0.09, -0.05);
+  f3Flap.name = 'rearWingFlap';
+  rearWingGrp.add(f3Flap);
   for (const s of [-1, 1]) {
     rearWingGrp.add(mesh(box(0.034, 0.42, 0.28), matCarbon, s * 0.78, -0.18, 0));
   }
@@ -889,8 +895,10 @@ function buildGT({ color }) {
   rearWingGrp.position.set(0, 0.84, 1.92);
   // Main element at pivot origin
   rearWingGrp.add(mesh(wingGeo(1.76, 0.42, 0.110), matBody, 0, 0, 0));
-  // Second element (Gurney-like flap)
-  rearWingGrp.add(mesh(wingGeo(1.76, 0.28, 0.075), matBody, 0, -0.10, -0.06));
+  // Second element (Gurney-like flap) — named for wing-stall animation
+  const gtFlap = mesh(wingGeo(1.76, 0.28, 0.075), matBody, 0, -0.10, -0.06);
+  gtFlap.name = 'rearWingFlap';
+  rearWingGrp.add(gtFlap);
   // Large endplates with louvres
   for (const s of [-1, 1]) {
     rearWingGrp.add(mesh(box(0.046, 0.48, 0.46), matCarbon, s * 0.88, -0.20, 0));
