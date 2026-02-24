@@ -40,6 +40,7 @@ const pmremGenerator = new THREE.PMREMGenerator(renderer);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(BACKGROUND_COLOR);   // bright sky-blue fallback
 scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 1.5;
 pmremGenerator.dispose();
 
 const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100000);

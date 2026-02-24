@@ -25,10 +25,44 @@ function makeMat(color, rough = 0.25, metal = 0.8, emissive = 0x000000, emissive
 }
 
 function makeBodyMat(color) {
+  const sheenColor = new THREE.Color(color).offsetHSL(0, 0.15, 0.08);
   return new THREE.MeshPhysicalMaterial({
     color, roughness: 0.10, metalness: 0.90,
-    clearcoat: 1.0, clearcoatRoughness: 0.03, envMapIntensity: 2.0,
+    clearcoat: 1.0, clearcoatRoughness: 0.01,
+    envMapIntensity: 3.0,
+    sheen: 0.4, sheenRoughness: 0.35, sheenColor,
+    iridescence: 0.2, iridescenceIOR: 1.6,
   });
+}
+
+function makeCarbonMat(color = 0x0e0e0e, rough = 0.40, metal = 0.60) {
+  const mat = new THREE.MeshPhysicalMaterial({
+    color, roughness: rough, metalness: metal,
+    clearcoat: 0.4, clearcoatRoughness: 0.25,
+  });
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader = 'varying vec3 vCarbonPos;\n' + shader.vertexShader;
+    shader.vertexShader = shader.vertexShader.replace('#include <fog_vertex>',
+      `#include <fog_vertex>
+       vCarbonPos = (modelMatrix * vec4(position, 1.0)).xyz;`);
+    shader.fragmentShader = 'varying vec3 vCarbonPos;\n' + shader.fragmentShader;
+    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>',
+      `#include <color_fragment>
+       {
+         float SCALE = 160.0;
+         float cx = floor(vCarbonPos.x * SCALE);
+         float cz = floor(vCarbonPos.z * SCALE);
+         float cell = mod(cx + cz, 2.0);
+         vec2 uv = fract(vec2(vCarbonPos.x, vCarbonPos.z) * SCALE);
+         float rib = smoothstep(0.35, 0.50, mix(uv.x, uv.y, cell))
+                   - smoothstep(0.50, 0.65, mix(uv.x, uv.y, cell));
+         float weave = 0.80 + rib * 0.28;
+         float shimmer = 0.5 + 0.5 * sin(vCarbonPos.x * 320.0 + vCarbonPos.z * 80.0);
+         diffuseColor.rgb *= weave;
+         diffuseColor.rgb += vec3(shimmer * 0.04);
+       }`);
+  };
+  return mat;
 }
 
 /* ── Geometry shortcuts ───────────────────────────────────────── */
@@ -177,6 +211,18 @@ function wheel(radius, width, matHub, matTyre, wheelName = '') {
   disc.position.x = 0.04;
   grp.add(disc);
 
+  // Brake caliper — red saddle over disc
+  const caliperMat = new THREE.MeshPhysicalMaterial({
+    color: 0xdd1100, roughness: 0.18, metalness: 0.60,
+    clearcoat: 0.8, clearcoatRoughness: 0.12,
+    emissive: new THREE.Color(0xff3300), emissiveIntensity: 0,
+  });
+  const caliper = new THREE.Mesh(rBox(0.08, 0.18, width * 0.55, 0.010), caliperMat);
+  caliper.name = `brake_cal_${wheelName}`;
+  caliper.position.set(-0.02, 0, 0);
+  caliper.castShadow = true;
+  grp.add(caliper);
+
   // 6 radial slots — cross-drilled / ventilated disc appearance
   const slotMat = makeMat(0x0a0a0a, 0.6, 0.4);
   for (let si = 0; si < 6; si++) {
@@ -205,6 +251,47 @@ const CAR_META = {
   GT: { label: 'GT Race Car',   color: 0xff8800 },
 };
 
+/* ── Per-car livery panels ────────────────────────────────────── */
+function buildLivery(grp, color, type) {
+  const T = 0.004;
+  if (type === 'F1') {
+    const matW = makeBodyMat(0xffffff);
+    const matS = makeBodyMat(0xcccccc);
+    const numMat = new THREE.MeshPhysicalMaterial({
+      color: 0xffffff, roughness: 0.05, metalness: 0.0,
+      emissive: new THREE.Color(0xffffff), emissiveIntensity: 0.5,
+      clearcoat: 1.0, clearcoatRoughness: 0.01,
+    });
+    grp.add(mesh(rBox(0.10, T, 0.80, 0.004), matW, 0, 0.175, -1.72));
+    for (const s of [-1, 1])
+      grp.add(mesh(rBox(0.20, T, 0.60, 0.003), matS, s * 0.535, 0.442, 0.28));
+    grp.add(mesh(rBox(0.12, 0.09, T, 0.004), numMat, -0.33, 0.44, 0.44));
+
+  } else if (type === 'F2') {
+    const matS = makeBodyMat(0xcccccc);
+    const matW = makeBodyMat(0xffffff);
+    grp.add(mesh(rBox(0.06, T, 2.80, 0.003), matS, 0, 0.235, -0.02));
+    grp.add(mesh(rBox(T, 0.30, 0.22, 0.002), matW, -0.875, -0.05, 0));
+
+  } else if (type === 'F3') {
+    const matW = makeBodyMat(0xffffff);
+    const matD = makeBodyMat(0x222222);
+    grp.add(mesh(rBox(T, 0.14, 1.80, 0.003), matW, -0.285, 0.26, -0.08));
+    for (const s of [-1, 1]) {
+      const ch = mesh(rBox(0.09, T, 0.30, 0.003), matD, s * 0.06, 0.165, -1.52);
+      ch.rotation.y = s * 0.35;
+      grp.add(ch);
+    }
+
+  } else if (type === 'GT') {
+    const matB = makeBodyMat(0x111111);
+    const matW = makeBodyMat(0xffffff);
+    grp.add(mesh(rBox(0.22, T, 1.50, 0.004), matB, 0, 0.307, -1.50));
+    grp.add(mesh(rBox(0.28, T, 1.20, 0.004), matW, 0, 0.662,  0.12));
+    grp.add(mesh(rBox(1.60, 0.06, T, 0.003), matW, 0, 0.02,   2.215));
+  }
+}
+
 export function buildCar(type) {
   const meta = CAR_META[type] || CAR_META.F1;
   switch (type) {
@@ -227,8 +314,8 @@ function buildF1({ color }) {
   grp.name = 'car';
 
   const matBody   = makeBodyMat(color);
-  const matCarbon = makeMat(0x0e0e0e, 0.40, 0.60);
-  const matCfrp   = makeMat(0x1a1a1a, 0.50, 0.50);
+  const matCarbon = makeCarbonMat(0x0e0e0e, 0.40, 0.60);
+  const matCfrp   = makeCarbonMat(0x1a1a1a, 0.50, 0.50);
   const matTyre   = makeMat(0x0d0d0d, 0.92, 0.04);
   const matHub    = makeMat(0xe0e0e0, 0.08, 1.00);
   const matCockpit= makeMat(0x050505, 0.05, 0.20, 0x001133, 0.6);
@@ -362,8 +449,8 @@ function buildF1({ color }) {
 
   /* ── MIRRORS ─────────────────────────────────────────────── */
   for (const s of [-1, 1]) {
-    grp.add(mesh(box(0.020, 0.062, 0.06), matCarbon, s * 0.34, 0.68, -0.32));
-    grp.add(mesh(box(0.026, 0.068, 0.20), matBody, s * 0.37, 0.68, -0.30));
+    grp.add(mesh(rBox(0.020, 0.062, 0.06, 0.006), matCarbon, s * 0.34, 0.68, -0.32));
+    grp.add(mesh(rBox(0.026, 0.068, 0.20, 0.006), matBody, s * 0.37, 0.68, -0.30));
   }
 
   /* ── FRONT WING — 4-element airfoil cascade ───────────────── */
@@ -422,7 +509,9 @@ function buildF1({ color }) {
   diff.rotation.x = -0.28;
   grp.add(diff);
   for (let di = -2; di <= 2; di++) {
-    grp.add(mesh(box(0.020, 0.074, 0.90), matCarbon, di * 0.24, -0.036, 1.91));
+    const s = mesh(rBox(0.020, 0.074, 0.90, 0.004), matCarbon, di * 0.24, -0.036, 1.91);
+    s.rotation.y = di * 0.087;
+    grp.add(s);
   }
 
   /* ── EXHAUST ──────────────────────────────────────────────── */
@@ -458,6 +547,7 @@ function buildF1({ color }) {
     w.name = n; w.position.set(x, y, z); grp.add(w);
   });
 
+  buildLivery(grp, color, 'F1');
   grp.position.y = wR + 0.34;
   return grp;
 }
@@ -471,7 +561,7 @@ function buildF2({ color }) {
   grp.name = 'car';
 
   const matBody   = makeBodyMat(color);
-  const matCarbon = makeMat(0x101010, 0.45, 0.58);
+  const matCarbon = makeCarbonMat(0x101010, 0.45, 0.58);
   const matTyre   = makeMat(0x0d0d0d, 0.92, 0.04);
   const matHub    = makeMat(0xd8d8d8, 0.10, 1.00);
   const matCockpit= makeMat(0x050505, 0.05, 0.20, 0x001122, 0.45);
@@ -577,8 +667,8 @@ function buildF2({ color }) {
 
   /* ── MIRRORS ─────────────────────────────────────────────── */
   for (const s of [-1, 1]) {
-    grp.add(mesh(box(0.020, 0.058, 0.06), matCarbon, s * 0.32, 0.66, -0.30));
-    grp.add(mesh(box(0.025, 0.064, 0.18), matBody, s * 0.35, 0.66, -0.28));
+    grp.add(mesh(rBox(0.020, 0.058, 0.06, 0.006), matCarbon, s * 0.32, 0.66, -0.30));
+    grp.add(mesh(rBox(0.025, 0.064, 0.18, 0.006), matBody, s * 0.35, 0.66, -0.28));
   }
 
   /* ── FRONT WING — 3-element airfoil ──────────────────────── */
@@ -647,6 +737,7 @@ function buildF2({ color }) {
     w.name = n; w.position.set(x, y, z); grp.add(w);
   });
 
+  buildLivery(grp, color, 'F2');
   grp.position.y = wR + 0.34;
   return grp;
 }
@@ -660,7 +751,7 @@ function buildF3({ color }) {
   grp.name = 'car';
 
   const matBody   = makeBodyMat(color);
-  const matCarbon = makeMat(0x141414, 0.52, 0.52);
+  const matCarbon = makeCarbonMat(0x141414, 0.52, 0.52);
   const matTyre   = makeMat(0x0d0d0d, 0.92, 0.04);
   const matHub    = makeMat(0xcccccc, 0.12, 0.95);
   const matCockpit= makeMat(0x050505, 0.05, 0.20, 0x000d1a, 0.40);
@@ -728,8 +819,8 @@ function buildF3({ color }) {
 
   /* ── MIRRORS ─────────────────────────────────────────────── */
   for (const s of [-1, 1]) {
-    grp.add(mesh(box(0.018, 0.052, 0.055), matCarbon, s * 0.28, 0.60, -0.26));
-    grp.add(mesh(box(0.022, 0.058, 0.15), matBody, s * 0.30, 0.60, -0.24));
+    grp.add(mesh(rBox(0.018, 0.052, 0.055, 0.006), matCarbon, s * 0.28, 0.60, -0.26));
+    grp.add(mesh(rBox(0.022, 0.058, 0.15, 0.006), matBody, s * 0.30, 0.60, -0.24));
   }
 
   /* ── FRONT WING — 2-element airfoil + small flap ─────────── */
@@ -794,6 +885,7 @@ function buildF3({ color }) {
     w.name = n; w.position.set(x, y, z); grp.add(w);
   });
 
+  buildLivery(grp, color, 'F3');
   grp.position.y = wR + 0.34;
   return grp;
 }
@@ -810,7 +902,7 @@ function buildGT({ color }) {
   grp.name = 'car';
 
   const matBody   = makeBodyMat(color);
-  const matCarbon = makeMat(0x0e0e0e, 0.42, 0.58);
+  const matCarbon = makeCarbonMat(0x0e0e0e, 0.42, 0.58);
   const matTyre   = makeMat(0x0d0d0d, 0.92, 0.04);
   const matHub    = makeMat(0xd0d0d0, 0.10, 1.00);
   const matGlass  = new THREE.MeshPhysicalMaterial({
@@ -891,7 +983,7 @@ function buildGT({ color }) {
 
   /* ── FRONT BUMPER / SPLITTER ASSEMBLY ────────────────────── */
   // Lower bumper
-  grp.add(mesh(box(1.88, 0.10, 0.20), matCarbon, 0, -0.02, -2.30));
+  grp.add(mesh(rBox(1.88, 0.10, 0.20, 0.02), matCarbon, 0, -0.02, -2.30));
   // Main splitter (flat — GT splitters ARE flat)
   grp.add(mesh(box(1.76, 0.038, 0.40), matCarbon, 0, -0.135, -2.38));
   // Front splitter lip
@@ -915,7 +1007,7 @@ function buildGT({ color }) {
   }
 
   /* ── REAR BUMPER ─────────────────────────────────────────── */
-  grp.add(mesh(box(1.88, 0.12, 0.18), matCarbon, 0, -0.02, 2.30));
+  grp.add(mesh(rBox(1.88, 0.12, 0.18, 0.02), matCarbon, 0, -0.02, 2.30));
   // Rear lights (full-width LED bars)
   grp.add(mesh(box(1.60, 0.042, 0.040), matLight, 0, 0.16, 2.32));
   for (const s of [-1, 1]) {
@@ -1004,6 +1096,7 @@ function buildGT({ color }) {
     w.name = n; w.position.set(x, y, z); grp.add(w);
   });
 
+  buildLivery(grp, color, 'GT');
   grp.position.y = wR + 0.34;
   return grp;
 }

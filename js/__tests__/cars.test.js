@@ -70,6 +70,7 @@ vi.mock('three', () => {
   function MeshBasicMaterial(opts = {}) { Object.assign(this, opts); }
   function MeshPhysicalMaterial(opts = {}) { Object.assign(this, opts); }
   function Color(v) { this.r = 0; this.g = 0; this.b = 0; }
+  Color.prototype.offsetHSL = function () { return this; };
 
   return {
     Group,
