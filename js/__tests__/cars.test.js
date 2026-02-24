@@ -47,7 +47,7 @@ vi.mock('three', () => {
   }
   function PlaneGeometry() {}
 
-  // New geometry types used by rBox / wingGeo / noseTip helpers
+  // New geometry types used by rBox / wingGeo / noseTip / ogiveNose helpers
   function Vector2(x, y) { this.x = x; this.y = y; }
   function Shape(pts) {
     this.moveTo = function () { return this; };
@@ -58,6 +58,13 @@ vi.mock('three', () => {
     this.translate = function () { return this; };
     this.rotateY  = function () { return this; };
   }
+  // ogiveNose uses LatheGeometry; halo arch uses CatmullRomCurve3 + TubeGeometry
+  function LatheGeometry(points, segments) {
+    this.rotateX = function () { return this; };
+    this.scale   = function () { return this; };
+  }
+  function CatmullRomCurve3(points) { this.points = points || []; }
+  function TubeGeometry(curve, tubeSeg, radius, radSeg, closed) {}
 
   function MeshStandardMaterial(opts = {}) { Object.assign(this, opts); }
   function MeshBasicMaterial(opts = {}) { Object.assign(this, opts); }
@@ -75,6 +82,9 @@ vi.mock('three', () => {
     ExtrudeGeometry,
     Shape,
     Vector2,
+    LatheGeometry,
+    CatmullRomCurve3,
+    TubeGeometry,
     MeshStandardMaterial,
     MeshBasicMaterial,
     MeshPhysicalMaterial,

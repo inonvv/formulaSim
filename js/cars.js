@@ -86,6 +86,22 @@ function noseTip(baseW, baseH, length) {
   return g;
 }
 
+/** High-fidelity ogive nose using LatheGeometry for smooth power-law curvature.
+ *  Produces a continuous C¹ surface vs the faceted ConeGeometry hack.
+ *  Base at z=0, tip at z=−length.  Cross-section oval: baseW × baseH. */
+function ogiveNose(baseW, baseH, length) {
+  const N = 24, pts = [];
+  for (let i = 0; i <= N; i++) {
+    const t = i / N;
+    const r = Math.pow(1 - t, 0.72); // ogive power law
+    pts.push(new THREE.Vector2(Math.max(0.003, r), t * length));
+  }
+  const geo = new THREE.LatheGeometry(pts, 32);
+  geo.rotateX(-Math.PI / 2);         // tip toward −Z
+  geo.scale(baseW / 2, baseH / 2, 1);
+  return geo;
+}
+
 function mesh(geo, mat, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0) {
   const m = new THREE.Mesh(geo, mat);
   m.position.set(x, y, z);
@@ -236,13 +252,15 @@ function buildF1({ color }) {
     }
   }
 
-  /* ── MONOCOQUE / SURVIVAL CELL — 3 rounded-edge layers ─────── */
+  /* ── MONOCOQUE / SURVIVAL CELL — 4 rounded-edge layers ─────── */
   // Layer 1: lower tub (widest, flattest)
   grp.add(mesh(rBox(0.78, 0.12, 3.55, 0.04), matBody, 0, 0.13, 0.05));
   // Layer 2: mid tub (proper monocoque width)
   grp.add(mesh(rBox(0.64, 0.24, 2.85, 0.06), matBody, 0, 0.30, -0.08));
   // Layer 3: upper section (narrows above driver knees)
   grp.add(mesh(rBox(0.50, 0.18, 1.80, 0.09), matBody, 0, 0.47, -0.12));
+  // Layer 4: shoulder-level sill (tightest — merges into cockpit surround)
+  grp.add(mesh(rBox(0.38, 0.10, 1.26, 0.08), matBody, 0, 0.58, -0.08));
 
   /* ── SIDEPODS — 2022+ sharp-sidepod geometry ─────────────── */
   for (const s of [-1, 1]) {
@@ -287,10 +305,12 @@ function buildF1({ color }) {
     }
   }
 
-  /* ── ENGINE COVER ─────────────────────────────────────────── */
+  /* ── ENGINE COVER — 3-segment taper ──────────────────────── */
   grp.add(mesh(rBox(0.50, 0.30, 1.15), matBody, 0, 0.42, 1.38));
-  // Tapers to gearbox (slimmer)
-  grp.add(mesh(rBox(0.40, 0.24, 0.60), matBody, 0, 0.36, 1.98));
+  // Intermediate taper
+  grp.add(mesh(rBox(0.44, 0.26, 0.50), matBody, 0, 0.39, 1.95));
+  // Slim gearbox section
+  grp.add(mesh(rBox(0.36, 0.22, 0.48), matBody, 0, 0.32, 2.22));
   // Engine air intake
   grp.add(mesh(box(0.16, 0.32, 0.22), matCarbon, 0, 0.60, 0.96));
   grp.add(mesh(cone(0.080, 0.22, 12), matCarbon, 0, 0.76, 0.84, -Math.PI / 2, 0, 0));
@@ -302,8 +322,8 @@ function buildF1({ color }) {
   grp.add(mesh(rBox(0.50, 0.17, 0.88, 0.06), matBody, 0, 0.16, -1.72));
   // Transition 2: step — the characteristic 2022 "platypus" shape
   grp.add(mesh(rBox(0.34, 0.14, 0.88, 0.05), matBody, 0, 0.11, -2.16));
-  // Oval nose cone — smooth taper to tip
-  grp.add(mesh(noseTip(0.30, 0.13, 0.51), matBody, 0, 0.09, -2.60));
+  // Ogive nose cone — smooth continuous curvature
+  grp.add(mesh(ogiveNose(0.30, 0.13, 0.51), matBody, 0, 0.09, -2.60));
   // Camera pods (small aero bumps at nose sides)
   for (const s of [-1, 1]) {
     grp.add(mesh(cyl(0.038, 0.038, 0.09, 10), matCfrp, s * 0.15, 0.06, -1.95, 0, 0, Math.PI / 2));
@@ -313,9 +333,9 @@ function buildF1({ color }) {
   grp.add(mesh(box(0.10, 0.04, 0.14), matCarbon, 0, 0.16, -2.22));
 
   /* ── COCKPIT ──────────────────────────────────────────────── */
-  grp.add(mesh(box(0.54, 0.38, 1.22), matCockpit, 0, 0.44, 0.44));
+  grp.add(mesh(rBox(0.54, 0.38, 1.22, 0.06), matCockpit, 0, 0.44, 0.44));
   // Cockpit surround rim
-  grp.add(mesh(box(0.64, 0.048, 1.24), matCarbon, 0, 0.63, 0.44));
+  grp.add(mesh(rBox(0.64, 0.048, 1.24, 0.015), matCarbon, 0, 0.63, 0.44));
   // Driver headrest padding
   grp.add(mesh(box(0.22, 0.13, 0.24), makeMat(0xcc2200, 0.65, 0.05), 0, 0.54, 0.76));
 
@@ -325,10 +345,17 @@ function buildF1({ color }) {
   // Helmet air intake nub
   grp.add(mesh(box(0.06, 0.04, 0.05), matCarbon, 0, 0.86, 0.34));
 
-  /* ── HALO ─────────────────────────────────────────────────── */
-  grp.add(mesh(cyl(0.026, 0.026, 0.60, 12), matHalo, 0, 0.72, 0.10));
-  grp.add(mesh(cyl(0.026, 0.026, 0.60, 12), matHalo, 0, 0.72, 0.88));
-  grp.add(mesh(cyl(0.026, 0.026, 0.80, 12), matHalo, 0, 0.96, 0.49, Math.PI / 2, 0, 0));
+  /* ── HALO — smooth CatmullRom arch (TubeGeometry) ─────────── */
+  const haloCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3( 0, 0.42, 0.10),
+    new THREE.Vector3( 0, 1.00, 0.10),
+    new THREE.Vector3( 0, 1.06, 0.30),
+    new THREE.Vector3( 0, 1.06, 0.49),
+    new THREE.Vector3( 0, 1.06, 0.68),
+    new THREE.Vector3( 0, 1.00, 0.88),
+    new THREE.Vector3( 0, 0.42, 0.88),
+  ]);
+  grp.add(mesh(new THREE.TubeGeometry(haloCurve, 40, 0.026, 10, false), matHalo));
   for (const s of [-1, 1]) {
     grp.add(mesh(cyl(0.018, 0.018, 0.48, 10), matHalo, s * 0.26, 0.62, 0.49, 0, 0, s * 0.60));
   }
@@ -350,7 +377,7 @@ function buildF1({ color }) {
   grp.add(mesh(wingGeo(0.82, 0.15, 0.036), matBody, 0, 0.152, -2.50));
   // Endplates
   for (const s of [-1, 1]) {
-    grp.add(mesh(box(0.040, 0.168, 0.36), matCarbon, s * 0.87, 0.040, -2.72));
+    grp.add(mesh(rBox(0.040, 0.168, 0.36, 0.010), matCarbon, s * 0.87, 0.040, -2.72));
     // Upper canard
     const can = mesh(box(0.24, 0.022, 0.20), matBody, s * 0.72, 0.040, -2.66);
     can.rotation.y = s * 0.26;
@@ -457,10 +484,12 @@ function buildF2({ color }) {
     grp.add(mesh(box(0.024, 0.085, 3.30), matCarbon, s * 0.63, 0.07, 0.10));
   }
 
-  /* ── MONOCOQUE — 3 rounded-edge layers ───────────────────── */
+  /* ── MONOCOQUE — 4 rounded-edge layers ───────────────────── */
   grp.add(mesh(rBox(0.76, 0.11, 3.30, 0.04), matBody, 0, 0.12, 0.05));
   grp.add(mesh(rBox(0.62, 0.22, 2.65, 0.06), matBody, 0, 0.28, -0.06));
   grp.add(mesh(rBox(0.48, 0.17, 1.70, 0.08), matBody, 0, 0.44, -0.10));
+  // Layer 4: shoulder-level sill
+  grp.add(mesh(rBox(0.36, 0.10, 1.16, 0.07), matBody, 0, 0.54, -0.07));
 
   /* ── SIDEPODS — 2022+ sharp-sidepod geometry (F2 ~85% scale) ─ */
   for (const s of [-1, 1]) {
@@ -505,9 +534,12 @@ function buildF2({ color }) {
     }
   }
 
-  /* ── ENGINE COVER ─────────────────────────────────────────── */
+  /* ── ENGINE COVER — 3-segment taper ──────────────────────── */
   grp.add(mesh(rBox(0.48, 0.27, 1.00), matBody, 0, 0.38, 1.30));
-  grp.add(mesh(rBox(0.38, 0.20, 0.52), matBody, 0, 0.30, 1.85));
+  // Intermediate taper
+  grp.add(mesh(rBox(0.42, 0.23, 0.44), matBody, 0, 0.34, 1.82));
+  // Slim gearbox section
+  grp.add(mesh(rBox(0.34, 0.18, 0.42), matBody, 0, 0.27, 2.06));
   // Intake
   grp.add(mesh(box(0.14, 0.28, 0.18), matCarbon, 0, 0.54, 0.90));
   grp.add(mesh(cone(0.070, 0.18, 12), matCarbon, 0, 0.68, 0.80, -Math.PI / 2, 0, 0));
@@ -515,11 +547,11 @@ function buildF2({ color }) {
   /* ── NOSE — sculpted transitions + oval tip ───────────────── */
   grp.add(mesh(rBox(0.46, 0.17, 0.80, 0.06), matBody, 0, 0.15, -1.64));
   grp.add(mesh(rBox(0.30, 0.14, 0.80, 0.05), matBody, 0, 0.11, -2.06));
-  grp.add(mesh(noseTip(0.28, 0.12, 0.47), matBody, 0, 0.09, -2.44));
+  grp.add(mesh(ogiveNose(0.28, 0.12, 0.47), matBody, 0, 0.09, -2.44));
 
   /* ── COCKPIT ──────────────────────────────────────────────── */
-  grp.add(mesh(box(0.52, 0.35, 1.12), matCockpit, 0, 0.42, 0.42));
-  grp.add(mesh(box(0.62, 0.044, 1.14), matCarbon, 0, 0.60, 0.42));
+  grp.add(mesh(rBox(0.52, 0.35, 1.12, 0.06), matCockpit, 0, 0.42, 0.42));
+  grp.add(mesh(rBox(0.62, 0.044, 1.14, 0.015), matCarbon, 0, 0.60, 0.42));
   grp.add(mesh(box(0.20, 0.12, 0.20), makeMat(0x1155cc, 0.65, 0.05), 0, 0.50, 0.72));
 
   /* ── DRIVER HELMET ────────────────────────────────────────── */
@@ -528,10 +560,17 @@ function buildF2({ color }) {
     new THREE.MeshPhysicalMaterial({ color: 0x334455, transmission: 0.5, roughness: 0.04, metalness: 0.1, transparent: true, opacity: 0.78, depthWrite: false }),
     0, 0.67, 0.24));
 
-  /* ── HALO ─────────────────────────────────────────────────── */
-  grp.add(mesh(cyl(0.024, 0.024, 0.55, 12), matHalo, 0, 0.68, 0.10));
-  grp.add(mesh(cyl(0.024, 0.024, 0.55, 12), matHalo, 0, 0.68, 0.82));
-  grp.add(mesh(cyl(0.024, 0.024, 0.74, 12), matHalo, 0, 0.90, 0.46, Math.PI / 2, 0, 0));
+  /* ── HALO — smooth CatmullRom arch (TubeGeometry) ─────────── */
+  const haloCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3( 0, 0.40, 0.10),
+    new THREE.Vector3( 0, 0.94, 0.10),
+    new THREE.Vector3( 0, 1.00, 0.28),
+    new THREE.Vector3( 0, 1.00, 0.46),
+    new THREE.Vector3( 0, 1.00, 0.64),
+    new THREE.Vector3( 0, 0.94, 0.82),
+    new THREE.Vector3( 0, 0.40, 0.82),
+  ]);
+  grp.add(mesh(new THREE.TubeGeometry(haloCurve, 38, 0.024, 10, false), matHalo));
   for (const s of [-1, 1]) {
     grp.add(mesh(cyl(0.016, 0.016, 0.44, 10), matHalo, s * 0.24, 0.60, 0.46, 0, 0, s * 0.58));
   }
@@ -634,10 +673,12 @@ function buildF3({ color }) {
     grp.add(mesh(box(0.020, 0.070, 2.90), matCarbon, s * 0.56, 0.060, 0.10));
   }
 
-  /* ── MONOCOQUE — 3 rounded-edge layers ───────────────────── */
+  /* ── MONOCOQUE — 4 rounded-edge layers ───────────────────── */
   grp.add(mesh(rBox(0.70, 0.10, 2.95, 0.04), matBody, 0, 0.11, 0.04));
   grp.add(mesh(rBox(0.56, 0.20, 2.35, 0.05), matBody, 0, 0.26, -0.08));
   grp.add(mesh(rBox(0.44, 0.15, 1.52, 0.07), matBody, 0, 0.40, -0.10));
+  // Layer 4: shoulder taper
+  grp.add(mesh(rBox(0.33, 0.09, 1.06, 0.06), matBody, 0, 0.49, -0.08));
 
   /* ── SIDEPODS ─────────────────────────────────────────────── */
   for (const s of [-1, 1]) {
@@ -647,20 +688,21 @@ function buildF3({ color }) {
     grp.add(mesh(box(0.044, 0.22, 0.044), matCockpit, s * 0.440, 0.18, -0.50));
   }
 
-  /* ── ENGINE COVER ─────────────────────────────────────────── */
+  /* ── ENGINE COVER — 3-segment taper ──────────────────────── */
   grp.add(mesh(rBox(0.42, 0.22, 0.88), matBody, 0, 0.34, 1.22));
-  grp.add(mesh(rBox(0.34, 0.17, 0.44), matBody, 0, 0.28, 1.68));
+  grp.add(mesh(rBox(0.37, 0.19, 0.36), matBody, 0, 0.31, 1.68));
+  grp.add(mesh(rBox(0.30, 0.16, 0.38), matBody, 0, 0.25, 1.88));
   grp.add(mesh(box(0.12, 0.24, 0.15), matCarbon, 0, 0.46, 0.84));
   grp.add(mesh(cone(0.060, 0.15, 12), matCarbon, 0, 0.58, 0.76, -Math.PI / 2, 0, 0));
 
   /* ── NOSE — sculpted transitions + oval tip ───────────────── */
   grp.add(mesh(rBox(0.42, 0.15, 0.72, 0.05), matBody, 0, 0.13, -1.52));
   grp.add(mesh(rBox(0.27, 0.12, 0.72, 0.04), matBody, 0, 0.10, -1.90));
-  grp.add(mesh(noseTip(0.24, 0.11, 0.43), matBody, 0, 0.08, -2.22));
+  grp.add(mesh(ogiveNose(0.24, 0.11, 0.43), matBody, 0, 0.08, -2.22));
 
   /* ── COCKPIT ──────────────────────────────────────────────── */
-  grp.add(mesh(box(0.48, 0.30, 1.02), matCockpit, 0, 0.38, 0.38));
-  grp.add(mesh(box(0.56, 0.040, 1.04), matCarbon, 0, 0.55, 0.38));
+  grp.add(mesh(rBox(0.48, 0.30, 1.02, 0.06), matCockpit, 0, 0.38, 0.38));
+  grp.add(mesh(rBox(0.56, 0.040, 1.04, 0.015), matCarbon, 0, 0.55, 0.38));
   grp.add(mesh(box(0.18, 0.10, 0.18), makeMat(0x003399, 0.65, 0.05), 0, 0.46, 0.66));
 
   /* ── DRIVER HELMET ────────────────────────────────────────── */
@@ -669,10 +711,17 @@ function buildF3({ color }) {
     new THREE.MeshPhysicalMaterial({ color: 0x445522, transmission: 0.5, roughness: 0.04, metalness: 0.1, transparent: true, opacity: 0.75, depthWrite: false }),
     0, 0.61, 0.22));
 
-  /* ── HALO ─────────────────────────────────────────────────── */
-  grp.add(mesh(cyl(0.022, 0.022, 0.50, 12), matHalo, 0, 0.62, 0.08));
-  grp.add(mesh(cyl(0.022, 0.022, 0.50, 12), matHalo, 0, 0.62, 0.76));
-  grp.add(mesh(cyl(0.022, 0.022, 0.66, 12), matHalo, 0, 0.84, 0.42, Math.PI / 2, 0, 0));
+  /* ── HALO — smooth CatmullRom arch (TubeGeometry) ─────────── */
+  const haloCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3( 0, 0.37, 0.08),
+    new THREE.Vector3( 0, 0.86, 0.08),
+    new THREE.Vector3( 0, 0.92, 0.24),
+    new THREE.Vector3( 0, 0.92, 0.42),
+    new THREE.Vector3( 0, 0.92, 0.60),
+    new THREE.Vector3( 0, 0.86, 0.76),
+    new THREE.Vector3( 0, 0.37, 0.76),
+  ]);
+  grp.add(mesh(new THREE.TubeGeometry(haloCurve, 36, 0.022, 10, false), matHalo));
   for (const s of [-1, 1]) {
     grp.add(mesh(cyl(0.014, 0.014, 0.38, 10), matHalo, s * 0.22, 0.54, 0.42, 0, 0, s * 0.56));
   }

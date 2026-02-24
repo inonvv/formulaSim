@@ -45,6 +45,8 @@ const CAR_AERO = {
     farSeeds:    [-4.5,-3.5,-2.5, 2.5, 3.5, 4.5],
     /* Front wing cascade seeds — at wing height */
     fwSeeds:     [-1.4,-0.9,-0.4, 0.4, 0.9, 1.4],  fwY: 0.04, fwEta: -2.6,
+    /* Body-hugging seeds — boundary layer along sidepod/body edge */
+    bodySeeds:   [-1.04,-0.96,-0.88, 0.88, 0.96, 1.04],  bodyY: [0.28, 0.50],
     pressureBlobs: [
       { color:0xff2200, r:0.40, intensity:1.00, pos:[0, 0.12,-2.50] },
       { color:0x2266ff, r:0.50, intensity:0.90, pos:[0, 0.02,-2.60] },
@@ -74,6 +76,7 @@ const CAR_AERO = {
     underSeeds:  [-0.40,-0.22,-0.07, 0.07, 0.22, 0.40],  underY: -0.03,
     farSeeds:    [-4.5,-3.5,-2.5, 2.5, 3.5, 4.5],
     fwSeeds:     [-1.3,-0.8,-0.3, 0.3, 0.8, 1.3],  fwY: 0.04, fwEta: -2.36,
+    bodySeeds:   [-1.04,-0.96,-0.88, 0.88, 0.96, 1.04],  bodyY: [0.24, 0.46],
     pressureBlobs: [
       { color:0xff2200, r:0.38, intensity:0.85, pos:[0, 0.12,-2.35] },
       { color:0x2266ff, r:0.45, intensity:0.72, pos:[0, 0.02,-2.36] },
@@ -100,6 +103,7 @@ const CAR_AERO = {
     underSeeds:  [-0.30,-0.15,-0.05, 0.05, 0.15, 0.30],  underY: -0.02,
     farSeeds:    [-4.0,-3.0,-2.2, 2.2, 3.0, 4.0],
     fwSeeds:     [-1.2,-0.7,-0.2, 0.2, 0.7, 1.2],  fwY: 0.04, fwEta: -2.12,
+    bodySeeds:   [-1.04,-0.96,-0.88, 0.88, 0.96, 1.04],  bodyY: [0.20, 0.40],
     pressureBlobs: [
       { color:0xff2200, r:0.32, intensity:0.68, pos:[0, 0.11,-2.10] },
       { color:0x2266ff, r:0.35, intensity:0.48, pos:[0, 0.02,-2.12] },
@@ -121,6 +125,7 @@ const CAR_AERO = {
     underSeeds:  [-0.35,-0.18,-0.06, 0.06, 0.18, 0.35],  underY: -0.07,
     farSeeds:    [-4.5,-3.5,-2.5, 2.5, 3.5, 4.5],
     fwSeeds:     [], fwY: 0, fwEta: 0,  // GT has no dedicated front wing
+    bodySeeds:   [-1.04,-0.96,-0.88, 0.88, 0.96, 1.04],  bodyY: [0.20, 0.46],
     pressureBlobs: [
       { color:0xff2200, r:0.55, intensity:0.85, pos:[ 0.00, 0.25,-2.26] },
       { color:0x2266ff, r:0.45, intensity:0.55, pos:[ 0.00, 0.10,-2.30] },
@@ -165,6 +170,12 @@ function _buildSeedList(p) {
   // Front-wing zone (if defined)
   for (const xi of (p.fwSeeds || [])) {
     seeds.push({ seedXi: xi,   seedEta: p.fwEta - 1, y: p.fwY, group: 'fw', halfH: p.halfH });
+  }
+  // Body-hugging boundary layer (traces surface airflow along body edges)
+  for (const xi of (p.bodySeeds || [])) {
+    for (const y of (p.bodyY || [])) {
+      seeds.push({ seedXi: xi, seedEta: -8, y, group: 'body', halfH: p.halfH });
+    }
   }
   return seeds;
 }
@@ -218,6 +229,7 @@ export class AirflowEffect {
     this._buildSmokeParticles();
     this._buildVortexSpirals(profile.vortexDefs);
     this._buildWakeParticles(profile.wakeCount);
+    this._buildPressureBlobs(profile.pressureBlobs);
   }
 
   /* ── Convert potential-flow (xi, eta) + y → world XYZ ── */
@@ -234,48 +246,68 @@ export class AirflowEffect {
     return vy * scale;
   }
 
-  /* ── Stream lines — pressure-colored flow skeleton ── */
+  /* ── Stream tubes — fat 3D pressure-coloured TubeGeometry ── */
   _buildSmokeGuides() {
     this._guideLines = [];
+    const TUBE_R   = 0.016;   // tube radius in world units
+    const TUBE_SEG = 48;      // tubular segments along the path
+    const RAD_SEG  = 5;       // radial segments (hexagonal profile)
 
     for (let s = 0; s < this._seeds.length; s++) {
       const path = this._paths[s];
       const y0   = this._seeds[s].y;
       if (path.length < 2) { this._guideLines.push(null); continue; }
 
-      const positions = new Float32Array(path.length * 3);
-      const colors    = new Float32Array(path.length * 3);
-
+      // Sample path at TUBE_SEG+1 evenly-spaced steps
       let yAcc = 0;
-      for (let i = 0; i < path.length; i++) {
-        const { xi, eta, vxi, veta } = path[i];
+      const curvePts  = [];
+      const cpSamples = [];
+      for (let k = 0; k <= TUBE_SEG; k++) {
+        const fi   = (k / TUBE_SEG) * (path.length - 1);
+        const ti   = Math.floor(fi);
+        const frac = fi - ti;
+        const ptA  = path[Math.min(ti,     path.length - 1)];
+        const ptB  = path[Math.min(ti + 1, path.length - 1)];
+        const xi   = ptA.xi   + (ptB.xi   - ptA.xi)   * frac;
+        const eta  = ptA.eta  + (ptB.eta  - ptA.eta)  * frac;
+        const vxi  = ptA.vxi  + (ptB.vxi  - ptA.vxi)  * frac;
+        const veta = ptA.veta + (ptB.veta - ptA.veta) * frac;
+
         const dy = this._verticalDelta(eta, y0 + yAcc);
         yAcc += dy;
         const w = this._toWorld(xi, eta, y0 + yAcc);
-        positions[i * 3]     = w.x;
-        positions[i * 3 + 1] = w.y;
-        positions[i * 3 + 2] = w.z;
-        const c = streamColor(pressureCoeff(vxi, veta));
-        colors[i * 3]     = c.r;
-        colors[i * 3 + 1] = c.g;
-        colors[i * 3 + 2] = c.b;
+        curvePts.push(new THREE.Vector3(w.x, w.y, w.z));
+        cpSamples.push(pressureCoeff(vxi, veta));
       }
 
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      geo.setAttribute('color',    new THREE.BufferAttribute(colors,    3));
+      const curve = new THREE.CatmullRomCurve3(curvePts);
+      const geo   = new THREE.TubeGeometry(curve, TUBE_SEG, TUBE_R, RAD_SEG, false);
 
-      const mat = new THREE.LineBasicMaterial({
+      // Paint per-vertex Cp colours (each ring = one path sample)
+      const vCount = geo.attributes.position.count;
+      const cols   = new Float32Array(vCount * 3);
+      for (let i = 0; i < vCount; i++) {
+        const segIdx = Math.floor(i / (RAD_SEG + 1));
+        const cp     = cpSamples[Math.min(segIdx, cpSamples.length - 1)];
+        const c      = streamColor(cp);
+        cols[i * 3]     = c.r;
+        cols[i * 3 + 1] = c.g;
+        cols[i * 3 + 2] = c.b;
+      }
+      geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+
+      const mat = new THREE.MeshBasicMaterial({
         vertexColors: true,
         transparent: true,
         opacity: 0,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
       });
 
-      const line = new THREE.Line(geo, mat);
-      this.group.add(line);
-      this._guideLines.push({ line, mat });
+      const tube = new THREE.Mesh(geo, mat);
+      this.group.add(tube);
+      this._guideLines.push({ tube, mat });
     }
   }
 
@@ -382,6 +414,24 @@ export class AirflowEffect {
     this.group.add(this._wakePoints);
   }
 
+  /* ── Pressure glow blobs — stagnation & suction hot spots ── */
+  _buildPressureBlobs(blobs) {
+    this._blobMeshes = (blobs || []).map(blob => {
+      const geo = new THREE.SphereGeometry(1, 10, 8); // unit sphere, scaled per-frame
+      const mat = new THREE.MeshBasicMaterial({
+        color: blob.color,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(blob.pos[0], blob.pos[1], blob.pos[2]);
+      this.group.add(m);
+      return { mesh: m, mat, blob };
+    });
+  }
+
   setSpeed(speed) { this._speed = speed; }
 
   setVisible(v) {
@@ -407,9 +457,18 @@ export class AirflowEffect {
 
     const speedFactor = Math.min(this._speed / 350, 1);
 
-    /* ── Guide line opacity ── */
+    /* ── Stream tube opacity ── */
     for (const gl of this._guideLines) {
       if (gl) gl.mat.opacity = speedFactor * 0.55;
+    }
+
+    /* ── Pressure blobs — pulsing stagnation/suction glow ── */
+    for (const { mesh, mat, blob } of this._blobMeshes) {
+      const phase  = blob.pos[2];
+      const pulse  = 0.55 + 0.45 * Math.sin(t * 2.5 + phase);
+      const sfSq   = speedFactor * speedFactor;
+      mat.opacity  = sfSq * blob.intensity * 0.30 * pulse;
+      mesh.scale.setScalar(blob.r * (0.75 + 0.50 * sfSq * pulse));
     }
 
     /* ── Smoke particles — dense chains ── */
