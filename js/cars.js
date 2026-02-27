@@ -89,6 +89,53 @@ function rBox(w, h, d, r) {
   return g;
 }
 
+/** Elliptical cross-section body — zero corners, continuous curvature. Centered on Z. */
+function ovalPod(w, h, d, N = 24) {
+  const s = new THREE.Shape();
+  for (let i = 0; i <= N; i++) {
+    const θ = (i / N) * Math.PI * 2;
+    if (i === 0) s.moveTo((w/2)*Math.cos(θ), (h/2)*Math.sin(θ));
+    else         s.lineTo((w/2)*Math.cos(θ), (h/2)*Math.sin(θ));
+  }
+  const g = new THREE.ExtrudeGeometry(s, { depth: d, bevelEnabled: false });
+  g.translate(0, 0, -d / 2);
+  return g;
+}
+
+/** Tapered oval barrel. Front face wF×hF at z=−len/2, rear face wR×hR at z=+len/2. */
+function ovalSweep(wF, hF, wR, hR, len, N = 24, segs = 14) {
+  const pos = new Float32Array(((segs + 1) * N + 2) * 3);
+  const idx = [];
+  let vi = 0;
+  const vSet = (x, y, z) => { pos[vi*3]=x; pos[vi*3+1]=y; pos[vi*3+2]=z; vi++; };
+
+  for (let si = 0; si <= segs; si++) {
+    const t = si / segs;
+    const w = wF + (wR-wF)*t,  h = hF + (hR-hF)*t,  z = -len/2 + t*len;
+    for (let ni = 0; ni < N; ni++) {
+      const θ = (ni/N)*Math.PI*2;
+      vSet((w/2)*Math.cos(θ), (h/2)*Math.sin(θ), z);
+    }
+  }
+  const frontCap = vi;  vSet(0, 0, -len/2);
+  const rearCap  = vi;  vSet(0, 0,  len/2);
+
+  for (let si = 0; si < segs; si++)
+    for (let ni = 0; ni < N; ni++) {
+      const a=si*N+ni, b=si*N+(ni+1)%N, c=(si+1)*N+(ni+1)%N, d=(si+1)*N+ni;
+      idx.push(a,b,c, a,c,d);
+    }
+  for (let ni = 0; ni < N; ni++) idx.push(frontCap, (ni+1)%N, ni);
+  const rB = segs*N;
+  for (let ni = 0; ni < N; ni++) idx.push(rearCap, rB+ni, rB+(ni+1)%N);
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  return geo;
+}
+
 /** NACA-style airfoil cross-section wing.
  *  Span along X (centered), chord along Z (centered), camber along Y.
  *  Upper (suction) surface is more curved; lower (pressure) is flatter. */
@@ -242,6 +289,20 @@ function wishbone(len, matCarbon, x, y, z, rz) {
   return mesh(cyl(0.013, 0.013, len, 8), matCarbon, x, y, z, 0, 0, rz);
 }
 
+/** Cylinder spanning two arbitrary 3D points — for anatomically correct suspension. */
+function rod(ax, ay, az, bx, by, bz, radius, mat) {
+  const a = new THREE.Vector3(ax, ay, az);
+  const b = new THREE.Vector3(bx, by, bz);
+  const len = a.distanceTo(b);
+  const mid = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5);
+  const dir = new THREE.Vector3().subVectors(b, a).normalize();
+  const m = new THREE.Mesh(cyl(radius, radius, len, 6), mat);
+  m.position.copy(mid);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+  m.castShadow = true;
+  return m;
+}
+
 /* ── Car definitions ──────────────────────────────────────────── */
 
 const CAR_META = {
@@ -343,20 +404,16 @@ function buildF1({ color }) {
   // Layer 1: lower tub (widest, flattest)
   grp.add(mesh(rBox(0.78, 0.12, 3.55, 0.04), matBody, 0, 0.13, 0.05));
   // Layer 2: mid tub (proper monocoque width)
-  grp.add(mesh(rBox(0.64, 0.24, 2.85, 0.06), matBody, 0, 0.30, -0.08));
+  grp.add(mesh(ovalPod(0.64, 0.24, 2.85), matBody, 0, 0.30, -0.08));
   // Layer 3: upper section (narrows above driver knees)
-  grp.add(mesh(rBox(0.50, 0.18, 1.80, 0.09), matBody, 0, 0.47, -0.12));
+  grp.add(mesh(ovalPod(0.50, 0.18, 1.80), matBody, 0, 0.47, -0.12));
   // Layer 4: shoulder-level sill (tightest — merges into cockpit surround)
-  grp.add(mesh(rBox(0.38, 0.10, 1.26, 0.08), matBody, 0, 0.58, -0.08));
+  grp.add(mesh(rBox(0.38, 0.10, 1.26, 0.120), matBody, 0, 0.58, -0.08));
 
   /* ── SIDEPODS — 2022+ sharp-sidepod geometry ─────────────── */
   for (const s of [-1, 1]) {
-    // Main pod volume — near-square section, sharp edges
-    grp.add(mesh(rBox(0.34, 0.32, 1.85, 0.015), matBody, s * 0.545, 0.22, 0.28));
-    // Shoulder crease line (upper ridge transition)
-    grp.add(mesh(rBox(0.33, 0.055, 1.82, 0.012), matBody, s * 0.540, 0.385, 0.28));
-    // Top surface panel
-    grp.add(mesh(rBox(0.31, 0.06, 1.78, 0.010), matBody, s * 0.535, 0.435, 0.30));
+    // Main pod volume — smooth tapering oval barrel
+    grp.add(mesh(ovalSweep(0.36, 0.34, 0.22, 0.18, 1.90), matBody, s * 0.545, 0.22, 0.28));
     // Undercut — angled lower panel (generates vortex seal)
     const ucPanel = mesh(box(0.13, 0.18, 1.74), matCarbon, s * 0.610, 0.10, 0.30);
     ucPanel.rotation.z = s * 0.35;
@@ -390,14 +447,18 @@ function buildF1({ color }) {
       v.rotation.y = s * (0.10 + bi * 0.06);
       grp.add(v);
     }
+    // Louver cavity — dark recess behind louver slats
+    grp.add(mesh(box(0.20, 0.13, 0.52), makeMat(0x050505, 0.9, 0.1), s * 0.490, 0.42, 0.72));
+    // Under-pod turning vane — generates vortex under floor
+    grp.add(mesh(box(0.30, 0.018, 0.24), matCarbon, s * 0.545, 0.02, -0.42));
+    // Vortex generators — 4× small fins on undercut
+    for (let vi = 0; vi < 4; vi++) {
+      grp.add(mesh(box(0.014, 0.090, 0.030), matCarbon, s * 0.610, 0.10, -0.20 + vi * 0.32));
+    }
   }
 
-  /* ── ENGINE COVER — 3-segment taper ──────────────────────── */
-  grp.add(mesh(rBox(0.50, 0.30, 1.15), matBody, 0, 0.42, 1.38));
-  // Intermediate taper
-  grp.add(mesh(rBox(0.44, 0.26, 0.50), matBody, 0, 0.39, 1.95));
-  // Slim gearbox section
-  grp.add(mesh(rBox(0.36, 0.22, 0.48), matBody, 0, 0.32, 2.22));
+  /* ── ENGINE COVER — single tapering oval spine ─────────────── */
+  grp.add(mesh(ovalSweep(0.50, 0.30, 0.28, 0.16, 1.62), matBody, 0, 0.38, 1.51));
   // Engine air intake
   grp.add(mesh(box(0.16, 0.32, 0.22), matCarbon, 0, 0.60, 0.96));
   grp.add(mesh(cone(0.080, 0.22, 12), matCarbon, 0, 0.76, 0.84, -Math.PI / 2, 0, 0));
@@ -442,10 +503,12 @@ function buildF1({ color }) {
     new THREE.Vector3( 0, 1.00, 0.88),
     new THREE.Vector3( 0, 0.42, 0.88),
   ]);
-  grp.add(mesh(new THREE.TubeGeometry(haloCurve, 40, 0.026, 10, false), matHalo));
+  grp.add(mesh(new THREE.TubeGeometry(haloCurve, 40, 0.034, 12, false), matHalo));
   for (const s of [-1, 1]) {
-    grp.add(mesh(cyl(0.018, 0.018, 0.48, 10), matHalo, s * 0.26, 0.62, 0.49, 0, 0, s * 0.60));
+    grp.add(mesh(cyl(0.022, 0.022, 0.48, 10), matHalo, s * 0.26, 0.62, 0.49, 0, 0, s * 0.60));
   }
+  // Central forward keel — anchors halo to front bulkhead (signature F1 feature)
+  grp.add(rod(0, 0.42, 0.10,  0, 0.36, -0.28,  0.024, matHalo));
 
   /* ── MIRRORS ─────────────────────────────────────────────── */
   for (const s of [-1, 1]) {
@@ -519,19 +582,29 @@ function buildF1({ color }) {
   grp.add(mesh(cyl(0.044, 0.044, 0.022, 12), makeMat(0x999999, 0.04, 1.0), 0.12, 0.24, 2.20));
 
   /* ── SUSPENSION ───────────────────────────────────────────── */
-  for (const s of [-1, 1]) {
+  {
     const fz = -1.50, rz = 1.60;
-    // Front: upper wishbone + lower wishbone + push rod
-    grp.add(wishbone(0.62, matCarbon, s * 0.40, 0.14, fz, s * 0.44));
-    grp.add(wishbone(0.60, matCarbon, s * 0.38, -0.04, fz, s * -0.38));
-    grp.add(mesh(cyl(0.008, 0.008, 0.46, 6), matCarbon, s * 0.30, 0.06, fz, 0, 0, s * 0.20));
-    // Rear: upper wishbone + lower wishbone + pull rod
-    grp.add(wishbone(0.58, matCarbon, s * 0.38, 0.12, rz, s * 0.42));
-    grp.add(wishbone(0.56, matCarbon, s * 0.36, -0.04, rz, s * -0.36));
-    grp.add(mesh(cyl(0.008, 0.008, 0.44, 6), matCarbon, s * 0.28, 0.04, rz, 0, 0, s * -0.22));
-    // Anti-roll bar tie
-    grp.add(mesh(cyl(0.010, 0.010, 1.42, 8), matCarbon, 0, 0.10, fz, 0, 0, Math.PI / 2));
-    grp.add(mesh(cyl(0.010, 0.010, 1.38, 8), matCarbon, 0, 0.10, rz, 0, 0, Math.PI / 2));
+    for (const s of [-1, 1]) {
+      // Front corner — upright + V-wishbones + push rod + track rod
+      grp.add(rod(s*0.67, -0.10, fz,  s*0.67,  0.22, fz,  0.018, matCarbon)); // upright
+      grp.add(rod(s*0.67,  0.20, fz,  s*0.32,  0.26, fz-0.18,  0.013, matCarbon)); // upper front arm
+      grp.add(rod(s*0.67,  0.20, fz,  s*0.32,  0.26, fz+0.18,  0.013, matCarbon)); // upper rear arm
+      grp.add(rod(s*0.67, -0.10, fz,  s*0.30,  0.00, fz-0.20,  0.013, matCarbon)); // lower front arm
+      grp.add(rod(s*0.67, -0.10, fz,  s*0.30,  0.00, fz+0.20,  0.013, matCarbon)); // lower rear arm
+      grp.add(rod(s*0.64,  0.00, fz,  s*0.24,  0.30, fz,        0.008, matCarbon)); // push rod
+      grp.add(rod(s*0.67, -0.10, fz,  s*0.14, -0.06, fz+0.02,  0.008, matCarbon)); // track rod
+      // Rear corner — upright + V-wishbones + pull rod + toe link
+      grp.add(rod(s*0.65, -0.10, rz,  s*0.65,  0.22, rz,  0.018, matCarbon)); // upright
+      grp.add(rod(s*0.65,  0.20, rz,  s*0.28,  0.24, rz-0.18,  0.013, matCarbon)); // upper front arm
+      grp.add(rod(s*0.65,  0.20, rz,  s*0.28,  0.24, rz+0.18,  0.013, matCarbon)); // upper rear arm
+      grp.add(rod(s*0.65, -0.10, rz,  s*0.26,  0.00, rz-0.20,  0.013, matCarbon)); // lower front arm
+      grp.add(rod(s*0.65, -0.10, rz,  s*0.26,  0.00, rz+0.20,  0.013, matCarbon)); // lower rear arm
+      grp.add(rod(s*0.62,  0.00, rz,  s*0.22,  0.28, rz,        0.008, matCarbon)); // pull rod
+      grp.add(rod(s*0.65, -0.10, rz,  s*0.12, -0.06, rz+0.02,  0.008, matCarbon)); // toe link
+    }
+    // Anti-roll bars (outside side loop — single bar each axle)
+    grp.add(mesh(cyl(0.010, 0.010, 1.34, 8), matCarbon, 0, 0.14, fz, 0, 0, Math.PI / 2));
+    grp.add(mesh(cyl(0.010, 0.010, 1.30, 8), matCarbon, 0, 0.14, rz, 0, 0, Math.PI / 2));
   }
 
   /* ── WHEELS ───────────────────────────────────────────────── */
@@ -575,20 +648,16 @@ function buildF2({ color }) {
   }
 
   /* ── MONOCOQUE — 4 rounded-edge layers ───────────────────── */
-  grp.add(mesh(rBox(0.76, 0.11, 3.30, 0.04), matBody, 0, 0.12, 0.05));
-  grp.add(mesh(rBox(0.62, 0.22, 2.65, 0.06), matBody, 0, 0.28, -0.06));
-  grp.add(mesh(rBox(0.48, 0.17, 1.70, 0.08), matBody, 0, 0.44, -0.10));
+  grp.add(mesh(rBox(0.76, 0.11, 3.30, 0.040), matBody, 0, 0.12, 0.05));
+  grp.add(mesh(ovalPod(0.62, 0.22, 2.65), matBody, 0, 0.28, -0.06));
+  grp.add(mesh(ovalPod(0.48, 0.17, 1.70), matBody, 0, 0.44, -0.10));
   // Layer 4: shoulder-level sill
-  grp.add(mesh(rBox(0.36, 0.10, 1.16, 0.07), matBody, 0, 0.54, -0.07));
+  grp.add(mesh(rBox(0.36, 0.10, 1.16, 0.108), matBody, 0, 0.54, -0.07));
 
   /* ── SIDEPODS — 2022+ sharp-sidepod geometry (F2 ~85% scale) ─ */
   for (const s of [-1, 1]) {
-    // Main pod volume
-    grp.add(mesh(rBox(0.29, 0.27, 1.57, 0.015), matBody, s * 0.465, 0.19, 0.26));
-    // Shoulder crease line
-    grp.add(mesh(rBox(0.28, 0.048, 1.55, 0.012), matBody, s * 0.462, 0.328, 0.26));
-    // Top surface panel
-    grp.add(mesh(rBox(0.265, 0.052, 1.51, 0.010), matBody, s * 0.455, 0.370, 0.28));
+    // Main pod volume — smooth tapering oval barrel
+    grp.add(mesh(ovalSweep(0.30, 0.28, 0.18, 0.15, 1.60), matBody, s * 0.465, 0.19, 0.26));
     // Undercut angled panel
     const ucPanel = mesh(box(0.11, 0.15, 1.48), matCarbon, s * 0.520, 0.085, 0.28);
     ucPanel.rotation.z = s * 0.35;
@@ -624,12 +693,8 @@ function buildF2({ color }) {
     }
   }
 
-  /* ── ENGINE COVER — 3-segment taper ──────────────────────── */
-  grp.add(mesh(rBox(0.48, 0.27, 1.00), matBody, 0, 0.38, 1.30));
-  // Intermediate taper
-  grp.add(mesh(rBox(0.42, 0.23, 0.44), matBody, 0, 0.34, 1.82));
-  // Slim gearbox section
-  grp.add(mesh(rBox(0.34, 0.18, 0.42), matBody, 0, 0.27, 2.06));
+  /* ── ENGINE COVER — single tapering oval spine ─────────────── */
+  grp.add(mesh(ovalSweep(0.48, 0.27, 0.26, 0.14, 1.44), matBody, 0, 0.34, 1.44));
   // Intake
   grp.add(mesh(box(0.14, 0.28, 0.18), matCarbon, 0, 0.54, 0.90));
   grp.add(mesh(cone(0.070, 0.18, 12), matCarbon, 0, 0.68, 0.80, -Math.PI / 2, 0, 0));
@@ -660,10 +725,12 @@ function buildF2({ color }) {
     new THREE.Vector3( 0, 0.94, 0.82),
     new THREE.Vector3( 0, 0.40, 0.82),
   ]);
-  grp.add(mesh(new THREE.TubeGeometry(haloCurve, 38, 0.024, 10, false), matHalo));
+  grp.add(mesh(new THREE.TubeGeometry(haloCurve, 38, 0.030, 12, false), matHalo));
   for (const s of [-1, 1]) {
-    grp.add(mesh(cyl(0.016, 0.016, 0.44, 10), matHalo, s * 0.24, 0.60, 0.46, 0, 0, s * 0.58));
+    grp.add(mesh(cyl(0.020, 0.020, 0.44, 10), matHalo, s * 0.24, 0.60, 0.46, 0, 0, s * 0.58));
   }
+  // Central forward keel
+  grp.add(rod(0, 0.40, 0.10,  0, 0.34, -0.25,  0.022, matHalo));
 
   /* ── MIRRORS ─────────────────────────────────────────────── */
   for (const s of [-1, 1]) {
@@ -715,13 +782,29 @@ function buildF2({ color }) {
   grp.add(mesh(cyl(0.036, 0.040, 0.16, 12), matCarbon, 0.10, 0.22, 2.00));
 
   /* ── SUSPENSION ───────────────────────────────────────────── */
-  for (const s of [-1, 1]) {
-    grp.add(wishbone(0.56, matCarbon, s * 0.38, 0.13, -1.38, s * 0.42));
-    grp.add(wishbone(0.54, matCarbon, s * 0.36, -0.04, -1.38, s * -0.36));
-    grp.add(wishbone(0.54, matCarbon, s * 0.36, 0.11, 1.48, s * 0.40));
-    grp.add(wishbone(0.52, matCarbon, s * 0.34, -0.04, 1.48, s * -0.34));
-    grp.add(mesh(cyl(0.010, 0.010, 1.28, 8), matCarbon, 0, 0.09, -1.38, 0, 0, Math.PI / 2));
-    grp.add(mesh(cyl(0.010, 0.010, 1.24, 8), matCarbon, 0, 0.09,  1.48, 0, 0, Math.PI / 2));
+  {
+    const fz = -1.38, rz = 1.48;
+    for (const s of [-1, 1]) {
+      // Front corner
+      grp.add(rod(s*0.62, -0.10, fz,  s*0.62,  0.22, fz,  0.018, matCarbon)); // upright
+      grp.add(rod(s*0.62,  0.20, fz,  s*0.30,  0.26, fz-0.18,  0.013, matCarbon)); // upper front arm
+      grp.add(rod(s*0.62,  0.20, fz,  s*0.30,  0.26, fz+0.18,  0.013, matCarbon)); // upper rear arm
+      grp.add(rod(s*0.62, -0.10, fz,  s*0.28,  0.00, fz-0.20,  0.013, matCarbon)); // lower front arm
+      grp.add(rod(s*0.62, -0.10, fz,  s*0.28,  0.00, fz+0.20,  0.013, matCarbon)); // lower rear arm
+      grp.add(rod(s*0.60,  0.00, fz,  s*0.22,  0.30, fz,        0.008, matCarbon)); // push rod
+      grp.add(rod(s*0.62, -0.10, fz,  s*0.13, -0.06, fz+0.02,  0.008, matCarbon)); // track rod
+      // Rear corner
+      grp.add(rod(s*0.60, -0.10, rz,  s*0.60,  0.22, rz,  0.018, matCarbon)); // upright
+      grp.add(rod(s*0.60,  0.20, rz,  s*0.26,  0.24, rz-0.18,  0.013, matCarbon)); // upper front arm
+      grp.add(rod(s*0.60,  0.20, rz,  s*0.26,  0.24, rz+0.18,  0.013, matCarbon)); // upper rear arm
+      grp.add(rod(s*0.60, -0.10, rz,  s*0.24,  0.00, rz-0.20,  0.013, matCarbon)); // lower front arm
+      grp.add(rod(s*0.60, -0.10, rz,  s*0.24,  0.00, rz+0.20,  0.013, matCarbon)); // lower rear arm
+      grp.add(rod(s*0.58,  0.00, rz,  s*0.20,  0.28, rz,        0.008, matCarbon)); // pull rod
+      grp.add(rod(s*0.60, -0.10, rz,  s*0.11, -0.06, rz+0.02,  0.008, matCarbon)); // toe link
+    }
+    // Anti-roll bars
+    grp.add(mesh(cyl(0.010, 0.010, 1.24, 8), matCarbon, 0, 0.14, fz, 0, 0, Math.PI / 2));
+    grp.add(mesh(cyl(0.010, 0.010, 1.20, 8), matCarbon, 0, 0.14, rz, 0, 0, Math.PI / 2));
   }
 
   /* ── WHEELS ───────────────────────────────────────────────── */
@@ -765,24 +848,22 @@ function buildF3({ color }) {
   }
 
   /* ── MONOCOQUE — 4 rounded-edge layers ───────────────────── */
-  grp.add(mesh(rBox(0.70, 0.10, 2.95, 0.04), matBody, 0, 0.11, 0.04));
-  grp.add(mesh(rBox(0.56, 0.20, 2.35, 0.05), matBody, 0, 0.26, -0.08));
-  grp.add(mesh(rBox(0.44, 0.15, 1.52, 0.07), matBody, 0, 0.40, -0.10));
+  grp.add(mesh(rBox(0.70, 0.10, 2.95, 0.040), matBody, 0, 0.11, 0.04));
+  grp.add(mesh(ovalPod(0.56, 0.20, 2.35), matBody, 0, 0.26, -0.08));
+  grp.add(mesh(ovalPod(0.44, 0.15, 1.52), matBody, 0, 0.40, -0.10));
   // Layer 4: shoulder taper
-  grp.add(mesh(rBox(0.33, 0.09, 1.06, 0.06), matBody, 0, 0.49, -0.08));
+  grp.add(mesh(rBox(0.33, 0.09, 1.06, 0.096), matBody, 0, 0.49, -0.08));
 
   /* ── SIDEPODS ─────────────────────────────────────────────── */
   for (const s of [-1, 1]) {
-    grp.add(mesh(rBox(0.26, 0.25, 1.28), matBody, s * 0.450, 0.18, 0.24));
-    grp.add(mesh(rBox(0.25, 0.055, 1.22), matBody, s * 0.450, 0.33, 0.26));
+    // Main pod volume — smooth tapering oval barrel
+    grp.add(mesh(ovalSweep(0.26, 0.25, 0.16, 0.14, 1.28), matBody, s * 0.450, 0.18, 0.24));
     grp.add(mesh(box(0.09, 0.14, 1.18), matCarbon, s * 0.498, 0.10, 0.28));
     grp.add(mesh(box(0.044, 0.22, 0.044), matCockpit, s * 0.440, 0.18, -0.50));
   }
 
-  /* ── ENGINE COVER — 3-segment taper ──────────────────────── */
-  grp.add(mesh(rBox(0.42, 0.22, 0.88), matBody, 0, 0.34, 1.22));
-  grp.add(mesh(rBox(0.37, 0.19, 0.36), matBody, 0, 0.31, 1.68));
-  grp.add(mesh(rBox(0.30, 0.16, 0.38), matBody, 0, 0.25, 1.88));
+  /* ── ENGINE COVER — single tapering oval spine ─────────────── */
+  grp.add(mesh(ovalSweep(0.42, 0.22, 0.24, 0.13, 1.24), matBody, 0, 0.30, 1.38));
   grp.add(mesh(box(0.12, 0.24, 0.15), matCarbon, 0, 0.46, 0.84));
   grp.add(mesh(cone(0.060, 0.15, 12), matCarbon, 0, 0.58, 0.76, -Math.PI / 2, 0, 0));
 
@@ -812,10 +893,12 @@ function buildF3({ color }) {
     new THREE.Vector3( 0, 0.86, 0.76),
     new THREE.Vector3( 0, 0.37, 0.76),
   ]);
-  grp.add(mesh(new THREE.TubeGeometry(haloCurve, 36, 0.022, 10, false), matHalo));
+  grp.add(mesh(new THREE.TubeGeometry(haloCurve, 36, 0.028, 12, false), matHalo));
   for (const s of [-1, 1]) {
-    grp.add(mesh(cyl(0.014, 0.014, 0.38, 10), matHalo, s * 0.22, 0.54, 0.42, 0, 0, s * 0.56));
+    grp.add(mesh(cyl(0.018, 0.018, 0.38, 10), matHalo, s * 0.22, 0.54, 0.42, 0, 0, s * 0.56));
   }
+  // Central forward keel
+  grp.add(rod(0, 0.37, 0.08,  0, 0.30, -0.22,  0.020, matHalo));
 
   /* ── MIRRORS ─────────────────────────────────────────────── */
   for (const s of [-1, 1]) {
@@ -863,13 +946,29 @@ function buildF3({ color }) {
   grp.add(mesh(cyl(0.032, 0.036, 0.14, 12), matCarbon, 0.09, 0.20, 1.90));
 
   /* ── SUSPENSION ───────────────────────────────────────────── */
-  for (const s of [-1, 1]) {
-    grp.add(wishbone(0.50, matCarbon, s * 0.34, 0.11, -1.25, s * 0.40));
-    grp.add(wishbone(0.48, matCarbon, s * 0.32, -0.04, -1.25, s * -0.34));
-    grp.add(wishbone(0.48, matCarbon, s * 0.32, 0.10, 1.35, s * 0.38));
-    grp.add(wishbone(0.46, matCarbon, s * 0.30, -0.04, 1.35, s * -0.32));
-    grp.add(mesh(cyl(0.009, 0.009, 1.14, 8), matCarbon, 0, 0.08, -1.25, 0, 0, Math.PI / 2));
-    grp.add(mesh(cyl(0.009, 0.009, 1.10, 8), matCarbon, 0, 0.08,  1.35, 0, 0, Math.PI / 2));
+  {
+    const fz = -1.25, rz = 1.35;
+    for (const s of [-1, 1]) {
+      // Front corner
+      grp.add(rod(s*0.54, -0.10, fz,  s*0.54,  0.22, fz,  0.018, matCarbon)); // upright
+      grp.add(rod(s*0.54,  0.20, fz,  s*0.28,  0.26, fz-0.18,  0.013, matCarbon)); // upper front arm
+      grp.add(rod(s*0.54,  0.20, fz,  s*0.28,  0.26, fz+0.18,  0.013, matCarbon)); // upper rear arm
+      grp.add(rod(s*0.54, -0.10, fz,  s*0.26,  0.00, fz-0.20,  0.013, matCarbon)); // lower front arm
+      grp.add(rod(s*0.54, -0.10, fz,  s*0.26,  0.00, fz+0.20,  0.013, matCarbon)); // lower rear arm
+      grp.add(rod(s*0.52,  0.00, fz,  s*0.20,  0.30, fz,        0.008, matCarbon)); // push rod
+      grp.add(rod(s*0.54, -0.10, fz,  s*0.12, -0.06, fz+0.02,  0.008, matCarbon)); // track rod
+      // Rear corner
+      grp.add(rod(s*0.52, -0.10, rz,  s*0.52,  0.22, rz,  0.018, matCarbon)); // upright
+      grp.add(rod(s*0.52,  0.20, rz,  s*0.24,  0.24, rz-0.18,  0.013, matCarbon)); // upper front arm
+      grp.add(rod(s*0.52,  0.20, rz,  s*0.24,  0.24, rz+0.18,  0.013, matCarbon)); // upper rear arm
+      grp.add(rod(s*0.52, -0.10, rz,  s*0.22,  0.00, rz-0.20,  0.013, matCarbon)); // lower front arm
+      grp.add(rod(s*0.52, -0.10, rz,  s*0.22,  0.00, rz+0.20,  0.013, matCarbon)); // lower rear arm
+      grp.add(rod(s*0.50,  0.00, rz,  s*0.18,  0.28, rz,        0.008, matCarbon)); // pull rod
+      grp.add(rod(s*0.52, -0.10, rz,  s*0.10, -0.06, rz+0.02,  0.008, matCarbon)); // toe link
+    }
+    // Anti-roll bars
+    grp.add(mesh(cyl(0.009, 0.009, 1.14, 8), matCarbon, 0, 0.14, fz, 0, 0, Math.PI / 2));
+    grp.add(mesh(cyl(0.009, 0.009, 1.10, 8), matCarbon, 0, 0.14, rz, 0, 0, Math.PI / 2));
   }
 
   /* ── WHEELS ───────────────────────────────────────────────── */

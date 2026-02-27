@@ -3,7 +3,16 @@ import { describe, it, expect, vi, beforeAll } from 'vitest';
 /* ── Mock three ────────────────────────────────────────────────── */
 vi.mock('three', () => {
   function Vec3(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
-  Vec3.prototype.set = function (x, y, z) { this.x = x; this.y = y; this.z = z; return this; };
+  Vec3.prototype.set           = function (x, y, z) { this.x = x; this.y = y; this.z = z; return this; };
+  Vec3.prototype.copy          = function (v) { this.x = v.x; this.y = v.y; this.z = v.z; return this; };
+  Vec3.prototype.addVectors    = function (a, b) { this.x = a.x+b.x; this.y = a.y+b.y; this.z = a.z+b.z; return this; };
+  Vec3.prototype.subVectors    = function (a, b) { this.x = a.x-b.x; this.y = a.y-b.y; this.z = a.z-b.z; return this; };
+  Vec3.prototype.multiplyScalar= function (s) { this.x *= s; this.y *= s; this.z *= s; return this; };
+  Vec3.prototype.normalize     = function () { const l = Math.sqrt(this.x**2+this.y**2+this.z**2)||1; this.x/=l; this.y/=l; this.z/=l; return this; };
+  Vec3.prototype.distanceTo    = function (v) { return Math.sqrt((this.x-v.x)**2+(this.y-v.y)**2+(this.z-v.z)**2); };
+
+  function Quaternion() {}
+  Quaternion.prototype.setFromUnitVectors = function () { return this; };
 
   function Euler(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
   Euler.prototype.set = function (x, y, z) { this.x = x; this.y = y; this.z = z; return this; };
@@ -27,9 +36,11 @@ vi.mock('three', () => {
     this.material = mat || {};
     this.position = new Vec3();
     this.rotation = new Euler();
+    this.quaternion = new Quaternion();
     this.castShadow = false;
     this.receiveShadow = false;
     this.children = [];
+    this.userData = {};
   }
   Mesh.prototype.add = function (...items) { this.children.push(...items); return this; };
   Mesh.prototype.traverse = function (fn) {
@@ -66,6 +77,17 @@ vi.mock('three', () => {
   function CatmullRomCurve3(points) { this.points = points || []; }
   function TubeGeometry(curve, tubeSeg, radius, radSeg, closed) {}
 
+  function BufferGeometry() {
+    this.attributes = {};
+    this.setAttribute = function (name, attr) { this.attributes[name] = attr; return this; };
+    this.setIndex    = function () { return this; };
+    this.computeVertexNormals = function () { return this; };
+    this.dispose     = function () {};
+  }
+  function BufferAttribute(array, itemSize) {
+    this.array = array; this.itemSize = itemSize; this.needsUpdate = false;
+  }
+
   function MeshStandardMaterial(opts = {}) { Object.assign(this, opts); }
   function MeshBasicMaterial(opts = {}) { Object.assign(this, opts); }
   function MeshPhysicalMaterial(opts = {}) { Object.assign(this, opts); }
@@ -86,6 +108,8 @@ vi.mock('three', () => {
     LatheGeometry,
     CatmullRomCurve3,
     TubeGeometry,
+    BufferGeometry,
+    BufferAttribute,
     MeshStandardMaterial,
     MeshBasicMaterial,
     MeshPhysicalMaterial,
