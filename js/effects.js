@@ -46,8 +46,8 @@ const CAR_AERO = {
       { color:0x00ddff, r:0.80, intensity:0.90, pos:[0,-0.05, 0.00] },
       { color:0xff4400, r:0.30, intensity:0.70, pos:[ 0.85, 0.04,-1.60] },
       { color:0xff4400, r:0.30, intensity:0.70, pos:[-0.85, 0.04,-1.60] },
-      { color:0x0066ff, r:0.30, intensity:0.85, pos:[0, 0.10,-2.72] },
-      { color:0xff6600, r:0.28, intensity:0.75, pos:[0, 0.52,-0.45] },
+      { color:0x0066ff, r:0.18, intensity:0.50, phase:1.5, pos:[0, 0.10,-2.72] },
+      { color:0xff6600, r:0.28, intensity:0.75, phase:0.8, pos:[0, 0.52,-0.45] },
     ],
     vortexDefs: [
       {wx:-0.82,wy:0.02,wz:-2.60,sign: 1, gamma:0.6, rc:0.12},
@@ -78,8 +78,8 @@ const CAR_AERO = {
       { color:0x00ddff, r:0.65, intensity:0.65, pos:[0,-0.04, 0.00] },
       { color:0xff4400, r:0.26, intensity:0.55, pos:[ 0.76, 0.04,-1.45] },
       { color:0xff4400, r:0.26, intensity:0.55, pos:[-0.76, 0.04,-1.45] },
-      { color:0x0066ff, r:0.30, intensity:0.85, pos:[0, 0.10,-2.48] },
-      { color:0xff6600, r:0.28, intensity:0.75, pos:[0, 0.46,-0.42] },
+      { color:0x0066ff, r:0.16, intensity:0.40, phase:1.6, pos:[0, 0.10,-2.48] },
+      { color:0xff6600, r:0.28, intensity:0.75, phase:0.9, pos:[0, 0.46,-0.42] },
     ],
     vortexDefs: [
       {wx:-0.77,wy:0.02,wz:-2.36,sign: 1, gamma:0.5, rc:0.10},
@@ -104,8 +104,8 @@ const CAR_AERO = {
       { color:0x2266ff, r:0.35, intensity:0.48, pos:[0, 0.02,-2.12] },
       { color:0x2266ff, r:0.42, intensity:0.55, pos:[0, 0.65, 1.55] },
       { color:0x00ddff, r:0.45, intensity:0.35, pos:[0,-0.03, 0.00] },
-      { color:0x0066ff, r:0.30, intensity:0.85, pos:[0, 0.08,-2.24] },
-      { color:0xff6600, r:0.28, intensity:0.75, pos:[0, 0.40,-0.38] },
+      { color:0x0066ff, r:0.14, intensity:0.35, phase:1.7, pos:[0, 0.08,-2.24] },
+      { color:0xff6600, r:0.28, intensity:0.75, phase:1.0, pos:[0, 0.40,-0.38] },
     ],
     vortexDefs: [
       {wx:-0.75,wy:0.65,wz: 1.55,sign:-1, gamma:0.5, rc:0.10},
@@ -130,8 +130,7 @@ const CAR_AERO = {
       { color:0x2266ff, r:0.50, intensity:0.65, pos:[ 0.00, 0.60, 1.80] },
       { color:0x4488ff, r:0.50, intensity:0.55, pos:[ 0.85, 0.28, 0.00] },
       { color:0x4488ff, r:0.50, intensity:0.55, pos:[-0.85, 0.28, 0.00] },
-      { color:0x0066ff, r:0.30, intensity:0.85, pos:[0, 0.10,-2.32] },
-      { color:0xff6600, r:0.28, intensity:0.75, pos:[0, 0.68,-0.50] },
+      { color:0xff6600, r:0.28, intensity:0.75, phase:1.1, pos:[0, 0.68,-0.50] },
     ],
     vortexDefs: [
       {wx:-0.86,wy:0.72,wz: 1.80,sign:-1, gamma:0.8, rc:0.14},
@@ -186,10 +185,11 @@ export class AirflowEffect {
     this.group.name = 'airflow';
     scene.add(this.group);
 
-    this._speed   = 0;
-    this._visible = false;
-    this._type    = 'F1';
-    this._time    = 0;
+    this._speed        = 0;
+    this._visible      = false;
+    this._type         = 'F1';
+    this._time         = 0;
+    this._wingStalled  = false;
 
     this._build(getProfile('F1'));
     this.group.visible = false;
@@ -444,6 +444,7 @@ export class AirflowEffect {
    * Rebuilds all geometry to reflect separated flow.
    */
   setWingStall(isStalled) {
+    if (this._wingStalled === isStalled) return;
     this._wingStalled = isStalled;
     this._disposeAll();
     const profile = applyWingStall(getProfile(this._type), isStalled);
@@ -464,7 +465,7 @@ export class AirflowEffect {
 
     /* ── Pressure blobs — pulsing stagnation/suction glow ── */
     for (const { mesh, mat, blob } of this._blobMeshes) {
-      const phase  = blob.pos[2];
+      const phase  = blob.phase ?? blob.pos[2];
       const pulse  = 0.55 + 0.45 * Math.sin(t * 2.5 + phase);
       const sfSq   = speedFactor * speedFactor;
       mat.opacity  = sfSq * blob.intensity * 0.30 * pulse;
@@ -615,6 +616,15 @@ export class AirflowEffect {
 /* ════════════════════════════════════════════════════════════════ */
 /*  RAIN EFFECT                                                     */
 /* ════════════════════════════════════════════════════════════════ */
+
+/* Per-car wheel/spray spawn positions */
+const RAIN_POS = {
+  F1: { sprayX: 0.73, sprayZ: 1.52, roosterX: 0.80, roosterZ: 1.65 },
+  F2: { sprayX: 0.65, sprayZ: 1.38, roosterX: 0.73, roosterZ: 1.52 },
+  F3: { sprayX: 0.56, sprayZ: 1.22, roosterX: 0.63, roosterZ: 1.38 },
+  GT: { sprayX: 0.85, sprayZ: 1.55, roosterX: 0.93, roosterZ: 1.72 },
+};
+
 export class RainEffect {
   constructor(scene) {
     this.scene = scene;
@@ -622,8 +632,9 @@ export class RainEffect {
     this.group.name = 'rain';
     scene.add(this.group);
 
-    this._speed = 0;
-    this._visible = false;
+    this._speed    = 0;
+    this._visible  = false;
+    this._rainPos  = RAIN_POS.F1;
 
     this._buildDroplets();
     this._buildSpray();
@@ -670,10 +681,11 @@ export class RainEffect {
     const vels      = new Float32Array(COUNT * 3);
 
     const spawnSpray = (i) => {
-      const side = i % 2 === 0 ? -0.73 : 0.73;
+      const sx   = this._rainPos.sprayX;
+      const side = i % 2 === 0 ? -sx : sx;
       positions[i * 3]     = side + rnd(-0.1, 0.1);
       positions[i * 3 + 1] = 0.25;
-      positions[i * 3 + 2] = 1.5 + rnd(-0.1, 0.1);
+      positions[i * 3 + 2] = this._rainPos.sprayZ + rnd(-0.1, 0.1);
       vels[i * 3]     = (side < 0 ? -1 : 1) * rnd(0.2, 0.8);
       vels[i * 3 + 1] = rnd(1.0, 3.0);
       vels[i * 3 + 2] = rnd(1.0, rnd(1.5, 4.5));
@@ -711,9 +723,9 @@ export class RainEffect {
 
     for (let i = 0; i < COUNT; i++) {
       const side = i < COUNT / 2 ? -1 : 1;
-      positions[i * 3]     = side * 0.75 + rnd(-0.1, 0.1);
+      positions[i * 3]     = side * this._rainPos.roosterX + rnd(-0.1, 0.1);
       positions[i * 3 + 1] = rnd(0, 0.5);
-      positions[i * 3 + 2] = 1.6 + rnd(-0.1, 0.1);
+      positions[i * 3 + 2] = this._rainPos.roosterZ + rnd(-0.1, 0.1);
       vels[i * 3]     = side * rnd(0.5, 2);   // lateral fan
       vels[i * 3 + 1] = rnd(0, 4);            // upward
       vels[i * 3 + 2] = rnd(2, 5);            // rearward
@@ -756,6 +768,25 @@ export class RainEffect {
   }
 
   setSpeed(speed) { this._speed = speed; }
+
+  setCarType(type) {
+    this._rainPos = RAIN_POS[type] || RAIN_POS.F1;
+    // Re-place rooster tail particles at the new car's rear wheel positions
+    for (let i = 0; i < this._roosterCount; i++) {
+      const side = i < this._roosterCount / 2 ? -1 : 1;
+      this._roosterPos[i * 3]     = side * this._rainPos.roosterX + rnd(-0.1, 0.1);
+      this._roosterPos[i * 3 + 1] = rnd(0, 0.5);
+      this._roosterPos[i * 3 + 2] = this._rainPos.roosterZ + rnd(-0.1, 0.1);
+      this._roosterVels[i * 3]     = side * rnd(0.5, 2);
+      this._roosterVels[i * 3 + 1] = rnd(1.0, 3.0);
+      this._roosterVels[i * 3 + 2] = rnd(2, 5);
+    }
+    // Re-place spray particles
+    for (let i = 0; i < this._sCount; i++) {
+      this._spawnSpray(i);
+      this._sprayLife[i] = rnd(0, 1);
+    }
+  }
 
   setVisible(v) {
     this._visible = v;
@@ -825,9 +856,9 @@ export class RainEffect {
 
       if (rp[i * 3 + 1] < -0.1 || rp[i * 3 + 2] > 4.0) {
         const side = i < this._roosterCount / 2 ? -1 : 1;
-        rp[i * 3]     = side * 0.75 + rnd(-0.1, 0.1);
+        rp[i * 3]     = side * this._rainPos.roosterX + rnd(-0.1, 0.1);
         rp[i * 3 + 1] = rnd(0, 0.2);
-        rp[i * 3 + 2] = 1.6 + rnd(-0.1, 0.1);
+        rp[i * 3 + 2] = this._rainPos.roosterZ + rnd(-0.1, 0.1);
         rv[i * 3]     = side * rnd(0.5, 2);
         rv[i * 3 + 1] = rnd(1.0, 3.0);  // reset vy so gravity accumulation restarts
         rv[i * 3 + 2] = rnd(2, 5);
@@ -922,7 +953,7 @@ export class OptimalWeatherEffect {
       p[i * 3 + 1] = -0.34 + bright * 0.003;
     }
     this.shimmerPoints.geometry.attributes.position.needsUpdate = true;
-    this._shimMat.opacity = 0.25 + 0.35 * Math.abs(Math.sin(t * 0.5));
+    this._shimMat.opacity = (0.05 + speedFactor * 0.30) * (0.60 + 0.40 * Math.abs(Math.sin(t * 0.5)));
 
     this._hazeMat.opacity = speedFactor * 0.06 * (0.7 + 0.3 * Math.sin(t * 4));
   }

@@ -163,6 +163,7 @@ function spawnCar(type) {
   scene.add(grp);
   airflow.setCarType(type);
   cfd.setCarType(type);
+  rain.setCarType(type);
 
   // Reset wing flip state on car change
   state.wingFlipped  = false;
@@ -211,7 +212,8 @@ function syncEffects() {
   rain.setVisible(state.activeEnvs.has('rain'));
   optimal.setVisible(state.activeEnvs.has('optimal'));
   cfd.setVisible(state.activeEnvs.has('cfd'));
-  cfd.setCarType(state.carType);
+  airflow.setWingStall(state.wingFlipped);
+  cfd.setWingStall(state.wingFlipped);
 
   // Lighting per weather mode — values from scene-config.js
   const w = state.activeEnvs.has('rain')    ? WEATHER.rain

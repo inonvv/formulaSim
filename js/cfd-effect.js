@@ -150,7 +150,7 @@ const ZONE_BLOBS = {
     { role: 'undercut',     color: 0x00aaff, r: 0.20, intensity: 0.60, phase: 1.8, pos: [ 0.61,   0.06,  0.30] },
     { role: 'diffuser',     color: 0x0066ff, r: 0.55, intensity: 0.85, phase: 2.2, pos: [ 0,     -0.04,  1.93] },
     { role: 'rearWing',     color: 0xff2200, r: 0.30, intensity: 0.65, phase: 0.8, pos: [ 0,      0.98,  1.95] },
-    { role: 'fwCenter',     color: 0x0044ff, r: 0.24, intensity: 0.80, phase: 0.7, pos: [ 0,      0.10, -2.72] },
+    { role: 'fwCenter',     color: 0x0044ff, r: 0.16, intensity: 0.50, phase: 0.7, pos: [ 0,      0.10, -2.72] },
     { role: 'cockpit',      color: 0xff6600, r: 0.20, intensity: 0.70, phase: 1.4, pos: [ 0,      0.52, -0.45] },
   ],
   F2: [
@@ -162,7 +162,7 @@ const ZONE_BLOBS = {
     { role: 'sidepodInlet', color: 0xff4400, r: 0.18, intensity: 0.60, phase: 0.5, pos: [ 0.449,  0.19, -0.55] },
     { role: 'diffuser',     color: 0x0066ff, r: 0.45, intensity: 0.72, phase: 2.2, pos: [ 0,     -0.04,  1.80] },
     { role: 'rearWing',     color: 0xff2200, r: 0.26, intensity: 0.55, phase: 0.8, pos: [ 0,      0.90,  1.80] },
-    { role: 'fwCenter',     color: 0x0044ff, r: 0.24, intensity: 0.80, phase: 0.7, pos: [ 0,      0.10, -2.48] },
+    { role: 'fwCenter',     color: 0x0044ff, r: 0.14, intensity: 0.45, phase: 0.7, pos: [ 0,      0.10, -2.48] },
     { role: 'cockpit',      color: 0xff6600, r: 0.20, intensity: 0.70, phase: 1.4, pos: [ 0,      0.46, -0.42] },
   ],
   F3: [
@@ -170,14 +170,13 @@ const ZONE_BLOBS = {
     { role: 'suction',      color: 0x0044ff, r: 0.28, intensity: 0.55, phase: 1.1, pos: [ 0,      0.02, -2.18] },
     { role: 'diffuser',     color: 0x0066ff, r: 0.38, intensity: 0.52, phase: 2.2, pos: [ 0,     -0.04,  1.68] },
     { role: 'rearWing',     color: 0xff2200, r: 0.22, intensity: 0.50, phase: 0.8, pos: [ 0,      0.82,  1.68] },
-    { role: 'fwCenter',     color: 0x0044ff, r: 0.24, intensity: 0.80, phase: 0.7, pos: [ 0,      0.08, -2.24] },
+    { role: 'fwCenter',     color: 0x0044ff, r: 0.12, intensity: 0.40, phase: 0.7, pos: [ 0,      0.08, -2.24] },
     { role: 'cockpit',      color: 0xff6600, r: 0.20, intensity: 0.70, phase: 1.4, pos: [ 0,      0.40, -0.38] },
   ],
   GT: [
     { role: 'stagnation',   color: 0xff2200, r: 0.42, intensity: 0.80, phase: 0.0, pos: [ 0,      0.08, -2.48] },
     { role: 'diffuser',     color: 0x0066ff, r: 0.50, intensity: 0.62, phase: 2.2, pos: [ 0,     -0.10,  2.14] },
     { role: 'rearWing',     color: 0xff2200, r: 0.35, intensity: 0.58, phase: 0.8, pos: [ 0,      0.84,  1.92] },
-    { role: 'fwCenter',     color: 0x0044ff, r: 0.24, intensity: 0.80, phase: 0.7, pos: [ 0,      0.10, -2.32] },
     { role: 'cockpit',      color: 0xff6600, r: 0.20, intensity: 0.70, phase: 1.4, pos: [ 0,      0.68, -0.50] },
   ],
 };
@@ -302,6 +301,7 @@ export class CfdEffect {
   }
 
   setWingStall(isStalled) {
+    if (this._wingStalled === isStalled) return;
     this._wingStalled    = isStalled;
     this._lastBuiltSpeed = -1;
     this._speedDirty     = true;
