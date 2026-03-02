@@ -214,6 +214,7 @@ export class AirflowEffect {
   }
 
   _build(profile) {
+    this._profile         = profile;
     this._halfW           = profile.halfW;
     this._halfL           = profile.halfL;
     this._halfH           = profile.halfH;
@@ -510,14 +511,29 @@ export class AirflowEffect {
 
       const normFrac  = Math.max(0, Math.min(1, (eta - 1) / 7));
       const jitterAmp = jBase * (1 + normFrac * 4);
-      this._smokeJx[i] = this._smokeJx[i] * jDecay + (Math.random() * 2 - 1) * jitterAmp;
-      this._smokeJy[i] = this._smokeJy[i] * jDecay + (Math.random() * 2 - 1) * jitterAmp * 0.4;
-      this._smokeJz[i] = this._smokeJz[i] * jDecay + (Math.random() * 2 - 1) * jitterAmp;
+      this._smokeJx[i] = this._smokeJx[i] * jDecay + (Math.random() * 2 - 1) * jitterAmp * 0.7;
+      this._smokeJy[i] = this._smokeJy[i] * jDecay + (Math.random() * 2 - 1) * jitterAmp * 1.0;
+      this._smokeJz[i] = this._smokeJz[i] * jDecay + (Math.random() * 2 - 1) * jitterAmp * 0.7;
 
       const w = this._toWorld(xi, eta, y0 + this._smokeYAcc[i]);
       sPos[i * 3]     = w.x + this._smokeJx[i];
       sPos[i * 3 + 1] = w.y + this._smokeJy[i];
       sPos[i * 3 + 2] = w.z + this._smokeJz[i];
+
+      // Change 3: vortex-coupled drift — bend smoke near wing-tip vortex cores
+      if (this._profile?.vortexDefs) {
+        for (const def of this._profile.vortexDefs) {
+          const vxiC = def.wx / this._halfW;
+          const vetaC = def.wz / this._halfL;
+          const dx = xi - vxiC, de = eta - vetaC;
+          const rcN = def.rc / Math.min(this._halfW, this._halfL);
+          if (dx * dx + de * de < (rcN * 3) ** 2) {
+            const vv = vortexVelocity(xi, eta, vxiC, vetaC, def.gamma, rcN);
+            sPos[i * 3]     += vv.vxi  * this._halfW * speedFactor * 0.008;
+            sPos[i * 3 + 2] += vv.veta * this._halfL * speedFactor * 0.008;
+          }
+        }
+      }
 
       const cp = pressureCoeff(vxi, veta);
       const c  = streamColor(cp);
@@ -613,40 +629,40 @@ export class RainEffect {
     this._buildDroplets();
     this._buildSpray();
     this._buildWetGround();
+    this._buildRoosterTails();
     this.group.visible = false;
   }
 
   _buildDroplets() {
     const COUNT = 1200;
-    const positions = new Float32Array(COUNT * 3);
+    // Buffer stores tail + head per droplet (2 vertices × 3 floats = 6 per droplet)
+    const positions = new Float32Array(COUNT * 2 * 3);
     const vels      = new Float32Array(COUNT);
 
     for (let i = 0; i < COUNT; i++) {
-      positions[i * 3]     = rnd(-5, 5);
-      positions[i * 3 + 1] = rnd(0.5, 8);
-      positions[i * 3 + 2] = rnd(-6, 6);
-      vels[i] = rnd(4, 9);
+      const x = rnd(-5, 5), y = rnd(0.5, 8), z = rnd(-6, 6);
+      positions.set([x, y, z, x, y, z], i * 6);
+      vels[i] = rnd(6, 14);
     }
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 
-    const mat = new THREE.PointsMaterial({
+    const mat = new THREE.LineBasicMaterial({
       color: 0x88ccff,
-      size: 0.035,
       transparent: true,
       opacity: 0.7,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
 
-    this.droplets = new THREE.Points(geo, mat);
+    this.droplets = new THREE.LineSegments(geo, mat);
     this.group.add(this.droplets);
 
-    this._dPos  = positions;
-    this._dVels = vels;
+    this._dPos   = positions;
+    this._dVels  = vels;
     this._dCount = COUNT;
-    this._dMat = mat;
+    this._dMat   = mat;
   }
 
   _buildSpray() {
@@ -689,6 +705,41 @@ export class RainEffect {
     this._sprayLife  = new Float32Array(COUNT).fill(0).map(() => rnd(0, 1));
   }
 
+  _buildRoosterTails() {
+    const COUNT = 300; // 150 per rear wheel
+    const positions = new Float32Array(COUNT * 3);
+    const vels      = new Float32Array(COUNT * 3);
+
+    for (let i = 0; i < COUNT; i++) {
+      const side = i < COUNT / 2 ? -1 : 1;
+      positions[i * 3]     = side * 0.75 + rnd(-0.1, 0.1);
+      positions[i * 3 + 1] = rnd(0, 0.5);
+      positions[i * 3 + 2] = 1.6 + rnd(-0.1, 0.1);
+      vels[i * 3]     = side * rnd(0.5, 2);   // lateral fan
+      vels[i * 3 + 1] = rnd(0, 4);            // upward
+      vels[i * 3 + 2] = rnd(2, 5);            // rearward
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+    const mat = new THREE.PointsMaterial({
+      color: 0xaaddff,
+      size: 0.04,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+
+    this._roosterPoints = new THREE.Points(geo, mat);
+    this.group.add(this._roosterPoints);
+    this._roosterPos   = positions;
+    this._roosterVels  = vels;
+    this._roosterCount = COUNT;
+    this._roosterMat   = mat;
+  }
+
   _buildWetGround() {
     const geo = new THREE.PlaneGeometry(3.0, 7.0);
     const mat = new THREE.MeshStandardMaterial({
@@ -719,23 +770,31 @@ export class RainEffect {
     const speedFactor = Math.min(this._speed / 350, 1);
     const windTilt = speedFactor * 1.5;
 
+    // Change 5: streak rendering — update tail position then compute head
     const dp = this._dPos;
+    const streakLen = 0.04 + speedFactor * 0.10;
     for (let i = 0; i < this._dCount; i++) {
-      dp[i * 3 + 1] -= dt * this._dVels[i];
-      dp[i * 3 + 2] += dt * windTilt;
-      if (dp[i * 3 + 1] < -0.35) {
-        dp[i * 3 + 1] = 8;
-        dp[i * 3]     = rnd(-5, 5);
-        dp[i * 3 + 2] = rnd(-6, 6);
+      dp[i * 6 + 1] -= dt * this._dVels[i];
+      dp[i * 6 + 2] += dt * windTilt;
+      if (dp[i * 6 + 1] < -0.35) {
+        dp[i * 6]     = rnd(-5, 5);
+        dp[i * 6 + 1] = 8;
+        dp[i * 6 + 2] = rnd(-6, 6);
       }
+      // Head = tail + streak offset
+      dp[i * 6 + 3] = dp[i * 6];
+      dp[i * 6 + 4] = dp[i * 6 + 1] + streakLen;
+      dp[i * 6 + 5] = dp[i * 6 + 2] + windTilt * 0.15;
     }
     this.droplets.geometry.attributes.position.needsUpdate = true;
 
+    // Change 4: proper gravity accumulation (9.8 m/s²) for spray
     const sp = this._sPos, sv = this._sVels;
     for (let i = 0; i < this._sCount; i++) {
       this._sprayLife[i] += dt * 2.0;
+      sv[i * 3 + 1] -= 9.8 * dt;            // accumulate gravity into vy
       sp[i * 3]     += sv[i * 3]     * dt;
-      sp[i * 3 + 1] += sv[i * 3 + 1] * dt - 4.9 * dt * dt;
+      sp[i * 3 + 1] += sv[i * 3 + 1] * dt;
       sp[i * 3 + 2] += sv[i * 3 + 2] * dt * (1 + speedFactor);
 
       if (this._sprayLife[i] > 1 || sp[i * 3 + 1] < -0.3) {
@@ -748,6 +807,37 @@ export class RainEffect {
     this._sMat.size    = 0.04 + 0.07 * speedFactor;
 
     this._wetMat.opacity = 0.3 + 0.4 * speedFactor;
+
+    this._updateRoosterTails(dt, speedFactor);
+  }
+
+  _updateRoosterTails(dt, speedFactor) {
+    if (this._speed <= 20) {
+      this._roosterMat.opacity = 0;
+      return;
+    }
+    const rp = this._roosterPos;
+    const rv = this._roosterVels;
+
+    for (let i = 0; i < this._roosterCount; i++) {
+      rv[i * 3 + 1] -= 9.8 * dt;         // gravity
+      rp[i * 3]     += rv[i * 3]     * dt;
+      rp[i * 3 + 1] += rv[i * 3 + 1] * dt;
+      rp[i * 3 + 2] += rv[i * 3 + 2] * dt;
+
+      if (rp[i * 3 + 1] < -0.1 || rp[i * 3 + 2] > 4.0) {
+        const side = i < this._roosterCount / 2 ? -1 : 1;
+        rp[i * 3]     = side * 0.75 + rnd(-0.1, 0.1);
+        rp[i * 3 + 1] = rnd(0, 0.2);
+        rp[i * 3 + 2] = 1.6 + rnd(-0.1, 0.1);
+        rv[i * 3]     = side * rnd(0.5, 2);
+        rv[i * 3 + 1] = rnd(1.0, 3.0);  // reset vy so gravity accumulation restarts
+        rv[i * 3 + 2] = rnd(2, 5);
+      }
+    }
+
+    this._roosterPoints.geometry.attributes.position.needsUpdate = true;
+    this._roosterMat.opacity = speedFactor * 0.75;
   }
 
   dispose() {

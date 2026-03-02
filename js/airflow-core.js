@@ -103,23 +103,31 @@ export function cpToColor(cp) {
  * @param {number} stepSize - Euler step size (ds)
  * @returns {Array<{xi: number, eta: number, vxi: number, veta: number}>}
  */
-export function traceStreamlinePath(seedXi, seedEta, steps, stepSize) {
+export function traceStreamlinePath(seedXi, seedEta, steps = 200, stepSize = 0.14) {
   const path = [];
-  let xi  = seedXi;
-  let eta = seedEta;
+  let xi = seedXi, eta = seedEta;
+
+  function normalizedDir(x, e) {
+    const { vxi, veta } = topViewVelocity(x, e);
+    const spd = Math.sqrt(vxi * vxi + veta * veta);
+    if (spd < 1e-6) return { dxi: 0, deta: 0, vxi, veta, spd: 0 };
+    return { dxi: vxi / spd, deta: veta / spd, vxi, veta, spd };
+  }
 
   for (let i = 0; i < steps; i++) {
-    const { vxi, veta } = topViewVelocity(xi, eta);
-    path.push({ xi, eta, vxi, veta });
+    const k1 = normalizedDir(xi, eta);
+    path.push({ xi, eta, vxi: k1.vxi, veta: k1.veta });
+    if (k1.spd < 1e-6) break;
 
-    // Normalise step direction by speed to keep step length consistent
-    const speed = Math.sqrt(vxi * vxi + veta * veta);
-    if (speed < 1e-6) break;
+    const k2 = normalizedDir(xi + 0.5 * stepSize * k1.dxi, eta + 0.5 * stepSize * k1.deta);
+    if (k2.spd < 1e-6) break;
+    const k3 = normalizedDir(xi + 0.5 * stepSize * k2.dxi, eta + 0.5 * stepSize * k2.deta);
+    if (k3.spd < 1e-6) break;
+    const k4 = normalizedDir(xi +       stepSize * k3.dxi, eta +       stepSize * k3.deta);
 
-    xi  += (vxi  / speed) * stepSize;
-    eta += (veta / speed) * stepSize;
+    xi  += (stepSize / 6) * (k1.dxi  + 2 * k2.dxi  + 2 * k3.dxi  + k4.dxi);
+    eta += (stepSize / 6) * (k1.deta + 2 * k2.deta + 2 * k3.deta + k4.deta);
 
-    // Stop if entering body
     if (xi * xi + eta * eta <= 1) break;
   }
 

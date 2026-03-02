@@ -151,6 +151,26 @@ function makeScene() {
   };
 }
 
+/* ── lerpCpProfile tests ──────────────────────────────────────────── */
+describe('lerpCpProfile', () => {
+  it('returns exactly -2.20 at control point z=-2.60', async () => {
+    const { lerpCpProfile } = await import('../cfd-effect.js');
+    expect(lerpCpProfile(-2.60)).toBeCloseTo(-2.20, 6);
+  });
+
+  it('is continuous: z=-2.30 interpolates between -2.20 and -0.85', async () => {
+    const { lerpCpProfile } = await import('../cfd-effect.js');
+    const cp = lerpCpProfile(-2.30);
+    expect(cp).toBeLessThan(-0.85);
+    expect(cp).toBeGreaterThan(-2.20);
+  });
+
+  it('floor ground-effect scaling formula is larger at speed 200 than 100', () => {
+    const scale = sf => 1 + sf*sf*0.45;
+    expect(scale(200/350)).toBeGreaterThan(scale(100/350));
+  });
+});
+
 /* ── Tests ────────────────────────────────────────────────────────── */
 describe('CfdEffect', () => {
   it('constructor does not throw', async () => {

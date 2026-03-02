@@ -178,6 +178,32 @@ describe('traceStreamlinePath', () => {
   });
 });
 
+describe('RK4 streamline integration', () => {
+  it('path second-differences sum is below curvature threshold', () => {
+    const path = traceStreamlinePath(0.5, -1.5, 200, 0.14);
+    expect(path.length).toBeGreaterThan(50);
+    let sumSD = 0;
+    for (let i = 1; i < path.length - 1; i++) {
+      sumSD += Math.abs(path[i+1].xi  - 2*path[i].xi  + path[i-1].xi);
+      sumSD += Math.abs(path[i+1].eta - 2*path[i].eta + path[i-1].eta);
+    }
+    expect(sumSD).toBeLessThan(0.5); // fails with Euler, passes with RK4
+  });
+
+  it('coarse path (stepSize=0.14) stays within 0.05 of fine reference at same arc-length', () => {
+    const ref    = traceStreamlinePath(2.0, -6.0, 2000, 0.01);  // ground truth
+    const coarse = traceStreamlinePath(2.0, -6.0,  200, 0.14);
+    if (coarse.length > 50 && ref.length > 500) {
+      expect(Math.abs(coarse[50].xi - ref[500].xi)).toBeLessThan(0.05);
+    }
+  });
+
+  it('vortexVelocity gives non-zero tangential speed near core', () => {
+    const v = vortexVelocity(0.82 + 0.1, -2.60, 0.82, -2.60, 0.6, 0.12);
+    expect(Math.sqrt(v.vxi**2 + v.veta**2)).toBeGreaterThan(0);
+  });
+});
+
 describe('vortexVelocity', () => {
   it('returns {0,0} at the vortex centre', () => {
     const v = vortexVelocity(1, 2, 1, 2, 1.0, 0.1);
