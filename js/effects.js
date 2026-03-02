@@ -12,15 +12,6 @@ import {
 /* ── Utility ───────────────────────────────────────────────────── */
 function rnd(min, max) { return min + Math.random() * (max - min); }
 
-// Bright aerodynamic palette: electric blue (suction) → white (freestream) → warm yellow (stagnation)
-function streamColor(cp) {
-  const t = Math.max(0, Math.min(1, (cp + 3) / 4));
-  return {
-    r: 0.20 + 0.80 * t,   // 0.20 (blue) → 1.00 (warm white)
-    g: 0.70 + 0.30 * t,   // 0.70 (cyan) → 1.00
-    b: 1.00 - 0.55 * t,   // 1.00 (blue) → 0.45 (warm)
-  };
-}
 
 /* ════════════════════════════════════════════════════════════════ */
 /*  AIRFLOW EFFECT — potential-flow based, 3-D corrected            */
@@ -55,6 +46,8 @@ const CAR_AERO = {
       { color:0x00ddff, r:0.80, intensity:0.90, pos:[0,-0.05, 0.00] },
       { color:0xff4400, r:0.30, intensity:0.70, pos:[ 0.85, 0.04,-1.60] },
       { color:0xff4400, r:0.30, intensity:0.70, pos:[-0.85, 0.04,-1.60] },
+      { color:0x0066ff, r:0.30, intensity:0.85, pos:[0, 0.10,-2.72] },
+      { color:0xff6600, r:0.28, intensity:0.75, pos:[0, 0.52,-0.45] },
     ],
     vortexDefs: [
       {wx:-0.82,wy:0.02,wz:-2.60,sign: 1, gamma:0.6, rc:0.12},
@@ -85,6 +78,8 @@ const CAR_AERO = {
       { color:0x00ddff, r:0.65, intensity:0.65, pos:[0,-0.04, 0.00] },
       { color:0xff4400, r:0.26, intensity:0.55, pos:[ 0.76, 0.04,-1.45] },
       { color:0xff4400, r:0.26, intensity:0.55, pos:[-0.76, 0.04,-1.45] },
+      { color:0x0066ff, r:0.30, intensity:0.85, pos:[0, 0.10,-2.48] },
+      { color:0xff6600, r:0.28, intensity:0.75, pos:[0, 0.46,-0.42] },
     ],
     vortexDefs: [
       {wx:-0.77,wy:0.02,wz:-2.36,sign: 1, gamma:0.5, rc:0.10},
@@ -109,6 +104,8 @@ const CAR_AERO = {
       { color:0x2266ff, r:0.35, intensity:0.48, pos:[0, 0.02,-2.12] },
       { color:0x2266ff, r:0.42, intensity:0.55, pos:[0, 0.65, 1.55] },
       { color:0x00ddff, r:0.45, intensity:0.35, pos:[0,-0.03, 0.00] },
+      { color:0x0066ff, r:0.30, intensity:0.85, pos:[0, 0.08,-2.24] },
+      { color:0xff6600, r:0.28, intensity:0.75, pos:[0, 0.40,-0.38] },
     ],
     vortexDefs: [
       {wx:-0.75,wy:0.65,wz: 1.55,sign:-1, gamma:0.5, rc:0.10},
@@ -133,6 +130,8 @@ const CAR_AERO = {
       { color:0x2266ff, r:0.50, intensity:0.65, pos:[ 0.00, 0.60, 1.80] },
       { color:0x4488ff, r:0.50, intensity:0.55, pos:[ 0.85, 0.28, 0.00] },
       { color:0x4488ff, r:0.50, intensity:0.55, pos:[-0.85, 0.28, 0.00] },
+      { color:0x0066ff, r:0.30, intensity:0.85, pos:[0, 0.10,-2.32] },
+      { color:0xff6600, r:0.28, intensity:0.75, pos:[0, 0.68,-0.50] },
     ],
     vortexDefs: [
       {wx:-0.86,wy:0.72,wz: 1.80,sign:-1, gamma:0.8, rc:0.14},
@@ -290,7 +289,7 @@ export class AirflowEffect {
       for (let i = 0; i < vCount; i++) {
         const segIdx = Math.floor(i / (RAD_SEG + 1));
         const cp     = cpSamples[Math.min(segIdx, cpSamples.length - 1)];
-        const c      = streamColor(cp);
+        const c      = cpToColor(cp);
         cols[i * 3]     = c.r;
         cols[i * 3 + 1] = c.g;
         cols[i * 3 + 2] = c.b;
@@ -536,7 +535,7 @@ export class AirflowEffect {
       }
 
       const cp = pressureCoeff(vxi, veta);
-      const c  = streamColor(cp);
+      const c  = cpToColor(cp);
       sCol[i * 3]     = c.r;
       sCol[i * 3 + 1] = c.g;
       sCol[i * 3 + 2] = c.b;
