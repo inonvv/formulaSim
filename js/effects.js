@@ -752,7 +752,6 @@ export class RainEffect {
     const plane = new THREE.Mesh(geo, mat);
     plane.rotation.x = -Math.PI / 2;
     plane.position.y = -0.33;
-    plane.receiveShadow = true;
     this.group.add(plane);
     this._wetMat = mat;
   }
@@ -806,7 +805,7 @@ export class RainEffect {
     this._sMat.opacity = speedFactor * 0.65;
     this._sMat.size    = 0.04 + 0.07 * speedFactor;
 
-    this._wetMat.opacity = 0.3 + 0.4 * speedFactor;
+    this._wetMat.opacity = speedFactor * 0.55;
 
     this._updateRoosterTails(dt, speedFactor);
   }
