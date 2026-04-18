@@ -15,6 +15,21 @@
  */
 
 import * as THREE from 'three';
+import { CAR_MANIFEST } from './car-manifest.js';
+import { loadCarFromManifest } from './car-loader.js';
+
+/* ── Feature flag — flip per-car once GLBs are aligned ── */
+export const USE_IMPORTED_MODELS = { F1: true, F2: false, F3: false, GT: true };
+
+/* ── Livery clone-and-tint helper ─────────────────────────────────── */
+function applyLivery(meshes, color) {
+  const c = new THREE.Color(color);
+  meshes.forEach(m => {
+    if (!m.material) return;
+    m.material = m.material.clone();
+    if (m.material.color) m.material.color.copy(c);
+  });
+}
 
 /* ── Shared material helpers ──────────────────────────────────── */
 
@@ -28,10 +43,10 @@ function makeBodyMat(color) {
   const sheenColor = new THREE.Color(color).offsetHSL(0, 0.15, 0.08);
   return new THREE.MeshPhysicalMaterial({
     color, roughness: 0.10, metalness: 0.90,
-    clearcoat: 1.0, clearcoatRoughness: 0.01,
-    envMapIntensity: 3.0,
+    clearcoat: 0.55, clearcoatRoughness: 0.15,
+    envMapIntensity: 1.4,
     sheen: 0.4, sheenRoughness: 0.35, sheenColor,
-    iridescence: 0.2, iridescenceIOR: 1.6,
+    iridescence: 0.08, iridescenceIOR: 1.6,
   });
 }
 
@@ -320,8 +335,8 @@ function buildLivery(grp, color, type) {
     const matS = makeBodyMat(0xcccccc);
     const numMat = new THREE.MeshPhysicalMaterial({
       color: 0xffffff, roughness: 0.05, metalness: 0.0,
-      emissive: new THREE.Color(0xffffff), emissiveIntensity: 0.5,
-      clearcoat: 1.0, clearcoatRoughness: 0.01,
+      emissive: new THREE.Color(0xffffff), emissiveIntensity: 0,
+      clearcoat: 0.55, clearcoatRoughness: 0.15,
     });
     grp.add(mesh(rBox(0.10, T, 0.80, 0.004), matW, 0, 0.175, -1.72));
     for (const s of [-1, 1])
@@ -353,13 +368,100 @@ function buildLivery(grp, color, type) {
   }
 }
 
-export function buildCar(type) {
+/* ── F1 hybrid: GLB body + procedural wheels + livery ─────────────── */
+export async function buildF1Hybrid({ color }) {
+  const grp = new THREE.Group();
+  grp.name = 'car';
+
+  const loaded = await loadCarFromManifest(CAR_MANIFEST.f1);
+  if (!loaded) {
+    console.warn('[buildF1Hybrid] GLB load failed — using procedural F1');
+    return buildF1Procedural({ color });
+  }
+
+  grp.add(loaded.scene);
+  applyLivery(loaded.liveryMeshes, color);
+
+  if (loaded.rearWing) {
+    const parent = loaded.rearWing.parent;
+    if (parent) {
+      const wingGrp = new THREE.Group();
+      wingGrp.name = 'rearWing';
+      parent.remove(loaded.rearWing);
+      wingGrp.add(loaded.rearWing);
+      parent.add(wingGrp);
+    } else {
+      loaded.rearWing.name = 'rearWing';
+    }
+  }
+
+  const matTyre = makeMat(0x0d0d0d, 0.92, 0.04);
+  const matHub  = makeMat(0xe0e0e0, 0.08, 1.00);
+  const wR = 0.345, wW = 0.340;
+  const wPos = {
+    wFL: [-0.82, -0.04, -1.50],
+    wFR: [ 0.82, -0.04, -1.50],
+    wRL: [-0.80, -0.04,  1.60],
+    wRR: [ 0.80, -0.04,  1.60],
+  };
+  Object.entries(wPos).forEach(([n, [x, y, z]]) => {
+    const w = wheel(wR, wW, matHub, matTyre, n);
+    w.name = n; w.position.set(x, y, z); grp.add(w);
+  });
+
+  const bboxF1 = new THREE.Box3().setFromObject(grp);
+  grp.position.y -= (bboxF1.min.y + 0.34);
+  return grp;
+}
+
+/* ── GT hybrid: GLB body + procedural wheels (no wing-flip) ───────── */
+export async function buildGTHybrid({ color }) {
+  const grp = new THREE.Group();
+  grp.name = 'car';
+
+  const loaded = await loadCarFromManifest(CAR_MANIFEST.gt);
+  if (!loaded) {
+    console.warn('[buildGTHybrid] GLB load failed — using procedural GT');
+    return buildGTProcedural({ color });
+  }
+
+  grp.add(loaded.scene);
+  applyLivery(loaded.liveryMeshes, color);
+  // GT: rearWing is null in manifest — no wing wrapping needed
+
+  const matTyre = makeMat(0x0d0d0d, 0.92, 0.04);
+  const matHub  = makeMat(0xe0e0e0, 0.08, 1.00);
+  const wR = 0.338, wW = 0.260;
+  const wPos = {
+    wFL: [-0.86, -0.05, -1.38],
+    wFR: [ 0.86, -0.05, -1.38],
+    wRL: [-0.86, -0.05,  1.42],
+    wRR: [ 0.86, -0.05,  1.42],
+  };
+  Object.entries(wPos).forEach(([n, [x, y, z]]) => {
+    const w = wheel(wR, wW, matHub, matTyre, n);
+    w.name = n; w.position.set(x, y, z); grp.add(w);
+  });
+
+  const bboxGT = new THREE.Box3().setFromObject(grp);
+  grp.position.y -= (bboxGT.min.y + 0.34);
+  return grp;
+}
+
+export async function buildCar(type) {
   const meta = CAR_META[type] || CAR_META.F1;
+  const flag = USE_IMPORTED_MODELS;
   switch (type) {
-    case 'F2': return buildF2(meta);
-    case 'F3': return buildF3(meta);
-    case 'GT': return buildGT(meta);
-    default:   return buildF1(meta);
+    case 'F2': return buildF2Procedural(meta);
+    case 'F3': return buildF3Procedural(meta);
+    case 'GT':
+      return (flag === true || flag?.GT === true)
+        ? buildGTHybrid(meta)
+        : buildGTProcedural(meta);
+    default:
+      return (flag === true || flag?.F1 === true)
+        ? buildF1Hybrid(meta)
+        : buildF1Procedural(meta);
   }
 }
 
@@ -370,7 +472,7 @@ export const WHEEL_NAMES = ['wFL', 'wFR', 'wRL', 'wRR'];
    F1  —  2022+ ground-effect open-wheel single-seater
    Wheelbase ~3.10 u  |  Track ~1.60 u  |  Wheel radius 0.345 u
 ════════════════════════════════════════════════════════════════ */
-function buildF1({ color }) {
+function buildF1Procedural({ color }) {
   const grp = new THREE.Group();
   grp.name = 'car';
 
@@ -621,7 +723,7 @@ function buildF1({ color }) {
   });
 
   buildLivery(grp, color, 'F1');
-  grp.position.y = wR + 0.34;
+  grp.position.y = -0.34 + wR - (-0.04);
   return grp;
 }
 
@@ -629,7 +731,7 @@ function buildF1({ color }) {
    F2  —  Dallara F2-2018 style
    Wheelbase ~2.85 u  |  Track ~1.50 u  |  Wheel radius 0.328 u
 ════════════════════════════════════════════════════════════════ */
-function buildF2({ color }) {
+function buildF2Procedural({ color }) {
   const grp = new THREE.Group();
   grp.name = 'car';
 
@@ -821,7 +923,7 @@ function buildF2({ color }) {
   });
 
   buildLivery(grp, color, 'F2');
-  grp.position.y = wR + 0.34;
+  grp.position.y = -0.34 + wR - (-0.04);
   return grp;
 }
 
@@ -829,7 +931,7 @@ function buildF2({ color }) {
    F3  —  Dallara F3-2019 style
    Wheelbase ~2.60 u  |  Track ~1.36 u  |  Wheel radius 0.300 u
 ════════════════════════════════════════════════════════════════ */
-function buildF3({ color }) {
+function buildF3Procedural({ color }) {
   const grp = new THREE.Group();
   grp.name = 'car';
 
@@ -985,7 +1087,7 @@ function buildF3({ color }) {
   });
 
   buildLivery(grp, color, 'F3');
-  grp.position.y = wR + 0.34;
+  grp.position.y = -0.34 + wR - (-0.04);
   return grp;
 }
 
@@ -996,7 +1098,7 @@ function buildF3({ color }) {
    Fastback roofline built from stacked angled slabs:
      Hood → Windshield (steep) → Roof flat → Rear screen (steep) → Trunk
 ════════════════════════════════════════════════════════════════ */
-function buildGT({ color }) {
+function buildGTProcedural({ color }) {
   const grp = new THREE.Group();
   grp.name = 'car';
 
@@ -1196,6 +1298,6 @@ function buildGT({ color }) {
   });
 
   buildLivery(grp, color, 'GT');
-  grp.position.y = wR + 0.34;
+  grp.position.y = -0.34 + wR - (-0.05);
   return grp;
 }

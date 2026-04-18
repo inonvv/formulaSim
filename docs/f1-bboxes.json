@@ -1,0 +1,462 @@
+[
+  {
+    "nodeIdx": 0,
+    "nodeName": "Object_4",
+    "meshName": "Object_0",
+    "primIdx": 0,
+    "matIdx": 0,
+    "matName": "front_wheel_windlet",
+    "bboxMin": [
+      -0.738,
+      -0.4122,
+      1.2752
+    ],
+    "bboxMax": [
+      0.738,
+      0.2446,
+      1.7982
+    ],
+    "center": [
+      0,
+      -0.0838,
+      1.5367
+    ]
+  },
+  {
+    "nodeIdx": 1,
+    "nodeName": "Object_6",
+    "meshName": "Object_1",
+    "primIdx": 0,
+    "matIdx": 1,
+    "matName": "suspensions",
+    "bboxMin": [
+      -0.696,
+      -0.4579,
+      -2.3961
+    ],
+    "bboxMax": [
+      0.6774,
+      0.0864,
+      1.6773
+    ],
+    "center": [
+      -0.0093,
+      -0.1858,
+      -0.3594
+    ]
+  },
+  {
+    "nodeIdx": 2,
+    "nodeName": "Object_9",
+    "meshName": "Object_3",
+    "primIdx": 0,
+    "matIdx": 2,
+    "matName": "rear_wing",
+    "bboxMin": [
+      -0.5743,
+      -0.184,
+      -2.7742
+    ],
+    "bboxMax": [
+      0.5743,
+      0.4541,
+      -2.0503
+    ],
+    "center": [
+      0,
+      0.135,
+      -2.4122
+    ]
+  },
+  {
+    "nodeIdx": 3,
+    "nodeName": "Object_10",
+    "meshName": "Object_4",
+    "primIdx": 0,
+    "matIdx": 3,
+    "matName": "drs_puller",
+    "bboxMin": [
+      -0.0067,
+      0.3245,
+      -2.5731
+    ],
+    "bboxMax": [
+      0.0067,
+      0.4112,
+      -2.4369
+    ],
+    "center": [
+      0,
+      0.3679,
+      -2.505
+    ]
+  },
+  {
+    "nodeIdx": 4,
+    "nodeName": "Object_12",
+    "meshName": "Object_5",
+    "primIdx": 0,
+    "matIdx": 4,
+    "matName": "front_wing",
+    "bboxMin": [
+      -1.0494,
+      -0.4163,
+      1.9573
+    ],
+    "bboxMax": [
+      1.0494,
+      -0.0524,
+      2.6364
+    ],
+    "center": [
+      0,
+      -0.2343,
+      2.2968
+    ]
+  },
+  {
+    "nodeIdx": 5,
+    "nodeName": "Object_13",
+    "meshName": "Object_6",
+    "primIdx": 0,
+    "matIdx": 5,
+    "matName": "front_wing_c",
+    "bboxMin": [
+      -0.9945,
+      -0.403,
+      1.9579
+    ],
+    "bboxMax": [
+      1.0059,
+      -0.0945,
+      2.499
+    ],
+    "center": [
+      0.0057,
+      -0.2487,
+      2.2284
+    ]
+  },
+  {
+    "nodeIdx": 6,
+    "nodeName": "Object_15",
+    "meshName": "Object_7",
+    "primIdx": 0,
+    "matIdx": 6,
+    "matName": "exthaust",
+    "bboxMin": [
+      -0.0787,
+      -0.1444,
+      -2.679
+    ],
+    "bboxMax": [
+      0.0787,
+      0.0259,
+      -1.9547
+    ],
+    "center": [
+      0,
+      -0.0593,
+      -2.3168
+    ]
+  },
+  {
+    "nodeIdx": 7,
+    "nodeName": "Object_17",
+    "meshName": "Object_8",
+    "primIdx": 0,
+    "matIdx": 7,
+    "matName": "headrest",
+    "bboxMin": [
+      -0.2804,
+      0.0495,
+      -0.3434
+    ],
+    "bboxMax": [
+      0.2804,
+      0.2645,
+      0.3471
+    ],
+    "center": [
+      0,
+      0.157,
+      0.0019
+    ]
+  },
+  {
+    "nodeIdx": 8,
+    "nodeName": "Object_19",
+    "meshName": "Object_9",
+    "primIdx": 0,
+    "matIdx": 8,
+    "matName": "main_body",
+    "bboxMin": [
+      -0.8125,
+      -0.4674,
+      -2.8072
+    ],
+    "bboxMax": [
+      0.8125,
+      0.4958,
+      2.5487
+    ],
+    "center": [
+      0,
+      0.0142,
+      -0.1292
+    ]
+  },
+  {
+    "nodeIdx": 9,
+    "nodeName": "Object_20",
+    "meshName": "Object_10",
+    "primIdx": 0,
+    "matIdx": 9,
+    "matName": "mirror",
+    "bboxMin": [
+      -0.6771,
+      0.1307,
+      0.2582
+    ],
+    "bboxMax": [
+      0.6772,
+      0.2205,
+      0.4038
+    ],
+    "center": [
+      0.0001,
+      0.1756,
+      0.331
+    ]
+  },
+  {
+    "nodeIdx": 10,
+    "nodeName": "Object_21",
+    "meshName": "Object_11",
+    "primIdx": 0,
+    "matIdx": 10,
+    "matName": "cam_tbone_misc",
+    "bboxMin": [
+      -0.6289,
+      -0.107,
+      -0.7031
+    ],
+    "bboxMax": [
+      0.6289,
+      0.5798,
+      1.7298
+    ],
+    "center": [
+      0,
+      0.2364,
+      0.5134
+    ]
+  },
+  {
+    "nodeIdx": 11,
+    "nodeName": "Object_22",
+    "meshName": "Object_12",
+    "primIdx": 0,
+    "matIdx": 11,
+    "matName": "halo",
+    "bboxMin": [
+      -0.3796,
+      0.1484,
+      -0.4658
+    ],
+    "bboxMax": [
+      0.3796,
+      0.373,
+      0.6491
+    ],
+    "center": [
+      0,
+      0.2607,
+      0.0916
+    ]
+  },
+  {
+    "nodeIdx": 12,
+    "nodeName": "Object_24",
+    "meshName": "Object_13",
+    "primIdx": 0,
+    "matIdx": 12,
+    "matName": "wheel_screw.001",
+    "bboxMin": [
+      -0.9409,
+      -0.2844,
+      -2.1357
+    ],
+    "bboxMax": [
+      0.9409,
+      -0.0793,
+      1.4999
+    ],
+    "center": [
+      0,
+      -0.1819,
+      -0.3179
+    ]
+  },
+  {
+    "nodeIdx": 13,
+    "nodeName": "Object_25",
+    "meshName": "Object_14",
+    "primIdx": 0,
+    "matIdx": 13,
+    "matName": "wheel_screw",
+    "bboxMin": [
+      -0.9484,
+      -0.2983,
+      -2.1365
+    ],
+    "bboxMax": [
+      0.9481,
+      -0.0664,
+      1.5009
+    ],
+    "center": [
+      -0.0001,
+      -0.1823,
+      -0.3178
+    ]
+  },
+  {
+    "nodeIdx": 14,
+    "nodeName": "Object_26",
+    "meshName": "Object_15",
+    "primIdx": 0,
+    "matIdx": 14,
+    "matName": "rear_tire",
+    "bboxMin": [
+      -1.0303,
+      -0.6232,
+      -2.462
+    ],
+    "bboxMax": [
+      1.0303,
+      0.257,
+      -1.742
+    ],
+    "center": [
+      0,
+      -0.1831,
+      -2.102
+    ]
+  },
+  {
+    "nodeIdx": 15,
+    "nodeName": "Object_27",
+    "meshName": "Object_16",
+    "primIdx": 0,
+    "matIdx": 15,
+    "matName": "wheel_rim",
+    "bboxMin": [
+      -1.0153,
+      -0.4984,
+      -2.3306
+    ],
+    "bboxMax": [
+      1.0152,
+      0.1356,
+      1.695
+    ],
+    "center": [
+      -0.0001,
+      -0.1814,
+      -0.3178
+    ]
+  },
+  {
+    "nodeIdx": 16,
+    "nodeName": "Object_28",
+    "meshName": "Object_17",
+    "primIdx": 0,
+    "matIdx": 16,
+    "matName": "rear_wheel_cover",
+    "bboxMin": [
+      -1.0191,
+      -0.4765,
+      -2.3106
+    ],
+    "bboxMax": [
+      1.0192,
+      0.1105,
+      -1.8935
+    ],
+    "center": [
+      0,
+      -0.183,
+      -2.102
+    ]
+  },
+  {
+    "nodeIdx": 17,
+    "nodeName": "Object_29",
+    "meshName": "Object_18",
+    "primIdx": 0,
+    "matIdx": 17,
+    "matName": "wheel_nut",
+    "bboxMin": [
+      -0.9163,
+      -0.3179,
+      -2.1582
+    ],
+    "bboxMax": [
+      0.9163,
+      -0.0473,
+      1.5226
+    ],
+    "center": [
+      0,
+      -0.1826,
+      -0.3178
+    ]
+  },
+  {
+    "nodeIdx": 18,
+    "nodeName": "Object_33",
+    "meshName": "Object_21",
+    "primIdx": 0,
+    "matIdx": 18,
+    "matName": "front_tire",
+    "bboxMin": [
+      -0.9807,
+      -0.6187,
+      1.1064
+    ],
+    "bboxMax": [
+      0.9572,
+      0.2546,
+      1.8264
+    ],
+    "center": [
+      -0.0117,
+      -0.182,
+      1.4664
+    ]
+  },
+  {
+    "nodeIdx": 19,
+    "nodeName": "Object_34",
+    "meshName": "Object_22",
+    "primIdx": 0,
+    "matIdx": 19,
+    "matName": "front_wheel_cover",
+    "bboxMin": [
+      -0.9606,
+      -0.4668,
+      1.2579
+    ],
+    "bboxMax": [
+      0.9477,
+      0.1092,
+      1.675
+    ],
+    "center": [
+      -0.0064,
+      -0.1788,
+      1.4664
+    ]
+  }
+]

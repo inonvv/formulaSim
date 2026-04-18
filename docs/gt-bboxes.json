@@ -1,0 +1,554 @@
+[
+  {
+    "nodeIdx": 0,
+    "nodeName": "TwiXeR_992_gt3rs_carbon_Wing_TwiXeR_992_plastic_mgl_060606FF.001_0",
+    "meshName": "TwiXeR_992_gt3rs_carbon_Wing_TwiXeR_992_plastic_mgl_060606FF.001_0",
+    "primIdx": 0,
+    "matIdx": 21,
+    "matName": "PaletteMaterial001",
+    "bboxMin": [
+      -1.0147,
+      -0.0836,
+      -2.3609
+    ],
+    "bboxMax": [
+      1.0147,
+      1.3203,
+      2.2107
+    ],
+    "center": [
+      0,
+      0.6184,
+      -0.0751
+    ]
+  },
+  {
+    "nodeIdx": 1,
+    "nodeName": "TwiXeR_992_gt3rs_carbon_Wing_TwiXeR_992_carbon_roof.001_0",
+    "meshName": "TwiXeR_992_gt3rs_carbon_Wing_TwiXeR_992_carbon_roof.001_0",
+    "primIdx": 0,
+    "matIdx": 0,
+    "matName": "TwiXeR_992_carbon_roof.001",
+    "bboxMin": [
+      -0.8373,
+      0.5376,
+      -2.2867
+    ],
+    "bboxMax": [
+      0.8373,
+      1.29,
+      2.0862
+    ],
+    "center": [
+      0,
+      0.9138,
+      -0.1003
+    ]
+  },
+  {
+    "nodeIdx": 2,
+    "nodeName": "TwiXeR_992_gt3rs_carbon_hood_TwiXeR_992_metal_radiator.002_0",
+    "meshName": "TwiXeR_992_gt3rs_carbon_hood_TwiXeR_992_metal_radiator.002_0",
+    "primIdx": 0,
+    "matIdx": 1,
+    "matName": "TwiXeR_992_metal_radiator.002",
+    "bboxMin": [
+      -0.9212,
+      0.1685,
+      -2.0401
+    ],
+    "bboxMax": [
+      0.9212,
+      0.9573,
+      2.1296
+    ],
+    "center": [
+      0,
+      0.5629,
+      0.0448
+    ]
+  },
+  {
+    "nodeIdx": 3,
+    "nodeName": "TwiXeR_992_gt3rs_carbon_hood_TwiXeR_992_carPaint_secondary|hoodbadge_a.001_0",
+    "meshName": "TwiXeR_992_gt3rs_carbon_hood_TwiXeR_992_carPaint_secondary|hoodbadge_a.001_0",
+    "primIdx": 0,
+    "matIdx": 2,
+    "matName": "TwiXeR_992_headlight_1.001_0",
+    "bboxMin": [
+      -0.0258,
+      0.5752,
+      1.964
+    ],
+    "bboxMax": [
+      0.0258,
+      0.6074,
+      2.0243
+    ],
+    "center": [
+      0,
+      0.5913,
+      1.9941
+    ]
+  },
+  {
+    "nodeIdx": 4,
+    "nodeName": "TwiXeR_992_gt3rs_sideskirts_L_TwiXeR_992_glass.002_0",
+    "meshName": "TwiXeR_992_gt3rs_sideskirts_L_TwiXeR_992_glass.002_0",
+    "primIdx": 0,
+    "matIdx": 22,
+    "matName": "PaletteMaterial002",
+    "bboxMin": [
+      -0.9158,
+      0.3889,
+      -2.3298
+    ],
+    "bboxMax": [
+      0.9158,
+      1.218,
+      2.0856
+    ],
+    "center": [
+      0,
+      0.8034,
+      -0.1221
+    ]
+  },
+  {
+    "nodeIdx": 5,
+    "nodeName": "TwiXeR_992_gt3rs_sideskirts_L_TwiXeR_992_headlight.001_0",
+    "meshName": "TwiXeR_992_gt3rs_sideskirts_L_TwiXeR_992_headlight.001_0",
+    "primIdx": 0,
+    "matIdx": 3,
+    "matName": "TwiXeR_992_symbols.004",
+    "bboxMin": [
+      -0.9147,
+      0.2211,
+      -2.3478
+    ],
+    "bboxMax": [
+      0.9147,
+      1.1372,
+      0.949
+    ],
+    "center": [
+      0,
+      0.6792,
+      -0.6994
+    ]
+  },
+  {
+    "nodeIdx": 6,
+    "nodeName": "TwiXeR_992_gt3rs_door_L_TwiXeR_992_rubbertrim.004_0",
+    "meshName": "TwiXeR_992_gt3rs_door_L_TwiXeR_992_rubbertrim.004_0",
+    "primIdx": 0,
+    "matIdx": 4,
+    "matName": "TwiXeR_992_headlight_1.001_1",
+    "bboxMin": [
+      -0.9141,
+      0.21,
+      -2.1911
+    ],
+    "bboxMax": [
+      0.9141,
+      1.1968,
+      2.0851
+    ],
+    "center": [
+      0,
+      0.7034,
+      -0.053
+    ]
+  },
+  {
+    "nodeIdx": 7,
+    "nodeName": "TwiXeR_992_body_gt3rs_TwiXeR_992_plastic.002_0",
+    "meshName": "TwiXeR_992_body_gt3rs_TwiXeR_992_plastic.002_0",
+    "primIdx": 0,
+    "matIdx": 6,
+    "matName": "TwiXeR_992_symbols.004_0",
+    "bboxMin": [
+      -0.68,
+      0.4958,
+      -1.6537
+    ],
+    "bboxMax": [
+      0.68,
+      1.0186,
+      1.7318
+    ],
+    "center": [
+      0,
+      0.7572,
+      0.0391
+    ]
+  },
+  {
+    "nodeIdx": 8,
+    "nodeName": "TwiXeR_992_body_gt3rs_TwiXeR_992_ID10_chrome.001_0",
+    "meshName": "TwiXeR_992_body_gt3rs_TwiXeR_992_ID10_chrome.001_0",
+    "primIdx": 0,
+    "matIdx": 5,
+    "matName": "TwiXeR_992_symbols_1.003",
+    "bboxMin": [
+      -0.4829,
+      0.2088,
+      0.3465
+    ],
+    "bboxMax": [
+      0.4878,
+      0.2096,
+      0.4886
+    ],
+    "center": [
+      0.0025,
+      0.2092,
+      0.4176
+    ]
+  },
+  {
+    "nodeIdx": 9,
+    "nodeName": "TwiXeR_992_body_gt3rs_TwiXeR_992_undercarriage.001_0",
+    "meshName": "TwiXeR_992_body_gt3rs_TwiXeR_992_undercarriage.001_0",
+    "primIdx": 0,
+    "matIdx": 7,
+    "matName": "TwiXeR_992_symbols.004_1",
+    "bboxMin": [
+      -0.1028,
+      1.1353,
+      0.0865
+    ],
+    "bboxMax": [
+      0.1028,
+      1.1424,
+      0.1056
+    ],
+    "center": [
+      0,
+      1.1389,
+      0.0961
+    ]
+  },
+  {
+    "nodeIdx": 10,
+    "nodeName": "TwiXeR_992_body_gt3rs_TwiXeR_992_ID12_paint.001_0",
+    "meshName": "TwiXeR_992_body_gt3rs_TwiXeR_992_ID12_paint.001_0",
+    "primIdx": 0,
+    "matIdx": 8,
+    "matName": "TwiXeR_992_symbols.004_2",
+    "bboxMin": [
+      -0.5611,
+      0.2058,
+      0.1671
+    ],
+    "bboxMax": [
+      0.5618,
+      0.3736,
+      0.7738
+    ],
+    "center": [
+      0.0004,
+      0.2897,
+      0.4705
+    ]
+  },
+  {
+    "nodeIdx": 11,
+    "nodeName": "TwiXeR_992_body_gt3rs_TwiXeR_992_roof_alc.001_0",
+    "meshName": "TwiXeR_992_body_gt3rs_TwiXeR_992_roof_alc.001_0",
+    "primIdx": 0,
+    "matIdx": 9,
+    "matName": "TwiXeR_992_headlight_1.001_2",
+    "bboxMin": [
+      -0.6901,
+      0.5122,
+      -1.5773
+    ],
+    "bboxMax": [
+      0.6901,
+      1.2415,
+      0.6175
+    ],
+    "center": [
+      0,
+      0.8769,
+      -0.4799
+    ]
+  },
+  {
+    "nodeIdx": 12,
+    "nodeName": "TwiXeR_992_steer_3_TwiXeR_992_ID06_stitch_001_0",
+    "meshName": "TwiXeR_992_steer_3_TwiXeR_992_ID06_stitch_001_0",
+    "primIdx": 0,
+    "matIdx": 10,
+    "matName": "TwiXeR_992_ID06_stitch_001",
+    "bboxMin": [
+      0.3284,
+      0.7423,
+      0.1575
+    ],
+    "bboxMax": [
+      0.3594,
+      0.7812,
+      0.1727
+    ],
+    "center": [
+      0.3439,
+      0.7618,
+      0.1651
+    ]
+  },
+  {
+    "nodeIdx": 13,
+    "nodeName": "TwiXeR_992_steer_3_TwiXeR_992_carpet.002_0",
+    "meshName": "TwiXeR_992_steer_3_TwiXeR_992_carpet.002_0",
+    "primIdx": 0,
+    "matIdx": 11,
+    "matName": "TwiXeR_992_carpet.002",
+    "bboxMin": [
+      0.1636,
+      0.5931,
+      0.1024
+    ],
+    "bboxMax": [
+      0.5243,
+      0.9477,
+      0.269
+    ],
+    "center": [
+      0.3439,
+      0.7704,
+      0.1857
+    ]
+  },
+  {
+    "nodeIdx": 14,
+    "nodeName": "TwiXeR_992_steer_3_TwiXeR_992_symbols_6_0",
+    "meshName": "TwiXeR_992_steer_3_TwiXeR_992_symbols_6_0",
+    "primIdx": 0,
+    "matIdx": 12,
+    "matName": "TwiXeR_992_symbols_6",
+    "bboxMin": [
+      0.2222,
+      0.676,
+      0.1443
+    ],
+    "bboxMax": [
+      0.4652,
+      0.7856,
+      0.1939
+    ],
+    "center": [
+      0.3437,
+      0.7308,
+      0.1691
+    ]
+  },
+  {
+    "nodeIdx": 15,
+    "nodeName": "TwiXeR_992_body_chrome_end_TwiXeR_992_chrome.003_0",
+    "meshName": "TwiXeR_992_body_chrome_end_TwiXeR_992_chrome.003_0",
+    "primIdx": 0,
+    "matIdx": 13,
+    "matName": "TwiXeR_992_chrome.003",
+    "bboxMin": [
+      -0.7566,
+      0.7315,
+      -2.2154
+    ],
+    "bboxMax": [
+      0.7566,
+      1.1986,
+      0.5031
+    ],
+    "center": [
+      0,
+      0.9651,
+      -0.8561
+    ]
+  },
+  {
+    "nodeIdx": 16,
+    "nodeName": "TwiXeR_992_dash_9000_TwiXeR_992_ID03_stitch_001_111111FF.006_0",
+    "meshName": "TwiXeR_992_dash_9000_TwiXeR_992_ID03_stitch_001_111111FF.006_0",
+    "primIdx": 0,
+    "matIdx": 14,
+    "matName": "TwiXeR_992_ID03_stitch_001_111111FF.006",
+    "bboxMin": [
+      -0.7369,
+      0.3782,
+      -1.1522
+    ],
+    "bboxMax": [
+      0.7369,
+      1.1338,
+      0.5161
+    ],
+    "center": [
+      0,
+      0.756,
+      -0.318
+    ]
+  },
+  {
+    "nodeIdx": 17,
+    "nodeName": "TwiXeR_992_dash_9000_TwiXeR_992_plastic.004_0",
+    "meshName": "TwiXeR_992_dash_9000_TwiXeR_992_plastic.004_0",
+    "primIdx": 0,
+    "matIdx": 15,
+    "matName": "TwiXeR_992_plastic.004",
+    "bboxMin": [
+      -0.6781,
+      0.2778,
+      -0.5863
+    ],
+    "bboxMax": [
+      0.6788,
+      1.1281,
+      0.8145
+    ],
+    "center": [
+      0.0004,
+      0.703,
+      0.1141
+    ]
+  },
+  {
+    "nodeIdx": 18,
+    "nodeName": "TwiXeR_992_dash_9000_TwiXeR_992_seat_leather.004_0",
+    "meshName": "TwiXeR_992_dash_9000_TwiXeR_992_seat_leather.004_0",
+    "primIdx": 0,
+    "matIdx": 16,
+    "matName": "TwiXeR_992_seat_leather.004",
+    "bboxMin": [
+      -0.7388,
+      0.3446,
+      -1.1605
+    ],
+    "bboxMax": [
+      0.7388,
+      1.1398,
+      0.8009
+    ],
+    "center": [
+      0,
+      0.7422,
+      -0.1798
+    ]
+  },
+  {
+    "nodeIdx": 19,
+    "nodeName": "TwiXeR_992_dash_9000_TwiXeR_992_upper_leather.004_0",
+    "meshName": "TwiXeR_992_dash_9000_TwiXeR_992_upper_leather.004_0",
+    "primIdx": 0,
+    "matIdx": 17,
+    "matName": "TwiXeR_992_upper_leather.004",
+    "bboxMin": [
+      -0.7455,
+      0.7526,
+      -0.5296
+    ],
+    "bboxMax": [
+      0.7455,
+      0.9115,
+      0.5367
+    ],
+    "center": [
+      0,
+      0.8321,
+      0.0036
+    ]
+  },
+  {
+    "nodeIdx": 20,
+    "nodeName": "TwiXeR_992_dash_9000_TwiXeR_992_gauges_9000.001_0",
+    "meshName": "TwiXeR_992_dash_9000_TwiXeR_992_gauges_9000.001_0",
+    "primIdx": 0,
+    "matIdx": 18,
+    "matName": "TwiXeR_992_gauges_9000.001_0",
+    "bboxMin": [
+      0.2933,
+      0.7695,
+      0.361
+    ],
+    "bboxMax": [
+      0.3956,
+      0.8712,
+      0.3759
+    ],
+    "center": [
+      0.3444,
+      0.8204,
+      0.3685
+    ]
+  },
+  {
+    "nodeIdx": 21,
+    "nodeName": "TwiXeR_992_gauges_screen_TwiXeR_992_gauges_screen.001_0",
+    "meshName": "TwiXeR_992_gauges_screen_TwiXeR_992_gauges_screen.001_0",
+    "primIdx": 0,
+    "matIdx": 19,
+    "matName": "TwiXeR_992_gauges_screen.001",
+    "bboxMin": [
+      0.3337,
+      0.7904,
+      0.3662
+    ],
+    "bboxMax": [
+      0.358,
+      0.8048,
+      0.3675
+    ],
+    "center": [
+      0.3459,
+      0.7976,
+      0.3668
+    ]
+  },
+  {
+    "nodeIdx": 22,
+    "nodeName": "TwiXeR_992_headlight_L_led_TwiXeR_992_headlight_high.001_0",
+    "meshName": "TwiXeR_992_headlight_L_led_TwiXeR_992_headlight_high.001_0",
+    "primIdx": 0,
+    "matIdx": 23,
+    "matName": "PaletteMaterial003",
+    "bboxMin": [
+      -0.7378,
+      0.6513,
+      1.6267
+    ],
+    "bboxMax": [
+      0.7378,
+      0.7099,
+      1.6336
+    ],
+    "center": [
+      0,
+      0.6806,
+      1.6301
+    ]
+  },
+  {
+    "nodeIdx": 23,
+    "nodeName": "TwiXeR_992_seat_FL_TwiXeR_992_seat_leather_2.001_0",
+    "meshName": "TwiXeR_992_seat_FL_TwiXeR_992_seat_leather_2.001_0",
+    "primIdx": 0,
+    "matIdx": 20,
+    "matName": "TwiXeR_992_seat_leather_2.001",
+    "bboxMin": [
+      -0.5114,
+      0.3446,
+      -0.4953
+    ],
+    "bboxMax": [
+      0.5114,
+      0.8732,
+      0.1414
+    ],
+    "center": [
+      0,
+      0.6089,
+      -0.1769
+    ]
+  }
+]

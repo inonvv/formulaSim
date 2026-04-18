@@ -1,4 +1,12 @@
-import { describe, it, expect, vi, beforeAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+
+/* ── Mock car-loader (Phase 4+) — controlled per test ───────────── */
+let _loaderManifestResult = null;
+let _mockBboxMinY = -0.385;   // controlled per test for bbox-derived ground offset
+vi.mock('../car-loader.js', () => ({
+  loadCarModel:        async () => null,
+  loadCarFromManifest: async () => _loaderManifestResult,
+}));
 
 /* ── Mock three ────────────────────────────────────────────────── */
 vi.mock('three', () => {
@@ -94,6 +102,9 @@ vi.mock('three', () => {
   function Color(v) { this.r = 0; this.g = 0; this.b = 0; }
   Color.prototype.offsetHSL = function () { return this; };
 
+  function Box3() { this.min = { y: _mockBboxMinY }; this.max = {}; }
+  Box3.prototype.setFromObject = function () { return this; };
+
   return {
     Group,
     Mesh,
@@ -114,6 +125,7 @@ vi.mock('three', () => {
     MeshBasicMaterial,
     MeshPhysicalMaterial,
     Color,
+    Box3,
     Vector3: Vec3,
     Euler,
   };
@@ -168,45 +180,41 @@ describe('WHEEL_NAMES', () => {
 });
 
 describe('buildCar', () => {
-  it('buildCar("F1").name === "car"', async () => {
+  it('buildCar("F1") resolves to group named "car"', async () => {
     const { buildCar } = await import('../cars.js');
-    const car = buildCar('F1');
+    const car = await buildCar('F1');
     expect(car.name).toBe('car');
   });
 
-  it('buildCar("F2") does not throw and has name "car"', async () => {
+  it('buildCar("F2") resolves to group named "car"', async () => {
     const { buildCar } = await import('../cars.js');
-    expect(() => buildCar('F2')).not.toThrow();
-    expect(buildCar('F2').name).toBe('car');
+    expect((await buildCar('F2')).name).toBe('car');
   });
 
-  it('buildCar("F3") does not throw and has name "car"', async () => {
+  it('buildCar("F3") resolves to group named "car"', async () => {
     const { buildCar } = await import('../cars.js');
-    expect(() => buildCar('F3')).not.toThrow();
-    expect(buildCar('F3').name).toBe('car');
+    expect((await buildCar('F3')).name).toBe('car');
   });
 
-  it('buildCar("GT") does not throw and has name "car"', async () => {
+  it('buildCar("GT") resolves to group named "car"', async () => {
     const { buildCar } = await import('../cars.js');
-    expect(() => buildCar('GT')).not.toThrow();
-    expect(buildCar('GT').name).toBe('car');
+    expect((await buildCar('GT')).name).toBe('car');
   });
 
   it('buildCar with unknown type falls back to F1 silently', async () => {
     const { buildCar } = await import('../cars.js');
-    expect(() => buildCar('UNKNOWN')).not.toThrow();
-    expect(buildCar('UNKNOWN').name).toBe('car');
+    expect((await buildCar('UNKNOWN')).name).toBe('car');
   });
 
   it('F1 car has children (geometry was added)', async () => {
     const { buildCar } = await import('../cars.js');
-    const car = buildCar('F1');
+    const car = await buildCar('F1');
     expect(car.children.length).toBeGreaterThan(0);
   });
 
   it('all 4 wheel names exist on F1 car children (by name property)', async () => {
     const { buildCar, WHEEL_NAMES } = await import('../cars.js');
-    const car = buildCar('F1');
+    const car = await buildCar('F1');
     const names = new Set();
     car.traverse(obj => { if (obj.name) names.add(obj.name); });
     WHEEL_NAMES.forEach(n => expect(names.has(n)).toBe(true));
@@ -217,7 +225,7 @@ describe('buildCar', () => {
 describe('Sharp sidepod geometry (Phase 1)', () => {
   it('F1 has at least one mesh at z ≈ -0.64 (sharp inlet mouth)', async () => {
     const { buildCar } = await import('../cars.js');
-    const car = buildCar('F1');
+    const car = await buildCar('F1');
     let found = false;
     car.traverse(obj => {
       if (obj.position && Math.abs(obj.position.z + 0.64) < 0.05) found = true;
@@ -227,16 +235,13 @@ describe('Sharp sidepod geometry (Phase 1)', () => {
 
   it('F1 sidepods have more parts after redesign (≥ 10 per side via child increase)', async () => {
     const { buildCar } = await import('../cars.js');
-    const car = buildCar('F1');
-    // After both sidepod redesign (adds 8) and rearWing extraction (removes 15),
-    // net: 130 + 8 - 15 = 123. Assert at least 115 to allow minor variation.
+    const car = await buildCar('F1');
     expect(car.children.length).toBeGreaterThanOrEqual(115);
   });
 
   it('GT car child count is not lower than before (GT sidepods unchanged)', async () => {
     const { buildCar } = await import('../cars.js');
-    const gtCar = buildCar('GT');
-    // GT had ~101 direct children, loses ~15 for rearWing extraction → ~86 minimum
+    const gtCar = await buildCar('GT');
     expect(gtCar.children.length).toBeGreaterThanOrEqual(80);
   });
 });
@@ -245,7 +250,7 @@ describe('Sharp sidepod geometry (Phase 1)', () => {
 describe('rearWing named group', () => {
   it('F1 car has a child/descendant named "rearWing"', async () => {
     const { buildCar } = await import('../cars.js');
-    const car = buildCar('F1');
+    const car = await buildCar('F1');
     let found = false;
     car.traverse(obj => { if (obj.name === 'rearWing') found = true; });
     expect(found).toBe(true);
@@ -253,7 +258,7 @@ describe('rearWing named group', () => {
 
   it('F2 car has a child/descendant named "rearWing"', async () => {
     const { buildCar } = await import('../cars.js');
-    const car = buildCar('F2');
+    const car = await buildCar('F2');
     let found = false;
     car.traverse(obj => { if (obj.name === 'rearWing') found = true; });
     expect(found).toBe(true);
@@ -261,7 +266,7 @@ describe('rearWing named group', () => {
 
   it('F3 car has a child/descendant named "rearWing"', async () => {
     const { buildCar } = await import('../cars.js');
-    const car = buildCar('F3');
+    const car = await buildCar('F3');
     let found = false;
     car.traverse(obj => { if (obj.name === 'rearWing') found = true; });
     expect(found).toBe(true);
@@ -269,7 +274,7 @@ describe('rearWing named group', () => {
 
   it('GT car has a child/descendant named "rearWing"', async () => {
     const { buildCar } = await import('../cars.js');
-    const car = buildCar('GT');
+    const car = await buildCar('GT');
     let found = false;
     car.traverse(obj => { if (obj.name === 'rearWing') found = true; });
     expect(found).toBe(true);
@@ -277,10 +282,232 @@ describe('rearWing named group', () => {
 
   it('F1 rearWing group has ≥ 2 children', async () => {
     const { buildCar } = await import('../cars.js');
-    const car = buildCar('F1');
+    const car = await buildCar('F1');
     let rearWing = null;
     car.traverse(obj => { if (obj.name === 'rearWing') rearWing = obj; });
     expect(rearWing).not.toBeNull();
     expect(rearWing.children.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+/* ── Wheel ground contact ─────────────────────────────────────────── */
+describe('wheel ground contact (grp.position.y places wheels at Y = -0.34)', () => {
+  const GROUND_Y = -0.34;
+  const WHEEL_NAMES_LOCAL = ['wFL', 'wFR', 'wRL', 'wRR'];
+
+  function findWheel(car, name) {
+    let found = null;
+    car.traverse(obj => { if (obj.name === name) found = obj; });
+    return found;
+  }
+
+  it('F1: wheel bottom touches ground (carY + wheelY - wR ≈ -0.34)', async () => {
+    const { buildCar } = await import('../cars.js');
+    const car = await buildCar('F1');
+    const wR = 0.345;
+    const wheel = findWheel(car, 'wFL');
+    expect(wheel).not.toBeNull();
+    expect(car.position.y + wheel.position.y - wR).toBeCloseTo(GROUND_Y, 3);
+  });
+
+  it('F2: wheel bottom touches ground (carY + wheelY - wR ≈ -0.34)', async () => {
+    const { buildCar } = await import('../cars.js');
+    const car = await buildCar('F2');
+    const wR = 0.328;
+    const wheel = findWheel(car, 'wFL');
+    expect(wheel).not.toBeNull();
+    expect(car.position.y + wheel.position.y - wR).toBeCloseTo(GROUND_Y, 3);
+  });
+
+  it('F3: wheel bottom touches ground (carY + wheelY - wR ≈ -0.34)', async () => {
+    const { buildCar } = await import('../cars.js');
+    const car = await buildCar('F3');
+    const wR = 0.300;
+    const wheel = findWheel(car, 'wFL');
+    expect(wheel).not.toBeNull();
+    expect(car.position.y + wheel.position.y - wR).toBeCloseTo(GROUND_Y, 3);
+  });
+
+  it('GT: wheel bottom touches ground (carY + wheelY - wR ≈ -0.34)', async () => {
+    const { buildCar } = await import('../cars.js');
+    const car = await buildCar('GT');
+    const wR = 0.338;
+    const wheel = findWheel(car, 'wFL');
+    expect(wheel).not.toBeNull();
+    expect(car.position.y + wheel.position.y - wR).toBeCloseTo(GROUND_Y, 3);
+  });
+});
+
+/* ── Phase 3: buildCar is async ──────────────────────────────────── */
+describe('buildCar is async (Phase 3)', () => {
+  it('buildCar("F1") returns a Promise', async () => {
+    const { buildCar } = await import('../cars.js');
+    const result = buildCar('F1');
+    expect(result).toBeInstanceOf(Promise);
+    const grp = await result;
+    expect(grp.name).toBe('car');
+  });
+
+  it('await buildCar("F2") resolves to group named "car"', async () => {
+    const { buildCar } = await import('../cars.js');
+    expect((await buildCar('F2')).name).toBe('car');
+  });
+
+  it('await buildCar("F3") resolves to group named "car"', async () => {
+    const { buildCar } = await import('../cars.js');
+    expect((await buildCar('F3')).name).toBe('car');
+  });
+
+  it('await buildCar("GT") resolves to group named "car"', async () => {
+    const { buildCar } = await import('../cars.js');
+    expect((await buildCar('GT')).name).toBe('car');
+  });
+});
+
+/* ── Phase 4: buildF1Hybrid ──────────────────────────────────────── */
+
+// Minimal fake mesh with clonable material
+function fakeMesh(name) {
+  const mat = { clone() { return { ...this, color: { copy() {} } }; }, color: { copy() {} } };
+  return {
+    name, isMesh: true, castShadow: false, receiveShadow: false,
+    material: mat, parent: null, children: [],
+    traverse(fn) { fn(this); },
+  };
+}
+// Fake scene root (non-mesh, with THREE-like stubs)
+function fakeScene(children = []) {
+  const s = {
+    name: 'root', isMesh: false, children: [...children],
+    position: { set() {} }, scale: { setScalar() {} }, rotation: { set() {} },
+    remove(child) { this.children = this.children.filter(c => c !== child); },
+    add(child)    { this.children.push(child); child.parent = this; },
+    traverse(fn) { fn(this); this.children.forEach(c => c.traverse ? c.traverse(fn) : fn(c)); },
+  };
+  children.forEach(c => { c.parent = s; });
+  return s;
+}
+
+describe('buildF1Hybrid (Phase 4)', () => {
+  beforeEach(() => { _loaderManifestResult = null; _mockBboxMinY = -0.385; });
+
+  it('H1. null loader → fallback procedural; wFL present', async () => {
+    const { buildF1Hybrid } = await import('../cars.js');
+    const grp = await buildF1Hybrid({ color: 0xe8132a });
+    const names = new Set();
+    grp.traverse(o => { if (o.name) names.add(o.name); });
+    expect(names.has('wFL')).toBe(true);
+  });
+
+  it('H2. null loader fallback is grounded (carY + wFL.y - 0.345 ≈ -0.34)', async () => {
+    const { buildF1Hybrid } = await import('../cars.js');
+    const grp = await buildF1Hybrid({ color: 0xe8132a });
+    let wFL = null;
+    grp.traverse(o => { if (o.name === 'wFL') wFL = o; });
+    expect(wFL).not.toBeNull();
+    expect(grp.position.y + wFL.position.y - 0.345).toBeCloseTo(-0.34, 3);
+  });
+
+  it('H3. GLB path — imported scene is child of returned group', async () => {
+    const scene = fakeScene([]);
+    _loaderManifestResult = { scene, liveryMeshes: [], rearWing: null };
+    const { buildF1Hybrid } = await import('../cars.js');
+    const grp = await buildF1Hybrid({ color: 0xe8132a });
+    expect(grp.children).toContain(scene);
+  });
+
+  it('H4. GLB path — 4 procedural wheels present', async () => {
+    _loaderManifestResult = { scene: fakeScene([]), liveryMeshes: [], rearWing: null };
+    const { buildF1Hybrid } = await import('../cars.js');
+    const grp = await buildF1Hybrid({ color: 0xe8132a });
+    const names = new Set();
+    grp.traverse(o => { if (o.name) names.add(o.name); });
+    ['wFL','wFR','wRL','wRR'].forEach(n => expect(names.has(n)).toBe(true));
+  });
+
+  it('H5. GLB path — grp.position.y is bbox-derived (not hardcoded)', async () => {
+    _mockBboxMinY = -0.6;   // deliberately not the old 0.045 value
+    _loaderManifestResult = { scene: fakeScene([]), liveryMeshes: [], rearWing: null };
+    const { buildF1Hybrid } = await import('../cars.js');
+    const grp = await buildF1Hybrid({ color: 0xe8132a });
+    expect(grp.position.y).toBeCloseTo(-(-0.6 + 0.34), 3);  // 0.26
+  });
+
+  it('H6. rearWing node in loaded scene is wrapped in a named group', async () => {
+    const rwMesh = fakeMesh('wing_rear_main');
+    const scene  = fakeScene([rwMesh]);
+    _loaderManifestResult = { scene, liveryMeshes: [], rearWing: rwMesh };
+    const { buildF1Hybrid } = await import('../cars.js');
+    const grp = await buildF1Hybrid({ color: 0xe8132a });
+    let rearWingGrp = null;
+    grp.traverse(o => { if (o.name === 'rearWing') rearWingGrp = o; });
+    expect(rearWingGrp).not.toBeNull();
+  });
+
+  it('H7. livery mesh gets a cloned material with color set', async () => {
+    const livMesh = fakeMesh('body_shell');
+    const originalMat = livMesh.material;
+    let colorCopied = false;
+    const cloned = { ...originalMat, color: { copy: () => { colorCopied = true; } } };
+    originalMat.clone = () => cloned;
+    _loaderManifestResult = { scene: fakeScene([livMesh]), liveryMeshes: [livMesh], rearWing: null };
+    const { buildF1Hybrid } = await import('../cars.js');
+    await buildF1Hybrid({ color: 0xe8132a });
+    expect(livMesh.material).toBe(cloned);
+    expect(colorCopied).toBe(true);
+  });
+});
+
+/* ── Phase 5: buildGTHybrid ──────────────────────────────────────── */
+describe('buildGTHybrid (Phase 5)', () => {
+  beforeEach(() => { _loaderManifestResult = null; _mockBboxMinY = -0.385; });
+
+  it('G1. null loader → procedural GT; wFL present and grounded', async () => {
+    const { buildGTHybrid } = await import('../cars.js');
+    const grp = await buildGTHybrid({ color: 0xff8800 });
+    let wFL = null;
+    grp.traverse(o => { if (o.name === 'wFL') wFL = o; });
+    expect(wFL).not.toBeNull();
+    expect(grp.position.y + wFL.position.y - 0.338).toBeCloseTo(-0.34, 3);
+  });
+
+  it('G2. GLB path — 4 procedural wheels present', async () => {
+    _loaderManifestResult = { scene: fakeScene([]), liveryMeshes: [], rearWing: null };
+    const { buildGTHybrid } = await import('../cars.js');
+    const grp = await buildGTHybrid({ color: 0xff8800 });
+    const names = new Set();
+    grp.traverse(o => { if (o.name) names.add(o.name); });
+    ['wFL','wFR','wRL','wRR'].forEach(n => expect(names.has(n)).toBe(true));
+  });
+
+  it('G3. GLB path — grp.position.y is bbox-derived (not hardcoded)', async () => {
+    _mockBboxMinY = -0.7;   // deliberately not the old 0.048 value
+    _loaderManifestResult = { scene: fakeScene([]), liveryMeshes: [], rearWing: null };
+    const { buildGTHybrid } = await import('../cars.js');
+    const grp = await buildGTHybrid({ color: 0xff8800 });
+    expect(grp.position.y).toBeCloseTo(-(-0.7 + 0.34), 3);  // 0.36
+  });
+});
+
+/* ── Phase 6: fallback acceptance (simulates missing GLB) ─────────── */
+describe('GLB fallback acceptance (Phase 6)', () => {
+  beforeEach(() => { _loaderManifestResult = null; });
+
+  it('F1 procedural renders when loader returns null (simulates missing GLB)', async () => {
+    const { buildCar } = await import('../cars.js');
+    const grp = await buildCar('F1');
+    const names = new Set();
+    grp.traverse(o => { if (o.name) names.add(o.name); });
+    expect(names.has('wFL')).toBe(true);
+    expect(names.has('rearWing')).toBe(true);
+  });
+
+  it('GT procedural renders when loader returns null (simulates missing GLB)', async () => {
+    const { buildCar } = await import('../cars.js');
+    const grp = await buildCar('GT');
+    let wFL = null;
+    grp.traverse(o => { if (o.name === 'wFL') wFL = o; });
+    expect(wFL).not.toBeNull();
+    expect(grp.position.y + wFL.position.y - 0.338).toBeCloseTo(-0.34, 3);
   });
 });
