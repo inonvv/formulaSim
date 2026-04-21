@@ -233,8 +233,9 @@ export class AirflowEffect {
     this._type         = 'F1';
     this._time         = 0;
     this._baseY        = 0;
+    this._measure      = null;
 
-    this._build(getProfile('F1'));
+    this._build(getProfile('F1'), null);
     this.group.visible = false;
   }
 
@@ -249,11 +250,14 @@ export class AirflowEffect {
     this.group.position.y = this._baseY;
   }
 
-  setCarType(type) {
+  setCarType(type, measure) {
+    // Always refresh measure — caller may re-invoke with a new measure snapshot
+    // (e.g. when the same type's GLB resolves after the initial procedural build).
+    this._measure = measure || null;
     if (this._type === type) return;
     this._type = type;
     this._disposeAll();
-    this._build(getProfile(type));
+    this._build(getProfile(type), this._measure);
     this.group.visible = this._visible;
     this.group.position.y = this._baseY;
   }
@@ -267,8 +271,9 @@ export class AirflowEffect {
     }
   }
 
-  _build(profile) {
+  _build(profile, measure) {
     this._profile         = profile;
+    this._measure         = measure || this._measure || null;
     this._halfW           = profile.halfW;
     this._halfL           = profile.halfL;
     this._halfH           = profile.halfH;

@@ -161,7 +161,7 @@ async function spawnCar(type) {
   scene.add(grp);
   const carKey = String(type).toLowerCase();
   debugOverlay.attach(grp, CAR_MANIFEST[carKey] ?? null, state.carMeasure);
-  airflow.setCarType(type);
+  airflow.setCarType(type, state.carMeasure);
   cfd.setCarType(type, state.carMeasure);
   rain.setCarType(type, state.carMeasure);
   optimal.setCarType(type, state.carMeasure);
@@ -188,7 +188,7 @@ async function spawnCar(type) {
 ══════════════════════════════════════════════════════════════════ */
 // Stub used if an effect fails to construct, so animate() always runs
 class EffectStub {
-  setSpeed() {} setVisible() {} setCarType() {} setBaseY() {} update() {} dispose() {}
+  setSpeed() {} setVisible() {} setCarType(_t, _m) {} setBaseY() {} update() {} dispose() {}
 }
 
 let airflow, rain, optimal, cfd;

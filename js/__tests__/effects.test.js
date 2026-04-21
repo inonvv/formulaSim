@@ -276,6 +276,14 @@ describe('AirflowEffect', () => {
     airflow.setCarType('F2');
     expect(airflow.group.position.y).toBeCloseTo(0.42, 6);
   });
+
+  it('setCarType accepts optional measure and stores it', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    const measure = { anchors: { halo: { x: 0, y: 0.373, z: -0.05 } } };
+    airflow.setCarType('F2', measure);
+    expect(airflow._measure).toBe(measure);
+  });
 });
 
 describe('AirflowEffect — smoke puff particles', () => {
