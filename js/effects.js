@@ -224,10 +224,18 @@ function _rescaleSideHeights(profile, measure) {
   return authored.map(y => y * k);
 }
 
+// Top-seed cap: dimensionless xi at which the stream still grazes the body.
+// Beyond |xi| > 1.6, seeds render (in top-down view) as horizontal fog bars
+// floating ~1 m outside the tyres — pure "freestream reference" that reads
+// as noise. Seeds at |xi| ≤ 1.6 graze the wheels/bodywork and curve properly.
+const _TOP_XI_CAP = 1.6;
+
 function _buildSeedList(p, sideHeightsOverride, measure) {
   const seeds = [];
-  // Top-plane sweep (plan view, multiple heights for 3-D coverage)
+  // Top-plane sweep (plan view, multiple heights for 3-D coverage).
+  // Drop extreme-lateral entries — they paint empty track, not airflow.
   for (const xi of p.topSeeds) {
+    if (Math.abs(xi) > _TOP_XI_CAP) continue;
     seeds.push({ seedXi: xi,   seedEta: -8, y: 0.38,  group: 'top',   halfH: p.halfH });
     seeds.push({ seedXi: xi,   seedEta: -8, y: 0.70,  group: 'top',   halfH: p.halfH });
   }
@@ -241,6 +249,16 @@ function _buildSeedList(p, sideHeightsOverride, measure) {
       seeds.push({ seedXi: xi, seedEta: -8, y: noseY, group: 'nose', halfH: p.halfH });
     }
   }
+  // Sidepod / body flank — streams seeded just outside the unit-cylinder body
+  // so they deflect around the sidepod edge rather than flying past in empty
+  // air. 3 heights × 2 sides = 6 streams. Anchored-body variants only (GLB).
+  if (measure?.anchors?.sidepodTop) {
+    for (const x of [-1.05, 1.05]) {
+      for (const y of [0.15, 0.35, 0.55]) {
+        seeds.push({ seedXi: x, seedEta: -8, y, group: 'flank', halfH: p.halfH });
+      }
+    }
+  }
   // Side-height sweep (lateral slice at x≈0)
   const sideHeights = sideHeightsOverride || p.sideHeights;
   for (const y of sideHeights) {
@@ -250,10 +268,9 @@ function _buildSeedList(p, sideHeightsOverride, measure) {
   for (const xi of p.underSeeds) {
     seeds.push({ seedXi: xi,   seedEta: -8, y: p.underY, group: 'under', halfH: p.halfH });
   }
-  // Far-field (show undisturbed freestream)
-  for (const xi of p.farSeeds) {
-    seeds.push({ seedXi: xi,   seedEta: -8, y: 0.38,  group: 'far',   halfH: p.halfH });
-  }
+  // NOTE: far-field seeds (previously xi=±2.5..±4.5) removed — they rendered
+  // as ghost horizontal bars floating metres outside the tyres in top-down
+  // view, with no visual purpose tied to the car body.
   // Front-wing zone (if defined)
   for (const xi of (p.fwSeeds || [])) {
     seeds.push({ seedXi: xi,   seedEta: p.fwEta - 1, y: p.fwY, group: 'fw', halfH: p.halfH });

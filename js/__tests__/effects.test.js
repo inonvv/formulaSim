@@ -314,6 +314,48 @@ describe('AirflowEffect', () => {
     const nose = airflow._seeds.filter(s => s.group === 'nose');
     expect(nose.length).toBe(0);
   });
+
+  it('far-field seed group is never populated (ghost lines removed)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1');
+    const far = airflow._seeds.filter(s => s.group === 'far');
+    expect(far.length).toBe(0);
+  });
+
+  it('top-plane seeds are capped to |xi| <= 1.6 (no extreme-lateral ghost streams)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1');
+    const top = airflow._seeds.filter(s => s.group === 'top');
+    expect(top.length).toBeGreaterThan(0);
+    for (const s of top) {
+      expect(Math.abs(s.seedXi)).toBeLessThanOrEqual(1.6);
+    }
+  });
+
+  it('flank seeds appear when measure has sidepodTop anchor', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    const measure = { anchors: { sidepodTop: { x: 0, y: 0.28, z: 0.0 } } };
+    airflow.setCarType('F1', measure);
+    const flank = airflow._seeds.filter(s => s.group === 'flank');
+    expect(flank.length).toBe(6);
+    // 3 heights on each side.
+    const left  = flank.filter(s => s.seedXi < 0);
+    const right = flank.filter(s => s.seedXi > 0);
+    expect(left.length).toBe(3);
+    expect(right.length).toBe(3);
+    for (const s of flank) expect(Math.abs(s.seedXi)).toBeCloseTo(1.05, 6);
+  });
+
+  it('flank seeds are omitted without sidepodTop anchor (procedural)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1');
+    const flank = airflow._seeds.filter(s => s.group === 'flank');
+    expect(flank.length).toBe(0);
+  });
 });
 
 describe('AirflowEffect — vortexDefs role tagging', () => {
