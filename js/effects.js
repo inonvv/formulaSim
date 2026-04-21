@@ -6,12 +6,49 @@
 import * as THREE from 'three';
 import {
   traceStreamlinePath, topViewVelocity, pressureCoeff,
-  cpToColor, vortexVelocity, sideViewVelocity, applyWingStall,
+  cpToColor, vortexVelocity, sideViewVelocity,
 } from './airflow-core.js';
 
 /* ── Utility ───────────────────────────────────────────────────── */
 function rnd(min, max) { return min + Math.random() * (max - min); }
 
+/* ── Radial-gradient soft puff texture (shared singleton) ───────── */
+let _puffTex = null;
+
+/* ── Elliptical alpha-mask for wet-ground soft edges ────────────── */
+let _wetMaskTex = null;
+function _makeWetMaskTexture() {
+  const size   = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const grd = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grd.addColorStop(0.00, 'rgba(255,255,255,1.0)');
+  grd.addColorStop(0.55, 'rgba(255,255,255,0.80)');
+  grd.addColorStop(0.85, 'rgba(255,255,255,0.20)');
+  grd.addColorStop(1.00, 'rgba(255,255,255,0.0)');
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.needsUpdate = true;
+  return tex;
+}
+function _makePuffTexture() {
+  const size   = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const grd = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grd.addColorStop(0.00, 'rgba(255,255,255,0.22)');
+  grd.addColorStop(0.35, 'rgba(255,255,255,0.14)');
+  grd.addColorStop(0.70, 'rgba(255,255,255,0.05)');
+  grd.addColorStop(1.00, 'rgba(255,255,255,0.0)');
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.needsUpdate = true;
+  return tex;
+}
 
 /* ════════════════════════════════════════════════════════════════ */
 /*  AIRFLOW EFFECT — potential-flow based, 3-D corrected            */
@@ -19,7 +56,7 @@ function rnd(min, max) { return min + Math.random() * (max - min); }
 
 const STEPS     = 200;
 const STEP_SIZE = 0.14;
-const SMOKE_PTS  = 60;     // smoke-chain particles per streamline
+const SMOKE_PTS  = 260;    // smoke-chain particles per streamline
 const VORTEX_PTS = 100;
 
 /* ── Per-car aerodynamic profiles ── */
@@ -175,6 +212,12 @@ function _buildSeedList(p) {
       seeds.push({ seedXi: xi, seedEta: -8, y, group: 'body', halfH: p.halfH });
     }
   }
+  // Rooftop spine — dense centerline trail directly above the car body
+  for (const xi of [-0.08, -0.03, 0, 0.03, 0.08]) {
+    for (const yMul of [1.80, 1.95, 2.10, 2.25]) {
+      seeds.push({ seedXi: xi, seedEta: -8, y: p.halfH * yMul, group: 'spine', halfH: p.halfH });
+    }
+  }
   return seeds;
 }
 
@@ -189,10 +232,21 @@ export class AirflowEffect {
     this._visible      = false;
     this._type         = 'F1';
     this._time         = 0;
-    this._wingStalled  = false;
+    this._baseY        = 0;
 
     this._build(getProfile('F1'));
     this.group.visible = false;
+  }
+
+  /**
+   * Lift the airflow group so its car-local y coordinates align with the
+   * actual on-track car (which sits at y = TRACK.SURFACE_Y - groundContactY).
+   * Called from main.js after each spawnCar so blobs/streamlines/vortices
+   * follow the variant's true ride height instead of floating at y=0.
+   */
+  setBaseY(y) {
+    this._baseY = y || 0;
+    this.group.position.y = this._baseY;
   }
 
   setCarType(type) {
@@ -201,6 +255,7 @@ export class AirflowEffect {
     this._disposeAll();
     this._build(getProfile(type));
     this.group.visible = this._visible;
+    this.group.position.y = this._baseY;
   }
 
   _disposeAll() {
@@ -225,11 +280,9 @@ export class AirflowEffect {
     this._paths           = this._seeds.map(s =>
       traceStreamlinePath(s.seedXi, s.seedEta, STEPS, STEP_SIZE)
     );
-    this._buildSmokeGuides();
     this._buildSmokeParticles();
     this._buildVortexSpirals(profile.vortexDefs);
     this._buildWakeParticles(profile.wakeCount);
-    this._buildPressureBlobs(profile.pressureBlobs);
   }
 
   /* ── Convert potential-flow (xi, eta) + y → world XYZ ── */
@@ -246,72 +299,7 @@ export class AirflowEffect {
     return vy * scale;
   }
 
-  /* ── Stream tubes — fat 3D pressure-coloured TubeGeometry ── */
-  _buildSmokeGuides() {
-    this._guideLines = [];
-    const TUBE_R   = 0.016;   // tube radius in world units
-    const TUBE_SEG = 48;      // tubular segments along the path
-    const RAD_SEG  = 5;       // radial segments (hexagonal profile)
-
-    for (let s = 0; s < this._seeds.length; s++) {
-      const path = this._paths[s];
-      const y0   = this._seeds[s].y;
-      if (path.length < 2) { this._guideLines.push(null); continue; }
-
-      // Sample path at TUBE_SEG+1 evenly-spaced steps
-      let yAcc = 0;
-      const curvePts  = [];
-      const cpSamples = [];
-      for (let k = 0; k <= TUBE_SEG; k++) {
-        const fi   = (k / TUBE_SEG) * (path.length - 1);
-        const ti   = Math.floor(fi);
-        const frac = fi - ti;
-        const ptA  = path[Math.min(ti,     path.length - 1)];
-        const ptB  = path[Math.min(ti + 1, path.length - 1)];
-        const xi   = ptA.xi   + (ptB.xi   - ptA.xi)   * frac;
-        const eta  = ptA.eta  + (ptB.eta  - ptA.eta)  * frac;
-        const vxi  = ptA.vxi  + (ptB.vxi  - ptA.vxi)  * frac;
-        const veta = ptA.veta + (ptB.veta - ptA.veta) * frac;
-
-        const dy = this._verticalDelta(eta, y0 + yAcc);
-        yAcc += dy;
-        const w = this._toWorld(xi, eta, y0 + yAcc);
-        curvePts.push(new THREE.Vector3(w.x, w.y, w.z));
-        cpSamples.push(pressureCoeff(vxi, veta));
-      }
-
-      const curve = new THREE.CatmullRomCurve3(curvePts);
-      const geo   = new THREE.TubeGeometry(curve, TUBE_SEG, TUBE_R, RAD_SEG, false);
-
-      // Paint per-vertex Cp colours (each ring = one path sample)
-      const vCount = geo.attributes.position.count;
-      const cols   = new Float32Array(vCount * 3);
-      for (let i = 0; i < vCount; i++) {
-        const segIdx = Math.floor(i / (RAD_SEG + 1));
-        const cp     = cpSamples[Math.min(segIdx, cpSamples.length - 1)];
-        const c      = cpToColor(cp);
-        cols[i * 3]     = c.r;
-        cols[i * 3 + 1] = c.g;
-        cols[i * 3 + 2] = c.b;
-      }
-      geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-
-      const mat = new THREE.MeshBasicMaterial({
-        vertexColors: true,
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        side: THREE.DoubleSide,
-      });
-
-      const tube = new THREE.Mesh(geo, mat);
-      this.group.add(tube);
-      this._guideLines.push({ tube, mat });
-    }
-  }
-
-  /* ── Smoke particles — dense chains forming continuous smoke threads ── */
+  /* ── Smoke particles — soft billboarded puff chains ── */
   _buildSmokeParticles() {
     const total     = this._seeds.length * SMOKE_PTS;
     const positions = new Float32Array(total * 3);
@@ -323,6 +311,7 @@ export class AirflowEffect {
     this._smokeJy      = new Float32Array(total);
     this._smokeJz      = new Float32Array(total);
     this._smokeYAcc    = new Float32Array(total);
+    this._smokeLife    = new Float32Array(total);
 
     let idx = 0;
     for (let s = 0; s < this._seeds.length; s++) {
@@ -330,6 +319,7 @@ export class AirflowEffect {
       for (let k = 0; k < SMOKE_PTS; k++) {
         this._smokeSeedIdx[idx] = s;
         this._smokeT[idx]       = (k / SMOKE_PTS) * (pathLen - 1);
+        this._smokeLife[idx]    = rnd(0, 1); // stagger fades so trails look continuous
         idx++;
       }
     }
@@ -339,7 +329,9 @@ export class AirflowEffect {
     geo.setAttribute('color',    new THREE.BufferAttribute(colors,    3));
 
     const mat = new THREE.PointsMaterial({
-      size: 0.10,
+      size: 0.55,
+      map: (_puffTex ||= _makePuffTexture()),
+      alphaTest: 0,
       vertexColors: true,
       transparent: true,
       opacity: 0,
@@ -414,42 +406,11 @@ export class AirflowEffect {
     this.group.add(this._wakePoints);
   }
 
-  /* ── Pressure glow blobs — stagnation & suction hot spots ── */
-  _buildPressureBlobs(blobs) {
-    this._blobMeshes = (blobs || []).map(blob => {
-      const geo = new THREE.SphereGeometry(1, 10, 8); // unit sphere, scaled per-frame
-      const mat = new THREE.MeshBasicMaterial({
-        color: blob.color,
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-      });
-      const m = new THREE.Mesh(geo, mat);
-      m.position.set(blob.pos[0], blob.pos[1], blob.pos[2]);
-      this.group.add(m);
-      return { mesh: m, mat, blob };
-    });
-  }
-
   setSpeed(speed) { this._speed = speed; }
 
   setVisible(v) {
     this._visible = v;
     this.group.visible = v;
-  }
-
-  /**
-   * Switch between normal and stalled (wing-flip) aerodynamic profile.
-   * Rebuilds all geometry to reflect separated flow.
-   */
-  setWingStall(isStalled) {
-    if (this._wingStalled === isStalled) return;
-    this._wingStalled = isStalled;
-    this._disposeAll();
-    const profile = applyWingStall(getProfile(this._type), isStalled);
-    this._build(profile);
-    this.group.visible = this._visible;
   }
 
   update(dt, t) {
@@ -458,23 +419,9 @@ export class AirflowEffect {
 
     const speedFactor = Math.min(this._speed / 350, 1);
 
-    /* ── Stream tube opacity ── */
-    for (const gl of this._guideLines) {
-      if (gl) gl.mat.opacity = speedFactor * 0.55;
-    }
-
-    /* ── Pressure blobs — pulsing stagnation/suction glow ── */
-    for (const { mesh, mat, blob } of this._blobMeshes) {
-      const phase  = blob.phase ?? blob.pos[2];
-      const pulse  = 0.55 + 0.45 * Math.sin(t * 2.5 + phase);
-      const sfSq   = speedFactor * speedFactor;
-      mat.opacity  = sfSq * blob.intensity * 0.30 * pulse;
-      mesh.scale.setScalar(blob.r * (0.75 + 0.50 * sfSq * pulse));
-    }
-
-    /* ── Smoke particles — dense chains ── */
+    /* ── Smoke particles — soft billboarded puff chains ── */
     const advRate = speedFactor * 9.0;
-    const jBase   = 0.006 * speedFactor;
+    const jBase   = 0.002 * speedFactor;
     const jDecay  = 0.90;
     const sPos    = this._smokePos;
     const sCol    = this._smokeColors;
@@ -483,6 +430,11 @@ export class AirflowEffect {
       const s    = this._smokeSeedIdx[i];
       const path = this._paths[s];
       if (!path || path.length < 2) continue;
+
+      // Life cycle — bell-curve fade so puffs appear/disappear softly
+      this._smokeLife[i] += dt * 0.45;
+      if (this._smokeLife[i] > 1) this._smokeLife[i] = 0;
+      const fade = Math.sin(this._smokeLife[i] * Math.PI);
 
       const ptNow = path[Math.min(Math.floor(this._smokeT[i]), path.length - 1)];
       const localSpeed = Math.sqrt(ptNow.vxi * ptNow.vxi + ptNow.veta * ptNow.veta);
@@ -520,7 +472,7 @@ export class AirflowEffect {
       sPos[i * 3 + 1] = w.y + this._smokeJy[i];
       sPos[i * 3 + 2] = w.z + this._smokeJz[i];
 
-      // Change 3: vortex-coupled drift — bend smoke near wing-tip vortex cores
+      // Vortex-coupled drift — bend smoke near wing-tip vortex cores
       if (this._profile?.vortexDefs) {
         for (const def of this._profile.vortexDefs) {
           const vxiC = def.wx / this._halfW;
@@ -535,16 +487,21 @@ export class AirflowEffect {
         }
       }
 
+      // Cp color modulated by life fade — soft in/out
       const cp = pressureCoeff(vxi, veta);
       const c  = cpToColor(cp);
-      sCol[i * 3]     = c.r;
-      sCol[i * 3 + 1] = c.g;
-      sCol[i * 3 + 2] = c.b;
+      const r = (0.85 + c.r * 0.15) * fade;
+      const g = (0.85 + c.g * 0.15) * fade;
+      const b = (0.88 + c.b * 0.15) * fade;
+      sCol[i * 3]     = r;
+      sCol[i * 3 + 1] = g;
+      sCol[i * 3 + 2] = b;
     }
 
     this._smokePoints.geometry.attributes.position.needsUpdate = true;
     this._smokePoints.geometry.attributes.color.needsUpdate    = true;
-    this._smokeMat.opacity = speedFactor * 0.88;
+    this._smokeMat.opacity = Math.min(1, 0.65 + speedFactor * 0.35);
+    this._smokeMat.size    = 0.45 + 0.25 * speedFactor;
 
     /* ── Vortex spirals — physics-based with vortexVelocity ── */
     const vortexRadius  = speedFactor * speedFactor * this._vortexMaxRadius;
@@ -752,24 +709,28 @@ export class RainEffect {
   }
 
   _buildWetGround() {
-    const geo = new THREE.PlaneGeometry(3.0, 7.0);
+    const geo = new THREE.PlaneGeometry(4.5, 9.0);
     const mat = new THREE.MeshStandardMaterial({
-      color: 0x224466,
-      roughness: 0.05,
-      metalness: 0.9,
+      color: 0x2a4a6a,
+      roughness: 0.08,
+      metalness: 0.75,
       transparent: true,
       opacity: 0,
+      depthWrite: false,
+      alphaMap: (_wetMaskTex ||= _makeWetMaskTexture()),
     });
     const plane = new THREE.Mesh(geo, mat);
     plane.rotation.x = -Math.PI / 2;
-    plane.position.y = -0.33;
+    plane.position.y = -0.329;
     this.group.add(plane);
     this._wetMat = mat;
   }
 
   setSpeed(speed) { this._speed = speed; }
 
-  setCarType(type) {
+  setCarType(type, _measure) {
+    // _measure is accepted for forward-compat (Phase 3 will consume it);
+    // today we still read from the RAIN_POS lookup table.
     this._rainPos = RAIN_POS[type] || RAIN_POS.F1;
     // Re-place rooster tail particles at the new car's rear wheel positions
     for (let i = 0; i < this._roosterCount; i++) {
@@ -835,7 +796,7 @@ export class RainEffect {
     this._sMat.opacity = speedFactor * 0.65;
     this._sMat.size    = 0.04 + 0.07 * speedFactor;
 
-    this._wetMat.opacity = speedFactor * 0.55;
+    this._wetMat.opacity = speedFactor * 0.40;
 
     this._updateRoosterTails(dt, speedFactor);
   }

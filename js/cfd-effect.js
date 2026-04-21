@@ -9,7 +9,7 @@
  *
  * Interface mirrors AirflowEffect:
  *   constructor(scene), setCarType(type), setSpeed(v), setVisible(v),
- *   update(dt, t), dispose(), setWingStall(isStalled).
+ *   update(dt, t), dispose().
  */
 
 import * as THREE from 'three';
@@ -266,9 +266,9 @@ export class CfdEffect {
     this._speed          = 0;
     this._visible        = false;
     this._type           = 'F1';
-    this._wingStalled    = false;
     this._speedDirty     = true;
     this._lastBuiltSpeed = -1;
+    this._baseY          = 0;
 
     this._patchMeshes    = [];
     this._blobMeshes     = [];
@@ -281,6 +281,17 @@ export class CfdEffect {
 
   /* ── Public interface ─────────────────────────────────────────── */
 
+  /**
+   * Lift the CFD group so its car-local y coordinates align with the
+   * actual on-track car (which sits at y = TRACK.SURFACE_Y - groundContactY).
+   * Called from main.js after each spawnCar so patches/blobs/streamlines
+   * follow the variant's true ride height instead of floating at y=0.
+   */
+  setBaseY(y) {
+    this._baseY = y || 0;
+    this.group.position.y = this._baseY;
+  }
+
   setCarType(type) {
     if (this._type === type) return;
     this._type = type;
@@ -288,6 +299,7 @@ export class CfdEffect {
     this._build(type);
     this.group.visible = this._visible;
     this._lastBuiltSpeed = -1;
+    this.group.position.y = this._baseY;
   }
 
   setSpeed(speed) {
@@ -298,13 +310,6 @@ export class CfdEffect {
   setVisible(v) {
     this._visible      = v;
     this.group.visible = v;
-  }
-
-  setWingStall(isStalled) {
-    if (this._wingStalled === isStalled) return;
-    this._wingStalled    = isStalled;
-    this._lastBuiltSpeed = -1;
-    this._speedDirty     = true;
   }
 
   update(dt, t) {
@@ -325,12 +330,7 @@ export class CfdEffect {
       const blob = blobs[i];
       if (!blob || !this._blobMeshes[i]) continue;
 
-      let eff_int = blob.intensity;
-      let eff_r   = blob.r;
-      if (this._wingStalled && blob.role === 'rearWing') {
-        eff_int *= 0.12;
-        eff_r   *= 2.4;
-      }
+      const eff_int = blob.intensity;
 
       const pulsed = 0.80 + 0.20 * Math.sin(t * 2.2 + blob.phase);
       this._blobMeshes[i].scale.setScalar(
@@ -473,40 +473,32 @@ export class CfdEffect {
       const hh = p.h / 2;
 
       const roleDef = ROLE_CP[p.role] || { bias: 0, scale: 0.5 };
-      const isRearStalled = this._wingStalled && (p.role === 'rearWing' || p.role === 'rearWingFlap');
 
       for (let vi = 0; vi < count; vi++) {
         const lx = pos[vi * 3];
         const ly = pos[vi * 3 + 1];
 
         let cp;
-        if (isRearStalled) {
-          // Turbulent separated flow — noisy near-zero Cp
-          cp = rnd(-0.12, 0.12);
-        } else {
+        {
           // Potential-flow perturbation on top of role-specific bias
           const xi  = hw > 0 ? lx / hw : 0;
           const eta = hh > 0 ? ly / hh : 0;
           const { vxi, veta } = topViewVelocity(xi * 1.6 + 0.01, eta * 1.6 + 0.01);
           const baseCp = pressureCoeff(vxi, veta);
 
-          // Change 8: ground-effect scaling for floor and diffuser (scales with speed²)
           let groundScale = 1.0;
           if (p.role === 'floor')    groundScale = 1 + speedFactor * speedFactor * 0.30;
           if (p.role === 'diffuser') groundScale = 1 + speedFactor * speedFactor * 0.25;
 
           cp = (roleDef.bias + roleDef.scale * baseCp * speedFactor) * groundScale;
 
-          // Nose: add gradient — high Cp at centre (stagnation), lower at sides
           if (p.role === 'nose') {
             cp += (1 - Math.abs(xi)) * 0.40 * speedFactor;
           }
-          // Floor: Cp increases (stronger suction) toward rear where tunnel height drops
           if (p.role === 'floor') {
-            cp -= (eta + 1) * 0.20 * speedFactor; // eta=-1 at front, +1 at rear
+            cp -= (eta + 1) * 0.20 * speedFactor;
           }
 
-          // Change 9: vortex Cp perturbation for sidepodTop, floor, diffuser
           if (['sidepodTop', 'floor', 'diffuser'].includes(p.role)) {
             const vDefs = VORTEX_CORES[this._type] || VORTEX_CORES.F1;
             for (const vc of vDefs) {

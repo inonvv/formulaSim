@@ -12,6 +12,8 @@ import { RenderPass }      from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass }      from 'three/addons/postprocessing/OutputPass.js';
 import { buildCar, getCarMeta, WHEEL_NAMES } from './cars.js';
+import { CAR_MANIFEST } from './car-manifest.js';
+import { createDebugOverlay } from './debug-overlay.js';
 import { buildTrack }      from './track.js';
 import { AirflowEffect, RainEffect, OptimalWeatherEffect } from './effects.js';
 import { CfdEffect } from './cfd-effect.js';
@@ -40,7 +42,7 @@ const pmremGenerator = new THREE.PMREMGenerator(renderer);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(BACKGROUND_COLOR);   // bright sky-blue fallback
 scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
-scene.environmentIntensity = 1.5;
+scene.environmentIntensity = 1.0;
 pmremGenerator.dispose();
 
 const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100000);
@@ -118,6 +120,9 @@ const bloomPass = new UnrealBloomPass(
 composer.addPass(bloomPass);
 composer.addPass(new OutputPass());
 
+/* ── Debug overlay (no-op unless ?debug=1 is in the URL) ────────── */
+const debugOverlay = createDebugOverlay(scene);
+
 /* ══════════════════════════════════════════════════════════════════
    STATE
 ══════════════════════════════════════════════════════════════════ */
@@ -130,50 +135,46 @@ const state = {
   activeEnvs: new Set(),  // 'airflow' | 'rain' | 'optimal' | 'cfd'
   time:       0,
   carGroup:   null,
+  carMeasure: null,       // group.userData.measure snapshot — consumed by effects / overlay
   wheels:     {},
   brakes:     {},
   camT:       0,          // camera path parameter for trackside/drone
-  // Wing flip (only the top DRS flap element rotates)
-  wingFlipped:  false,
-  wingFlipT:    0,
-  wingFlipping: false,
-  rearWing:     null,   // whole group (kept for reference)
-  rearWingFlap: null,   // top flap mesh — the only thing that rotates
 };
 
 /* ══════════════════════════════════════════════════════════════════
    CAR MANAGEMENT
 ══════════════════════════════════════════════════════════════════ */
-function spawnCar(type) {
+async function spawnCar(type) {
   if (state.carGroup) {
+    debugOverlay.detach();
     scene.remove(state.carGroup);
   }
-  const grp = buildCar(type);
-  state.carGroup = grp;
+  const grp = await buildCar(type);
+  state.carGroup   = grp;
+  state.carMeasure = grp.userData.measure ?? null;
   state.wheels   = {};
   state.brakes   = {};
-  state.rearWing     = null;
-  state.rearWingFlap = null;
   grp.traverse(obj => {
     if (WHEEL_NAMES.includes(obj.name))    state.wheels[obj.name] = obj;
     if (obj.name?.startsWith('brake_'))    state.brakes[obj.name] = obj;
-    if (obj.name === 'rearWing')           state.rearWing = obj;
-    if (obj.name === 'rearWingFlap')       state.rearWingFlap = obj;
   });
   scene.add(grp);
+  const carKey = String(type).toLowerCase();
+  debugOverlay.attach(grp, CAR_MANIFEST[carKey] ?? null, state.carMeasure);
   airflow.setCarType(type);
   cfd.setCarType(type);
-  rain.setCarType(type);
+  rain.setCarType(type, state.carMeasure);
 
-  // Reset wing flip state on car change
-  state.wingFlipped  = false;
-  state.wingFlipping = false;
-  state.wingFlipT    = 0;
-  if (state.rearWingFlap) state.rearWingFlap.rotation.x = 0;
-  airflow.setWingStall(false);
-  cfd.setWingStall(false);
-  const wingBtn = document.getElementById('btn-wing-flip');
-  if (wingBtn) wingBtn.classList.remove('active');
+  // Propagate ground-lift: all effect groups author coords in car-local
+  // space (y=0 at ground-contact plane). Shift them onto the world surface
+  // so blobs/streamlines/rain-spray follow the car's actual ride height.
+  const baseY = grp.userData?.baseY ?? 0;
+  airflow.setBaseY(baseY);
+  cfd.setBaseY(baseY);
+
+  // Refresh orbit target to the current car's cockpit anchor so the
+  // camera pivots around the actual car, not a hardcoded y=0.4.
+  applyOrbitTarget();
 
   // Update badge
   const meta = getCarMeta(type);
@@ -187,7 +188,6 @@ function spawnCar(type) {
 // Stub used if an effect fails to construct, so animate() always runs
 class EffectStub {
   setSpeed() {} setVisible() {} setCarType() {} update() {} dispose() {}
-  setWingStall() {}
 }
 
 let airflow, rain, optimal, cfd;
@@ -200,7 +200,7 @@ catch (e) { console.error('[OptimalWeatherEffect] constructor failed:', e); opti
 try { cfd = new CfdEffect(scene); }
 catch (e) { console.error('[CfdEffect] constructor failed:', e); cfd = new EffectStub(); }
 
-spawnCar('F1');
+spawnCar('F1');   // returns Promise — fire-and-forget; scene renders placeholder until resolved
 
 function syncEffects() {
   const sp = state.speed;
@@ -212,8 +212,6 @@ function syncEffects() {
   rain.setVisible(state.activeEnvs.has('rain'));
   optimal.setVisible(state.activeEnvs.has('optimal'));
   cfd.setVisible(state.activeEnvs.has('cfd'));
-  airflow.setWingStall(state.wingFlipped);
-  cfd.setWingStall(state.wingFlipped);
 
   // Lighting per weather mode — values from scene-config.js
   const w = state.activeEnvs.has('rain')    ? WEATHER.rain
@@ -228,12 +226,34 @@ function syncEffects() {
 /* ══════════════════════════════════════════════════════════════════
    CAMERA MODES
 ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Return a world-space look/pivot point for a named anchor. The measure's
+ * anchors live in car-local space (pre-lift), so we add baseY here to land
+ * on the surface the car actually sits at. Fallback coords match the old
+ * hardcoded values so a fresh (unspawned) camera still frames roughly
+ * where the car will appear.
+ */
+function anchorWorld(name, fallback) {
+  const m = state.carMeasure;
+  const a = m?.anchors?.[name];
+  if (!a) return fallback.clone();
+  const baseY = state.carGroup?.userData?.baseY ?? 0;
+  return new THREE.Vector3(a.x, a.y + baseY, a.z);
+}
+
+function applyOrbitTarget() {
+  // Orbit pivots around the cockpit so the user's attention stays on the driver area.
+  const t = anchorWorld('cockpit', new THREE.Vector3(0, 0.4, 0));
+  orbit.target.copy(t);
+}
+
 const CAM_CONFIGS = {
   orbit: {
     label: 'ORBIT',
     enter() {
       orbit.enabled = true;
-      orbit.target.set(0, 0.4, 0);
+      applyOrbitTarget();
     },
     update(_dt) { /* OrbitControls handles it */ },
   },
@@ -249,12 +269,13 @@ const CAM_CONFIGS = {
       const tSpeed  = 0.08 + (speed / 350) * 0.3; // pan speed
       state.camT   += dt * (state.paused ? 0 : tSpeed) * 0.4;
 
-      // Trackside — fixed low angle, oscillating Z
+      // Trackside — fixed low angle, oscillating Z, looks at cockpit height.
       const t = state.camT;
       const swing = Math.sin(t * 0.6) * 3.5;
       const targetPos = new THREE.Vector3(5.5, 0.6, swing);
       camera.position.lerp(targetPos, 0.02);
-      camera.lookAt(0, 0.5, 0);
+      const look = anchorWorld('cockpit', new THREE.Vector3(0, 0.5, 0));
+      camera.lookAt(look);
     },
   },
 
@@ -263,9 +284,12 @@ const CAM_CONFIGS = {
     enter() { orbit.enabled = false; },
     update(_dt) {
       if (!state.carGroup) return;
-      // Position inside cockpit (above tub centre)
-      const cockpitLocal = new THREE.Vector3(0, 0.55, 0.3);
-      const worldPos     = cockpitLocal.applyMatrix4(state.carGroup.matrixWorld);
+      // Position inside cockpit (above tub centre) — use measured anchor.
+      const a = state.carMeasure?.anchors?.cockpit;
+      const cockpitLocal = a
+        ? new THREE.Vector3(a.x, a.y, a.z)
+        : new THREE.Vector3(0, 0.55, 0.3);
+      const worldPos = cockpitLocal.applyMatrix4(state.carGroup.matrixWorld);
       camera.position.copy(worldPos);
       // Look forward along car's -Z
       const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(state.carGroup.quaternion);
@@ -289,7 +313,8 @@ const CAM_CONFIGS = {
       const y    = 3.5 + Math.sin(t * 0.28) * 1.2;
       const target = new THREE.Vector3(x, y, z);
       camera.position.lerp(target, 0.025);
-      camera.lookAt(0, 0.6, 0);
+      const look = anchorWorld('halo', new THREE.Vector3(0, 0.6, 0));
+      camera.lookAt(look);
     },
   },
 };
@@ -361,9 +386,13 @@ function animateCar(dt) {
     b.material.emissiveIntensity = brakeGlow * brakeGlow * 1.2;
   });
 
-  // ─ Idle vibration
+  // ─ Idle vibration — OFFSET from userData.baseY so we preserve ground contact.
+  //   Overwriting position.y (old bug) dropped the car onto Y=0 and floated/sunk it.
+  const baseY = state.carGroup.userData.baseY ?? state.carGroup.position.y;
   if (speed < 5) {
-    state.carGroup.position.y = Math.sin(t * 28) * 0.003;
+    state.carGroup.position.y = baseY + Math.sin(t * 28) * 0.003;
+  } else {
+    state.carGroup.position.y = baseY;
   }
 
   // ─ Speed-based body roll / aero compression
@@ -371,17 +400,6 @@ function animateCar(dt) {
 
   // ─ Slight forward lean at speed
   state.carGroup.rotation.x = -rpmRatio(speed) * 0.025;
-
-  // ─ Wing flap animation (top DRS flap only)
-  if (state.rearWingFlap && state.wingFlipping) {
-    const FLIP_DURATION = 0.8;
-    state.wingFlipT = Math.min(1, state.wingFlipT + dt / FLIP_DURATION);
-    if (state.wingFlipT >= 1) state.wingFlipping = false;
-    const ease = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-    const target = state.wingFlipped ? Math.PI : 0;
-    const start  = state.wingFlipped ? 0        : Math.PI;
-    state.rearWingFlap.rotation.x = start + (target - start) * ease(state.wingFlipT);
-  }
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -458,7 +476,7 @@ animate();
 
 /* ── Car selection ──────────────────────────────────────────────── */
 document.querySelectorAll('.car-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
+  btn.addEventListener('click', async () => {
     const type = btn.dataset.car;
     if (type === state.carType) return;
     state.carType = type;
@@ -466,7 +484,7 @@ document.querySelectorAll('.car-btn').forEach(btn => {
     document.querySelectorAll('.car-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
 
-    spawnCar(type);
+    await spawnCar(type);
     syncEffects();
   });
 });
@@ -504,17 +522,6 @@ document.querySelectorAll('.env-btn').forEach(btn => {
   });
 });
 
-/* ── Wing Stall button ──────────────────────────────────────────── */
-document.getElementById('btn-wing-flip').addEventListener('click', () => {
-  if (state.wingFlipping) return;
-  state.wingFlipped  = !state.wingFlipped;
-  state.wingFlipT    = 0;
-  state.wingFlipping = true;
-  document.getElementById('btn-wing-flip').classList.toggle('active', state.wingFlipped);
-  if (state.activeEnvs.has('airflow')) airflow.setWingStall(state.wingFlipped);
-  if (state.activeEnvs.has('cfd'))     cfd.setWingStall(state.wingFlipped);
-});
-
 /* ── Camera buttons ─────────────────────────────────────────────── */
 document.querySelectorAll('.cam-btn').forEach(btn => {
   btn.addEventListener('click', () => switchCamera(btn.dataset.cam));
@@ -543,20 +550,12 @@ document.getElementById('reset-btn').addEventListener('click', () => {
 
   // Reset camera
   switchCamera('orbit');
-  orbit.target.set(0, 0.4, 0);
+  applyOrbitTarget();
   camera.position.set(4.5, 2.5, 6);
 
-  // Deactivate all envs (including wing stall)
+  // Deactivate all envs
   state.activeEnvs.clear();
   document.querySelectorAll('.env-btn').forEach(b => b.classList.remove('active'));
-  state.wingFlipped  = false;
-  state.wingFlipping = false;
-  state.wingFlipT    = 0;
-  if (state.rearWingFlap) state.rearWingFlap.rotation.x = 0;
-  airflow.setWingStall(false);
-  cfd.setWingStall(false);
-  const wingBtnReset = document.getElementById('btn-wing-flip');
-  if (wingBtnReset) wingBtnReset.classList.remove('active');
   updateChips();
   syncEffects();
 });

@@ -139,7 +139,6 @@ vi.mock('../airflow-core.js', () => ({
   vortexVelocity:   () => ({ vxi: 0, veta: 0 }),
   sideViewVelocity: () => ({ veta: 1, vy: 0 }),
   traceStreamlinePath: () => [],
-  applyWingStall:   (profile, isStalled = true) => isStalled ? { ...profile } : profile,
 }));
 
 /* ── Scene stub ───────────────────────────────────────────────────── */
@@ -228,6 +227,22 @@ describe('CfdEffect', () => {
     expect(scene._objects).not.toContain(cfd.group);
   });
 
+  it('setBaseY lifts the group position.y so local coords land on ground plane', async () => {
+    const { CfdEffect } = await import('../cfd-effect.js');
+    const cfd = new CfdEffect(makeScene());
+    expect(cfd.group.position.y).toBe(0);
+    cfd.setBaseY(0.283);
+    expect(cfd.group.position.y).toBeCloseTo(0.283, 6);
+  });
+
+  it('setBaseY persists across setCarType', async () => {
+    const { CfdEffect } = await import('../cfd-effect.js');
+    const cfd = new CfdEffect(makeScene());
+    cfd.setBaseY(0.42);
+    cfd.setCarType('F2');
+    expect(cfd.group.position.y).toBeCloseTo(0.42, 6);
+  });
+
   it('update() does not throw when visible', async () => {
     const { CfdEffect } = await import('../cfd-effect.js');
     const cfd = new CfdEffect(makeScene());
@@ -243,16 +258,4 @@ describe('CfdEffect', () => {
     expect(() => cfd.update(0.016, 1.0)).not.toThrow();
   });
 
-  it('setWingStall(true) does not throw', async () => {
-    const { CfdEffect } = await import('../cfd-effect.js');
-    const cfd = new CfdEffect(makeScene());
-    expect(() => cfd.setWingStall(true)).not.toThrow();
-  });
-
-  it('setWingStall(false) does not throw', async () => {
-    const { CfdEffect } = await import('../cfd-effect.js');
-    const cfd = new CfdEffect(makeScene());
-    cfd.setWingStall(true);
-    expect(() => cfd.setWingStall(false)).not.toThrow();
-  });
 });
