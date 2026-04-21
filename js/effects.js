@@ -316,9 +316,29 @@ export class AirflowEffect {
     this._paths           = this._seeds.map(s =>
       traceStreamlinePath(s.seedXi, s.seedEta, STEPS, STEP_SIZE)
     );
+    this._vortexDefs      = this._resolveVortexDefs(profile, this._measure);
     this._buildSmokeParticles();
-    this._buildVortexSpirals(profile.vortexDefs);
+    this._buildVortexSpirals(this._vortexDefs);
     this._buildWakeParticles(profile.wakeCount);
+  }
+
+  /**
+   * Resolve vortex wz from measure anchors by role. Returns a NEW array —
+   * never mutates `profile.vortexDefs`. Roles:
+   *   - 'frontWing' → snap wz to `measure.anchors.frontWing.z` if finite.
+   *   - 'rearWing'  → snap wz to `measure.anchors.rearWing.z`  if finite.
+   *   - 'floor'     → authored wz kept (ground vortices are floor-edge, not wing-tip).
+   */
+  _resolveVortexDefs(profile, measure) {
+    const fwZ = measure?.anchors?.frontWing?.z;
+    const rwZ = measure?.anchors?.rearWing?.z;
+    const hasFw = Number.isFinite(fwZ);
+    const hasRw = Number.isFinite(rwZ);
+    return profile.vortexDefs.map(def => {
+      if (def.role === 'frontWing' && hasFw) return { ...def, wz: fwZ };
+      if (def.role === 'rearWing'  && hasRw) return { ...def, wz: rwZ };
+      return { ...def };
+    });
   }
 
   /* ── Convert potential-flow (xi, eta) + y → world XYZ ── */
@@ -509,8 +529,8 @@ export class AirflowEffect {
       sPos[i * 3 + 2] = w.z + this._smokeJz[i];
 
       // Vortex-coupled drift — bend smoke near wing-tip vortex cores
-      if (this._profile?.vortexDefs) {
-        for (const def of this._profile.vortexDefs) {
+      if (this._vortexDefs) {
+        for (const def of this._vortexDefs) {
           const vxiC = def.wx / this._halfW;
           const vetaC = def.wz / this._halfL;
           const dx = xi - vxiC, de = eta - vetaC;

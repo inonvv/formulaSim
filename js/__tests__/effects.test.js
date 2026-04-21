@@ -344,6 +344,70 @@ describe('AirflowEffect — vortexDefs role tagging', () => {
   });
 });
 
+describe('AirflowEffect — vortex wz resolved from measure anchors', () => {
+  it('F1 with measure: frontWing/rearWing wz snap to anchor.z, floor wz preserved', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', {
+      anchors: {
+        frontWing: { z: -2.297 },
+        rearWing:  { z:  2.412 },
+      },
+    });
+    const defs = airflow._vortexDefs;
+    const fw = defs.filter(d => d.role === 'frontWing');
+    const rw = defs.filter(d => d.role === 'rearWing');
+    const fl = defs.filter(d => d.role === 'floor');
+    expect(fw.length).toBe(2);
+    expect(rw.length).toBe(2);
+    expect(fl.length).toBe(2);
+    for (const d of fw) expect(d.wz).toBeCloseTo(-2.297, 5);
+    for (const d of rw) expect(d.wz).toBeCloseTo( 2.412, 5);
+    // Floor authored wz = 0.50 — must be unchanged by measure.
+    for (const d of fl) expect(d.wz).toBeCloseTo(0.50, 5);
+  });
+
+  it('profile.vortexDefs is NOT mutated — resolution returns a new array', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', {
+      anchors: {
+        frontWing: { z: -2.297 },
+        rearWing:  { z:  2.412 },
+      },
+    });
+    const authored = airflow._profile.vortexDefs;
+    const authoredFw = authored.filter(d => d.role === 'frontWing');
+    const authoredRw = authored.filter(d => d.role === 'rearWing');
+    // Authored F1: frontWing wz = -2.60, rearWing wz = 1.85.
+    for (const d of authoredFw) expect(d.wz).toBeCloseTo(-2.60, 5);
+    for (const d of authoredRw) expect(d.wz).toBeCloseTo( 1.85, 5);
+  });
+
+  it('F2 without measure: authored wz preserved', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F2');
+    const defs = airflow._vortexDefs;
+    const fw = defs.filter(d => d.role === 'frontWing');
+    const rw = defs.filter(d => d.role === 'rearWing');
+    // Authored F2: frontWing wz = -2.36, rearWing wz = 1.70.
+    for (const d of fw) expect(d.wz).toBeCloseTo(-2.36, 5);
+    for (const d of rw) expect(d.wz).toBeCloseTo( 1.70, 5);
+  });
+
+  it('measure without frontWing/rearWing anchors: authored wz preserved', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', { anchors: { halo: { y: 0.373, z: -0.05 } } });
+    const defs = airflow._vortexDefs;
+    const fw = defs.filter(d => d.role === 'frontWing');
+    const rw = defs.filter(d => d.role === 'rearWing');
+    for (const d of fw) expect(d.wz).toBeCloseTo(-2.60, 5);
+    for (const d of rw) expect(d.wz).toBeCloseTo( 1.85, 5);
+  });
+});
+
 describe('AirflowEffect — smoke puff particles', () => {
   it('1. _guideLines is undefined — tube system removed', async () => {
     const { AirflowEffect } = await import('../effects.js');
