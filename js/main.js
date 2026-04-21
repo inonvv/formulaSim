@@ -18,6 +18,7 @@ import { buildTrack }      from './track.js';
 import { AirflowEffect, RainEffect, OptimalWeatherEffect } from './effects.js';
 import { CfdEffect } from './cfd-effect.js';
 import { VentEmitterSystem } from './vent-emitters.js';
+import { buildOccupancy } from './body-sdf.js';
 import { gearFromSpeed, wheelRotationRate, aeroSquishFactor, rpmRatio, lerpSpeed } from './physics.js';
 import {
   BACKGROUND_COLOR, AMBIENT_COLOR, AMBIENT_INTENSITY,
@@ -137,6 +138,7 @@ const state = {
   time:       0,
   carGroup:   null,
   carMeasure: null,       // group.userData.measure snapshot — consumed by effects / overlay
+  bodyOccupancy: null,    // Phase B: binary SDF of GLB body meshes for streamline collision
   wheels:     {},
   brakes:     {},
   camT:       0,          // camera path parameter for trackside/drone
@@ -145,6 +147,56 @@ const state = {
 /* ══════════════════════════════════════════════════════════════════
    CAR MANAGEMENT
 ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Phase B — Build a binary body-occupancy field from the GLB body meshes
+ * of the given car group. Returns null for procedural cars (which don't
+ * carry named collision meshes) so AirflowEffect treats them as before.
+ *
+ * Resolves mesh names via the manifest's anchorSources where possible
+ * (bodyShell, halo, frontWing, rearWing, cockpit/headrest). Mirror and
+ * suspensions have no anchorSource entry today, so we fall back to the
+ * canonical Object_20 / Object_6 node names documented in
+ * docs/f1-bboxes.json — if those are ever renamed in a new GLB the loop
+ * just drops them without throwing.
+ */
+function buildBodyOccupancyFor(grp, carKey) {
+  // Only the F1 hybrid loads a GLB with named body meshes we want to collide
+  // against. Everything else (F2/F3/GT procedurals, or F1 fallback) skips.
+  if (carKey !== 'f1') return null;
+  const manifest = CAR_MANIFEST[carKey];
+  if (!manifest?.anchorSources) return null;
+
+  // Resolve the mesh names we know by semantic role via anchorSources.
+  const wantedNames = new Set();
+  const anchorRoles = ['bodyShell', 'halo', 'frontWing', 'rearWing', 'cockpit'];
+  for (const role of anchorRoles) {
+    const src = manifest.anchorSources[role];
+    if (src?.mesh) wantedNames.add(src.mesh);
+  }
+  // Known body meshes without an anchorSource entry — fallback by node name.
+  // Matches docs/f1-bboxes.json: Object_20 = mirror, Object_6 = suspensions.
+  for (const n of ['Object_20', 'Object_6']) wantedNames.add(n);
+
+  const meshes = [];
+  grp.traverse(obj => {
+    if (obj.isMesh && wantedNames.has(obj.name)) meshes.push(obj);
+  });
+  if (meshes.length === 0) return null;  // GLB didn't load (procedural fallback)
+
+  // Ensure world matrices are up-to-date so extracted triangles are in
+  // world space — the car group was just added to the scene.
+  grp.updateMatrixWorld(true);
+
+  const resolution = { x: 96, y: 40, z: 56 };
+  const bounds     = { min: [-1.2, -0.7, -3.0], max: [+1.2, +1.1, +3.0] };
+  const t0 = performance.now();
+  const occ = buildOccupancy(meshes, { resolution, bounds });
+  const ms = Math.round(performance.now() - t0);
+  console.log(`[body-sdf] built ${resolution.x}x${resolution.y}x${resolution.z} voxels in ${ms}ms (${meshes.length} meshes)`);
+  return occ;
+}
+
 async function spawnCar(type) {
   if (state.carGroup) {
     debugOverlay.detach();
@@ -171,7 +223,14 @@ async function spawnCar(type) {
   scene.add(grp);
   const carKey = String(type).toLowerCase();
   debugOverlay.attach(grp, CAR_MANIFEST[carKey] ?? null, state.carMeasure);
-  airflow.setCarType(type, state.carMeasure);
+
+  // Phase B: binary body-occupancy SDF for streamline / smoke collision.
+  // Only the McLaren F1 GLB has the named body meshes we can collide against;
+  // procedural cars skip SDF and pass `undefined` so AirflowEffect behaves
+  // exactly as before.
+  state.bodyOccupancy = buildBodyOccupancyFor(grp, carKey);
+
+  airflow.setCarType(type, state.carMeasure, state.bodyOccupancy);
   cfd.setCarType(type, state.carMeasure);
   rain.setCarType(type, state.carMeasure);
   optimal.setCarType(type, state.carMeasure);
