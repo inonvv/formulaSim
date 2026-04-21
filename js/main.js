@@ -17,6 +17,7 @@ import { createDebugOverlay } from './debug-overlay.js';
 import { buildTrack }      from './track.js';
 import { AirflowEffect, RainEffect, OptimalWeatherEffect } from './effects.js';
 import { CfdEffect } from './cfd-effect.js';
+import { VentEmitterSystem } from './vent-emitters.js';
 import { gearFromSpeed, wheelRotationRate, aeroSquishFactor, rpmRatio, lerpSpeed } from './physics.js';
 import {
   BACKGROUND_COLOR, AMBIENT_COLOR, AMBIENT_INTENSITY,
@@ -174,6 +175,7 @@ async function spawnCar(type) {
   cfd.setCarType(type, state.carMeasure);
   rain.setCarType(type, state.carMeasure);
   optimal.setCarType(type, state.carMeasure);
+  vents.setCarType(type, state.carMeasure);
 
   // Propagate ground-lift: all effect groups author coords in car-local
   // space (y=0 at ground-contact plane). Shift them onto the world surface
@@ -181,6 +183,7 @@ async function spawnCar(type) {
   const baseY = grp.userData?.baseY ?? 0;
   airflow.setBaseY(baseY);
   cfd.setBaseY(baseY);
+  vents.setBaseY(baseY);
 
   // Refresh orbit target to the current car's cockpit anchor so the
   // camera pivots around the actual car, not a hardcoded y=0.4.
@@ -200,7 +203,7 @@ class EffectStub {
   setSpeed() {} setVisible() {} setCarType(_t, _m) {} setBaseY() {} update() {} dispose() {}
 }
 
-let airflow, rain, optimal, cfd;
+let airflow, rain, optimal, cfd, vents;
 try { airflow = new AirflowEffect(scene); }
 catch (e) { console.error('[AirflowEffect] constructor failed:', e); airflow = new EffectStub(); }
 try { rain = new RainEffect(scene); }
@@ -209,6 +212,8 @@ try { optimal = new OptimalWeatherEffect(scene, renderer); }
 catch (e) { console.error('[OptimalWeatherEffect] constructor failed:', e); optimal = new EffectStub(); }
 try { cfd = new CfdEffect(scene); }
 catch (e) { console.error('[CfdEffect] constructor failed:', e); cfd = new EffectStub(); }
+try { vents = new VentEmitterSystem(scene); }
+catch (e) { console.error('[VentEmitterSystem] constructor failed:', e); vents = new EffectStub(); }
 
 spawnCar('F1');   // returns Promise — fire-and-forget; scene renders placeholder until resolved
 
@@ -218,10 +223,14 @@ function syncEffects() {
   rain.setSpeed(sp);
   optimal.setSpeed(sp);
   cfd.setSpeed(sp);
+  vents.setSpeed(sp);
   airflow.setVisible(state.activeEnvs.has('airflow'));
   rain.setVisible(state.activeEnvs.has('rain'));
   optimal.setVisible(state.activeEnvs.has('optimal'));
   cfd.setVisible(state.activeEnvs.has('cfd'));
+  // Vents are visible whenever the user is viewing the airflow or CFD picture —
+  // the vent stream is part of the flow visualisation, not a standalone env.
+  vents.setVisible(state.activeEnvs.has('airflow') || state.activeEnvs.has('cfd'));
 
   // Lighting per weather mode — values from scene-config.js
   const w = state.activeEnvs.has('rain')    ? WEATHER.rain
@@ -474,6 +483,7 @@ function animate() {
     try { rain.update(dt, state.time); }    catch (e) { console.error('[rain.update]', e); }
     try { optimal.update(dt, state.time); } catch (e) { console.error('[optimal.update]', e); }
     try { cfd.update(dt, state.time); }     catch (e) { console.error('[cfd.update]', e); }
+    try { vents.update(dt); }               catch (e) { console.error('[vents.update]', e); }
   }
 
   // HUD
