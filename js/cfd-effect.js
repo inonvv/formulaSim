@@ -269,6 +269,7 @@ export class CfdEffect {
     this._speedDirty     = true;
     this._lastBuiltSpeed = -1;
     this._baseY          = 0;
+    this._anchors        = null;   // set by setCarType(type, measure)
 
     this._patchMeshes    = [];
     this._blobMeshes     = [];
@@ -292,8 +293,18 @@ export class CfdEffect {
     this.group.position.y = this._baseY;
   }
 
-  setCarType(type) {
-    if (this._type === type) return;
+  setCarType(type, measure) {
+    // Anchors may be supplied alongside the type (preferred). Fall back to
+    // the prior anchors if omitted so external callers that still use the
+    // single-arg form keep working.
+    const newAnchors = (measure && measure.anchors) ? measure.anchors : null;
+    const anchorsChanged = newAnchors && newAnchors !== this._anchors;
+    if (newAnchors) this._anchors = newAnchors;
+
+    // Rebuild when the type changes OR when the anchor set refreshes (so the
+    // initial F1 spawn — same type, but anchors arriving for the first time —
+    // re-anchors blobs to the measured positions instead of authored ones).
+    if (this._type === type && !anchorsChanged) return;
     this._type = type;
     this._disposeAll();
     this._build(type);
@@ -526,6 +537,59 @@ export class CfdEffect {
     }
   }
 
+  /**
+   * Resolve a blob's position from the per-car anchor map when possible,
+   * falling back to the authored [x,y,z] in ZONE_BLOBS.
+   *
+   * The authored values carry meaningful *nudges* (e.g. the stagnation blob
+   * sits AHEAD of the nose tip to show oncoming compression, and the diffuser
+   * blob sits BELOW the floor). When an anchor is available we:
+   *   - replace x (allowing left/right offsets to be honoured verbatim from
+   *     the authored value; anchors are centerline for every current role)
+   *   - replace y with the anchor's y, but NEVER below the authored y
+   *     (the authored y encodes a ground-clearance nudge for diffuser/stag)
+   *   - replace z with the anchor's z
+   *
+   * Role → anchor map:
+   *   cockpit       → cockpit
+   *   rearWing      → rearWing
+   *   fwCenter      → frontWing
+   *   stagnation    → frontWing (slightly ahead in Z — preserved via min-Z)
+   *   diffuser      → floor (synthesised) — Z preserved from authored value
+   *                   because diffuser sits behind bodyShell, not at it
+   */
+  _resolveBlobPos(role, authored) {
+    const a = this._anchors;
+    if (!a) return authored;
+    const [ax, ay, az] = authored;
+    let x = ax, y = ay, z = az;
+
+    const pick = (anchor) => {
+      if (!anchor) return;
+      x = ax;                       // keep authored lateral nudges
+      y = Math.max(ay, anchor.y);   // min-floor on Y to preserve clearance
+      z = anchor.z;
+    };
+
+    if (role === 'cockpit')      pick(a.cockpit);
+    else if (role === 'rearWing') pick(a.rearWing);
+    else if (role === 'fwCenter') pick(a.frontWing);
+    else if (role === 'stagnation') {
+      // nose stagnation sits just ahead of the front wing tip — use frontWing
+      // as the reference but retain the authored Z (further forward).
+      const fw = a.frontWing;
+      if (fw) { y = Math.max(ay, fw.y); /* keep authored x, z */ }
+    }
+    else if (role === 'diffuser') {
+      // floor anchor gives ground-plane Y; the authored Z (well aft of
+      // bodyShell) stays — diffuser is not at the body-center Z.
+      const fl = a.floor;
+      if (fl) { y = Math.min(ay, fl.y); /* authored already below */ }
+    }
+
+    return [x, y, z];
+  }
+
   /* ── Zone blobs ───────────────────────────────────────────────── */
   _buildBlobs(type) {
     const blobs = ZONE_BLOBS[type] || ZONE_BLOBS.F1;
@@ -540,7 +604,8 @@ export class CfdEffect {
         side:        THREE.BackSide,
       });
       const m = new THREE.Mesh(geo, mat);
-      m.position.set(blob.pos[0], blob.pos[1], blob.pos[2]);
+      const [x, y, z] = this._resolveBlobPos(blob.role, blob.pos);
+      m.position.set(x, y, z);
       this.group.add(m);
       this._blobMeshes.push(m);
     }

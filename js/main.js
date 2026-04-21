@@ -162,7 +162,7 @@ async function spawnCar(type) {
   const carKey = String(type).toLowerCase();
   debugOverlay.attach(grp, CAR_MANIFEST[carKey] ?? null, state.carMeasure);
   airflow.setCarType(type);
-  cfd.setCarType(type);
+  cfd.setCarType(type, state.carMeasure);
   rain.setCarType(type, state.carMeasure);
 
   // Propagate ground-lift: all effect groups author coords in car-local

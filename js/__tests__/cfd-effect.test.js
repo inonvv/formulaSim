@@ -258,4 +258,48 @@ describe('CfdEffect', () => {
     expect(() => cfd.update(0.016, 1.0)).not.toThrow();
   });
 
+  it('cockpit + rearWing blobs adopt measured anchor y/z when measure supplied', async () => {
+    const { CfdEffect } = await import('../cfd-effect.js');
+    const cfd = new CfdEffect(makeScene());
+
+    // Measured anchors from the McLaren GLB (synthetic values for the test):
+    //   cockpit at y=0.62, z=-0.10  (authored default: y=0.52, z=-0.45)
+    //   rearWing at y=1.08, z=+2.41 (authored default: y=0.98, z=+1.95)
+    const measure = {
+      anchors: {
+        cockpit:   { x: 0, y: 0.62, z: -0.10 },
+        rearWing:  { x: 0, y: 1.08, z:  2.41 },
+        frontWing: { x: 0, y: 0.04, z: -2.50 },
+        floor:     { x: 0, y: 0.02, z:  0.00 },
+      },
+    };
+    // Same type + new measure should still trigger rebuild (anchorsChanged path)
+    cfd.setCarType('F1', measure);
+
+    const blobs = cfd._blobMeshes;
+    // Find by authored signature — cockpit role has color 0xff6600
+    const cockpitBlob = blobs.find(m => m.material.color === 0xff6600);
+    const rearWingBlob = blobs.find(m =>
+      m.position && Math.abs(m.position.z - 2.41) < 0.01
+    );
+
+    expect(cockpitBlob).toBeDefined();
+    expect(cockpitBlob.position.z).toBeCloseTo(-0.10, 5);
+    // Y uses min-floor of authored (0.52) vs anchor (0.62) → max = 0.62
+    expect(cockpitBlob.position.y).toBeCloseTo(0.62, 5);
+
+    expect(rearWingBlob).toBeDefined();
+    expect(rearWingBlob.position.y).toBeCloseTo(1.08, 5);
+  });
+
+  it('blobs use authored positions when no measure is supplied', async () => {
+    const { CfdEffect } = await import('../cfd-effect.js');
+    const cfd = new CfdEffect(makeScene());
+    // Without measure, F1 cockpit blob stays at authored z=-0.45
+    const cockpitBlob = cfd._blobMeshes.find(m => m.material.color === 0xff6600);
+    expect(cockpitBlob).toBeDefined();
+    expect(cockpitBlob.position.z).toBeCloseTo(-0.45, 5);
+    expect(cockpitBlob.position.y).toBeCloseTo(0.52, 5);
+  });
+
 });
