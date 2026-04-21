@@ -471,6 +471,26 @@ describe('alignment — McLaren vent anchors (Phase A)', () => {
   });
 });
 
+describe('alignment — McLaren SDF halo clip regression (Phase B3)', () => {
+  it('setCarType accepts bodyOccupancy as 3rd arg and stores it', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const occupancy = {
+      sample:   () => 0,
+      gradient: () => ({ x: 0, y: 0, z: 0 }),
+    };
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', MCLAREN_MEASURE, occupancy);
+    expect(airflow._occupancy).toBe(occupancy);
+  });
+
+  it('setCarType(.., .., undefined) leaves occupancy null (procedural fallback path)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', MCLAREN_MEASURE);
+    expect(airflow._occupancy).toBe(null);
+  });
+});
+
 describe('alignment — McLaren stream peak hugs halo (±0.05 m of halo + 0.10)', () => {
   it('peak Y within 0.05 m of halo.y + 0.10 in local and world space', async () => {
     const { AirflowEffect } = await import('../effects.js');

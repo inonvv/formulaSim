@@ -253,6 +253,54 @@ describe('traceStreamlinePath — occupancy opts-bag (Phase B2)', () => {
   });
 });
 
+describe('traceStreamlinePath — McLaren halo clip regression (Phase B3)', () => {
+  // A test occupancy "body" placed DIRECTLY in the natural streamline path.
+  // Seed (1.8, -6) traces along the +Z side of the unit cylinder at roughly
+  // xi≈1.8 → world X≈1.62. We plant an occupancy sitting at world X∈[1.2,2.0]
+  // in the Z-range the streamline must cross, so the baseline-no-opts path
+  // provably intersects it. WITH opts, the integrator must detect and avoid.
+  const halfW = 0.90, halfL = 2.45;
+  const obstacle = {
+    min: { x: 1.2, y: -1, z: -1 },
+    max: { x: 2.0, y:  1, z:  1 },
+  };
+  const occupancy = {
+    sample: (x, y, z) => (
+      x >= obstacle.min.x && x <= obstacle.max.x &&
+      y >= obstacle.min.y && y <= obstacle.max.y &&
+      z >= obstacle.min.z && z <= obstacle.max.z
+    ) ? 1 : 0,
+    gradient: (x, y, z) => {
+      // Point outward along X (the streamline approaches from -Z and Z=0 lies
+      // inside the obstacle — pushing along Y deflects the least, but the
+      // sensible exit is +X since the freestream is +Z and the obstacle sits
+      // at x≈1.5 in the outer-flow region).
+      return { x: 1, y: 0, z: 0 };
+    },
+  };
+  const toWorld = (xi, eta) => ({ x: xi * halfW, y: 0.0, z: eta * halfL });
+
+  it('WITHOUT occupancy — baseline streamline crosses the obstacle region', () => {
+    const path = traceStreamlinePath(1.8, -6, 300, 0.08);
+    let crossings = 0;
+    for (const pt of path) {
+      const w = toWorld(pt.xi, pt.eta);
+      if (occupancy.sample(w.x, w.y, w.z) > 0.5) crossings++;
+    }
+    expect(crossings).toBeGreaterThan(0);
+  });
+
+  it('WITH occupancy — same streamline never lands inside the obstacle', () => {
+    const path = traceStreamlinePath(1.8, -6, 300, 0.08, { occupancy, toWorld });
+    let crossings = 0;
+    for (const pt of path) {
+      const w = toWorld(pt.xi, pt.eta);
+      if (occupancy.sample(w.x, w.y, w.z) > 0.5) crossings++;
+    }
+    expect(crossings).toBe(0);
+  });
+});
+
 describe('vortexVelocity', () => {
   it('returns {0,0} at the vortex centre', () => {
     const v = vortexVelocity(1, 2, 1, 2, 1.0, 0.1);

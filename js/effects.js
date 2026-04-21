@@ -272,14 +272,17 @@ export class AirflowEffect {
     this.group.position.y = this._baseY;
   }
 
-  setCarType(type, measure) {
+  setCarType(type, measure, bodyOccupancy) {
     // Detect whether we need to rebuild: either a type change, or the same
     // type with a new measure (e.g. a GLB-derived measure replacing the
-    // procedural fallback used by the constructor's initial _build).
+    // procedural fallback used by the constructor's initial _build), or a
+    // new body-occupancy field arriving after the GLB loaded.
     const measureChanged = (measure || null) !== (this._measure || null);
     const typeChanged    = this._type !== type;
-    this._measure = measure || null;
-    if (!typeChanged && !measureChanged) return;
+    const occChanged     = (bodyOccupancy || null) !== (this._occupancy || null);
+    this._measure    = measure       || null;
+    this._occupancy  = bodyOccupancy || null;
+    if (!typeChanged && !measureChanged && !occChanged) return;
     this._type = type;
     this._disposeAll();
     this._build(getProfile(type), this._measure);
@@ -313,9 +316,16 @@ export class AirflowEffect {
     const scaledSideHeights = _rescaleSideHeights(profile, this._measure);
     this._scaledSideHeights = scaledSideHeights;
     this._seeds           = _buildSeedList(profile, scaledSideHeights);
-    this._paths           = this._seeds.map(s =>
-      traceStreamlinePath(s.seedXi, s.seedEta, STEPS, STEP_SIZE)
-    );
+    // When a body-occupancy field is attached, pass it per-path with a
+    // toWorld closure that lifts the seed's Y into the lookup (xi→X, eta→Z).
+    const occ = this._occupancy || null;
+    const halfW = this._halfW, halfL = this._halfL;
+    this._paths = this._seeds.map(s => {
+      const opts = occ
+        ? { occupancy: occ, toWorld: (xi, eta) => ({ x: xi * halfW, y: s.y, z: eta * halfL }) }
+        : {};
+      return traceStreamlinePath(s.seedXi, s.seedEta, STEPS, STEP_SIZE, opts);
+    });
     this._vortexDefs      = this._resolveVortexDefs(profile, this._measure);
     this._buildSmokeParticles();
     this._buildVortexSpirals(this._vortexDefs);
@@ -524,6 +534,13 @@ export class AirflowEffect {
       this._smokeJz[i] = this._smokeJz[i] * jDecay + (Math.random() * 2 - 1) * jitterAmp * 0.7;
 
       const w = this._toWorld(xi, eta, y0 + this._smokeYAcc[i]);
+      // Body-occupancy collision — if the particle lands inside the body,
+      // nudge its path parameter back one step so the next frame retries
+      // upstream. Minimal/cheap: no per-particle SDF gradient descent.
+      if (this._occupancy && this._occupancy.sample(w.x, w.y, w.z) > 0.5) {
+        this._smokeT[i] = Math.max(0, this._smokeT[i] - 1);
+        continue;
+      }
       sPos[i * 3]     = w.x + this._smokeJx[i];
       sPos[i * 3 + 1] = w.y + this._smokeJy[i];
       sPos[i * 3 + 2] = w.z + this._smokeJz[i];
