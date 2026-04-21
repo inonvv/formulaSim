@@ -388,14 +388,10 @@ export async function buildF1Hybrid({ color }) {
   grp.add(loaded.scene);
   applyLivery(loaded.liveryMeshes, color);
 
-  const matTyre = makeMat(0x0d0d0d, 0.92, 0.04);
-  const matHub  = makeMat(0xe0e0e0, 0.08, 1.00);
-
   // Derive wheel radius & positions from GLB tire bboxes (measured pre-strip by car-loader).
   // Fallback to procedural F1 defaults only if loader didn't provide a measurement.
   const gm = loaded.glbMeasure;
   const wR = gm ? gm.wheelRadius : 0.345;
-  const wW = 0.340;
   const wheelY = gm ? (gm.groundContactY + wR) : -0.04;
   const fX = gm ? gm.frontAxleX : 0.82;
   const rX = gm ? gm.rearAxleX  : 0.80;
@@ -407,10 +403,23 @@ export async function buildF1Hybrid({ color }) {
     wRL: [-rX, wheelY, rZ],
     wRR: [ rX, wheelY, rZ],
   };
-  Object.entries(wPos).forEach(([n, [x, y, z]]) => {
-    const w = wheel(wR, wW, matHub, matTyre, n);
-    w.name = n; w.position.set(x, y, z); grp.add(w);
-  });
+
+  // GLB-success path: attach the real split wheel groups instead of procedural.
+  // Fallback path (no wheelsRoot): build procedural cylinder wheels at the
+  // same measured axle points — this covers the case where GLB loaded but
+  // split failed OR wheelSources was omitted from the manifest.
+  if (loaded.wheelsRoot) {
+    grp.add(loaded.wheelsRoot);
+    grp.userData.wheels = { ...loaded.wheelsRoot.children.reduce((o, g) => { o[g.name] = g; return o; }, {}) };
+  } else {
+    const matTyre = makeMat(0x0d0d0d, 0.92, 0.04);
+    const matHub  = makeMat(0xe0e0e0, 0.08, 1.00);
+    const wW = 0.340;
+    Object.entries(wPos).forEach(([n, [x, y, z]]) => {
+      const w = wheel(wR, wW, matHub, matTyre, n);
+      w.name = n; w.position.set(x, y, z); grp.add(w);
+    });
+  }
 
   const measure = measureFromWheels(wPos, wR);
   // Forward GLB-measured per-feature anchors to consumers. Keys: cockpit,

@@ -527,6 +527,60 @@ describe('buildF1Hybrid (Phase 4)', () => {
     expect(livMesh.material).toBe(cloned);
     expect(colorCopied).toBe(true);
   });
+
+  /* ── Phase 3: wheelsRoot integration ─────────────────────────── */
+  it('H10. GLB path — wheelsRoot attached to grp; procedural wFL suppressed', async () => {
+    // Fake wheelsRoot with 4 corner groups
+    const makeCorner = (name, x, y, z) => ({
+      name, position: { x, y, z },
+      children: [], traverse(fn) { fn(this); },
+    });
+    const FL = makeCorner('FL', -0.82, 0.44, -1.47);
+    const FR = makeCorner('FR',  0.82, 0.44, -1.47);
+    const RL = makeCorner('RL', -0.80, 0.44,  2.10);
+    const RR = makeCorner('RR',  0.80, 0.44,  2.10);
+    const wheelsRoot = {
+      name: 'wheelsRoot',
+      children: [FL, FR, RL, RR],
+      traverse(fn) { fn(this); this.children.forEach(c => c.traverse(fn)); },
+    };
+    _loaderManifestResult = {
+      scene: fakeScene([]), liveryMeshes: [],
+      glbMeasure: { groundContactY: -0.6232, frontAxleZ: -1.47, rearAxleZ: 2.10, frontAxleX: 0.82, rearAxleX: 0.80, wheelRadius: 0.440 },
+      wheelsRoot,
+    };
+    const { buildF1Hybrid } = await import('../cars.js');
+    const grp = await buildF1Hybrid({ color: 0xe8132a });
+    // wheelsRoot is a child of grp
+    expect(grp.children).toContain(wheelsRoot);
+    // userData.wheels exposes 4 corner Groups keyed by name
+    expect(grp.userData.wheels).toBeDefined();
+    expect(grp.userData.wheels.FL).toBe(FL);
+    expect(grp.userData.wheels.FR).toBe(FR);
+    expect(grp.userData.wheels.RL).toBe(RL);
+    expect(grp.userData.wheels.RR).toBe(RR);
+    // Procedural wheel names must NOT appear on the GLB-wheel path.
+    const names = new Set();
+    grp.traverse(o => { if (o.name) names.add(o.name); });
+    expect(names.has('wFL')).toBe(false);
+    expect(names.has('wRR')).toBe(false);
+  });
+
+  it('H11. GLB path without wheelsRoot — procedural wheels still build (legacy fallback)', async () => {
+    // Loader resolves without wheelsRoot (e.g. GLB loaded but split skipped).
+    _loaderManifestResult = {
+      scene: fakeScene([]), liveryMeshes: [],
+      glbMeasure: { groundContactY: -0.6232, frontAxleZ: -1.47, rearAxleZ: 2.10, frontAxleX: 0.82, rearAxleX: 0.80, wheelRadius: 0.440 },
+      // wheelsRoot: undefined
+    };
+    const { buildF1Hybrid } = await import('../cars.js');
+    const grp = await buildF1Hybrid({ color: 0xe8132a });
+    expect(grp.userData.wheels).toBeUndefined();
+    const names = new Set();
+    grp.traverse(o => { if (o.name) names.add(o.name); });
+    expect(names.has('wFL')).toBe(true);
+    expect(names.has('wFR')).toBe(true);
+  });
 });
 
 /* ── Phase 5: GT is procedural-only (buildGTHybrid removed) ─────── */
