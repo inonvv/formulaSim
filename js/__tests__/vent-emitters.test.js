@@ -129,7 +129,7 @@ describe('VentEmitterSystem', () => {
   });
 
   it('V3. inlet particle position starts AHEAD of anchor along +direction, converges as phase advances', async () => {
-    const { VentEmitterSystem } = await import('../vent-emitters.js');
+    const { VentEmitterSystem, INLET_APPROACH_M } = await import('../vent-emitters.js');
     const ves = new VentEmitterSystem(makeScene());
     ves.setVisible(true);
     ves.setCarType('F1', makeMeasure());
@@ -141,7 +141,7 @@ describe('VentEmitterSystem', () => {
     }
     expect(i).toBeGreaterThanOrEqual(0);
 
-    // Force phase = 0 and check pos = anchor + dir × 1.5 m
+    // Force phase = 0 and check pos = anchor + dir × INLET_APPROACH_M
     ves._phase[i] = 0;
     ves._writeInletPos(i);
     const em = ves._emitters[0];
@@ -150,9 +150,12 @@ describe('VentEmitterSystem', () => {
       y: ves._pos[i * 3 + 1],
       z: ves._pos[i * 3 + 2],
     };
-    expect(pAhead.x).toBeCloseTo(em.pos.x + em.dir.x * 1.5, 5);
-    expect(pAhead.y).toBeCloseTo(em.pos.y + em.dir.y * 1.5, 5);
-    expect(pAhead.z).toBeCloseTo(em.pos.z + em.dir.z * 1.5, 5);
+    expect(pAhead.x).toBeCloseTo(em.pos.x + em.dir.x * INLET_APPROACH_M, 5);
+    expect(pAhead.y).toBeCloseTo(em.pos.y + em.dir.y * INLET_APPROACH_M, 5);
+    expect(pAhead.z).toBeCloseTo(em.pos.z + em.dir.z * INLET_APPROACH_M, 5);
+    // Tuning guard: spawn distance must stay below 1 m or the stream reads as
+    // free-floating fog ahead of the car instead of duct intake.
+    expect(INLET_APPROACH_M).toBeLessThan(1);
 
     // Advance phase to 1 → particle lands AT the anchor
     ves._phase[i] = 1;
@@ -222,6 +225,36 @@ describe('VentEmitterSystem', () => {
     expect(ves.group.position.y).toBe(0);
     ves.setBaseY(0.283);
     expect(ves.group.position.y).toBeCloseTo(0.283, 6);
+  });
+
+  it('V6b. brake-duct anchors are filtered out (visual tuning)', async () => {
+    const { VentEmitterSystem } = await import('../vent-emitters.js');
+    const ves = new VentEmitterSystem(makeScene());
+    const m = makeMeasure();
+    m.anchors.frontBrakeDuctL = {
+      x: -0.45, y: 0.20, z: -2.20,
+      direction: { x: 0.1, y: 0, z: -1 },
+      role: 'inlet',
+    };
+    m.anchors.frontBrakeDuctR = {
+      x:  0.45, y: 0.20, z: -2.20,
+      direction: { x: -0.1, y: 0, z: -1 },
+      role: 'inlet',
+    };
+    m.anchors.rearBrakeDuctL = {
+      x: -0.90, y: 0.30, z: 2.00,
+      direction: { x: 0.1, y: 0, z: -1 },
+      role: 'inlet',
+    };
+    ves.setCarType('F1', m);
+    const keys = ves._emitters.map(e => e.key);
+    expect(keys).not.toContain('frontBrakeDuctL');
+    expect(keys).not.toContain('frontBrakeDuctR');
+    expect(keys).not.toContain('rearBrakeDuctL');
+    // Hero vents survive.
+    expect(keys).toContain('sidepodInletL');
+    expect(keys).toContain('sidepodInletR');
+    expect(keys).toContain('exhaustPipe');
   });
 
   it('V6. mirrored-anchor inlets have x = -source.x and direction.x = -source.direction.x', async () => {

@@ -295,6 +295,25 @@ describe('AirflowEffect', () => {
     const expected = measure.anchors.halo.y + 0.10;
     expect(Math.abs(peakY - expected)).toBeLessThanOrEqual(0.05);
   });
+
+  it('nose seed band is created at frontWing.y + 0.10 when measure carries frontWing anchor', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    const measure = { anchors: { frontWing: { x: 0, y: 0.047, z: -2.297 } } };
+    airflow.setCarType('F1', measure);
+    const nose = airflow._seeds.filter(s => s.group === 'nose');
+    expect(nose.length).toBe(5);
+    const noseY = measure.anchors.frontWing.y + 0.10;
+    for (const s of nose) expect(s.y).toBeCloseTo(noseY, 6);
+  });
+
+  it('nose seed band is omitted when measure lacks frontWing anchor (procedural variant)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1');   // no measure
+    const nose = airflow._seeds.filter(s => s.group === 'nose');
+    expect(nose.length).toBe(0);
+  });
 });
 
 describe('AirflowEffect — vortexDefs role tagging', () => {

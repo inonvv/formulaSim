@@ -25,7 +25,12 @@ import * as THREE from 'three';
 
 const VENT_CAP  = 40;    // particles per emitter
 const N_VENTS   = 10;    // max emitters per car (matches manifest roster)
-const INLET_APPROACH_M = 1.5;   // how far ahead of the vent a particle spawns
+export const INLET_APPROACH_M = 0.5;   // how far ahead of the vent a particle spawns
+
+// Brake ducts are tiny real-world features; emitting 80 particles converging
+// on them reads as fog ahead of the car rather than "air threading into a
+// duct". Skip them — keep only the hero inlets (sidepods, airbox) and outlets.
+const HIDDEN_VENT_RE = /BrakeDuct/i;
 
 /* ── Inlet / outlet colour constants (additive billboards) ── */
 const COLOR_INLET  = { r: 0x66 / 255, g: 0xcc / 255, b: 0xff / 255 };
@@ -124,6 +129,7 @@ export class VentEmitterSystem {
     for (const [key, a] of Object.entries(anchors)) {
       if (!a || !a.role) continue;
       if (!a.direction) continue;
+      if (HIDDEN_VENT_RE.test(key)) continue;
       if (emitters.length >= N_VENTS) break;
       emitters.push({
         key,

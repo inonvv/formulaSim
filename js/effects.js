@@ -224,12 +224,22 @@ function _rescaleSideHeights(profile, measure) {
   return authored.map(y => y * k);
 }
 
-function _buildSeedList(p, sideHeightsOverride) {
+function _buildSeedList(p, sideHeightsOverride, measure) {
   const seeds = [];
   // Top-plane sweep (plan view, multiple heights for 3-D coverage)
   for (const xi of p.topSeeds) {
     seeds.push({ seedXi: xi,   seedEta: -8, y: 0.38,  group: 'top',   halfH: p.halfH });
     seeds.push({ seedXi: xi,   seedEta: -8, y: 0.70,  group: 'top',   halfH: p.halfH });
+  }
+  // Nose / front-wing top band — paints airflow hugging the wing top + nose.
+  // Only when the anchor is present (GLB measure). 5 streams at wing-top
+  // height cover the region Phase C sinks would otherwise leave bare.
+  const fwY = measure?.anchors?.frontWing?.y;
+  if (Number.isFinite(fwY)) {
+    const noseY = fwY + 0.10;
+    for (const xi of [-0.6, -0.3, 0, 0.3, 0.6]) {
+      seeds.push({ seedXi: xi, seedEta: -8, y: noseY, group: 'nose', halfH: p.halfH });
+    }
   }
   // Side-height sweep (lateral slice at x≈0)
   const sideHeights = sideHeightsOverride || p.sideHeights;
@@ -335,7 +345,7 @@ export class AirflowEffect {
     // halo-hugging.
     const scaledSideHeights = _rescaleSideHeights(profile, this._measure);
     this._scaledSideHeights = scaledSideHeights;
-    this._seeds           = _buildSeedList(profile, scaledSideHeights);
+    this._seeds           = _buildSeedList(profile, scaledSideHeights, this._measure);
     // Phase C: derive analytical flow modifiers from role-tagged anchors.
     // Procedural fallbacks (no measure.anchors) get an empty list ⇒ the
     // potential-flow baseline is preserved.
