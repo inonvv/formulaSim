@@ -297,6 +297,53 @@ describe('AirflowEffect', () => {
   });
 });
 
+describe('AirflowEffect — vortexDefs role tagging', () => {
+  it('F1 vortexDefs tag roles frontWing / rearWing / floor with expected counts', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1');
+    const defs = airflow._profile.vortexDefs;
+    const frontWing = defs.filter(d => d.role === 'frontWing');
+    const rearWing  = defs.filter(d => d.role === 'rearWing');
+    const floor     = defs.filter(d => d.role === 'floor');
+    expect(frontWing.length).toBe(2);
+    expect(rearWing.length).toBe(2);
+    expect(floor.length).toBe(2);
+    // Every def must be tagged (no untagged leftovers).
+    expect(defs.every(d => d.role === 'frontWing' || d.role === 'rearWing' || d.role === 'floor'))
+      .toBe(true);
+  });
+
+  it('F2 vortexDefs tag roles frontWing / rearWing (no floor)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F2');
+    const defs = airflow._profile.vortexDefs;
+    expect(defs.filter(d => d.role === 'frontWing').length).toBe(2);
+    expect(defs.filter(d => d.role === 'rearWing').length).toBe(2);
+    expect(defs.filter(d => d.role === 'floor').length).toBe(0);
+    expect(defs.every(d => d.role)).toBe(true);
+  });
+
+  it('F3 vortexDefs tagged rearWing', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F3');
+    const defs = airflow._profile.vortexDefs;
+    expect(defs.length).toBe(2);
+    expect(defs.every(d => d.role === 'rearWing')).toBe(true);
+  });
+
+  it('GT vortexDefs tagged rearWing', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('GT');
+    const defs = airflow._profile.vortexDefs;
+    expect(defs.length).toBe(4);
+    expect(defs.every(d => d.role === 'rearWing')).toBe(true);
+  });
+});
+
 describe('AirflowEffect — smoke puff particles', () => {
   it('1. _guideLines is undefined — tube system removed', async () => {
     const { AirflowEffect } = await import('../effects.js');
