@@ -408,6 +408,83 @@ describe('AirflowEffect — vortex wz resolved from measure anchors', () => {
   });
 });
 
+describe('AirflowEffect — Phase C modifiers from role-tagged anchors', () => {
+  // Synthetic McLaren-style measure with role-tagged vent anchors +
+  // frontWing/rearWing. Values roughly match docs/f1-bboxes.json.
+  const mclarenMeasure = {
+    anchors: {
+      frontWing:       { x: 0,      y: 0.04,  z: -2.30 },
+      rearWing:        { x: 0,      y: 0.454, z:  2.412 },
+      sidepodInletL:   { x: -0.7,   y: 0.22,  z: -0.50, role: 'inlet'  },
+      sidepodInletR:   { x:  0.7,   y: 0.22,  z: -0.50, role: 'inlet'  },
+      sidepodExhaustL: { x: -0.6,   y: 0.27,  z:  1.33, role: 'outlet' },
+      sidepodExhaustR: { x:  0.6,   y: 0.27,  z:  1.33, role: 'outlet' },
+      airboxIntake:    { x: 0,      y: 0.673, z: -0.25, role: 'inlet'  },
+      exhaustPipe:     { x: 0,      y: 0.154, z:  2.26, role: 'outlet' },
+      frontBrakeDuctL: { x: -0.45,  y: 0.19,  z: -2.20, role: 'inlet'  },
+      frontBrakeDuctR: { x:  0.45,  y: 0.19,  z: -2.20, role: 'inlet'  },
+      rearBrakeDuctL:  { x: -0.90,  y: 0.754, z:  2.01, role: 'inlet'  },
+      rearBrakeDuctR:  { x:  0.90,  y: 0.754, z:  2.01, role: 'inlet'  },
+    },
+  };
+
+  it('populates _modifiers from role-tagged anchors (≥ 6 entries)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', mclarenMeasure);
+    expect(Array.isArray(airflow._modifiers)).toBe(true);
+    expect(airflow._modifiers.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('modifier mix includes expected sidepod inlets, exhausts, airbox, exhaust pipe, wing dipoles', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', mclarenMeasure);
+    const mods = airflow._modifiers;
+    const sinks  = mods.filter(m => m.type === 'sink');
+    const srcs   = mods.filter(m => m.type === 'source');
+    const vorts  = mods.filter(m => m.type === 'vortex');
+
+    // Sink count = 2 sidepod inlets + airbox + 2 front brake ducts + 2 rear brake ducts = 7
+    expect(sinks.length).toBeGreaterThanOrEqual(5);
+    // Source count = 2 sidepod exhausts + exhaust pipe = 3
+    expect(srcs.length).toBeGreaterThanOrEqual(3);
+    // Vortex dipoles: frontWing + rearWing
+    expect(vorts.length).toBe(2);
+  });
+
+  it('no _modifiers entries when no measure supplied', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1');   // no measure
+    expect(airflow._modifiers).toEqual([]);
+  });
+
+  it('getModifiers() returns the same array reference as _modifiers', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', mclarenMeasure);
+    const mods = airflow.getModifiers();
+    expect(mods).toBe(airflow._modifiers);
+    expect(mods.length).toBeGreaterThan(0);
+  });
+
+  it('modifier (xi, eta) coordinates divide anchor (x, z) by (halfW, halfL)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', mclarenMeasure);
+    const halfW = airflow._halfW;
+    const halfL = airflow._halfL;
+    // Sidepod inlet L: anchor x=-0.7, z=-0.50 → xi=-0.7/halfW, eta=-0.50/halfL
+    const sinkL = airflow._modifiers.find(m =>
+      m.type === 'sink' && Math.abs(m.x - (-0.7 / halfW)) < 1e-6
+    );
+    expect(sinkL).toBeDefined();
+    expect(sinkL.e).toBeCloseTo(-0.50 / halfL, 6);
+    expect(sinkL.strength).toBeCloseTo(0.25, 6);
+  });
+});
+
 describe('AirflowEffect — smoke puff particles', () => {
   it('1. _guideLines is undefined — tube system removed', async () => {
     const { AirflowEffect } = await import('../effects.js');

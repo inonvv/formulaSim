@@ -9,6 +9,26 @@ import {
   cpToColor, vortexVelocity, sideViewVelocity,
 } from './airflow-core.js';
 
+/* ── Phase C modifier strengths (VISUAL approximations, not CFD-calibrated) ── *
+ * Each vent/wing in AirflowEffect._buildModifiers emits an entry into the
+ * modifier table consumed by sumVelocity. Numeric values match the table in
+ * docs/plans/calm-petting-willow.md §Phase C3.
+ * -------------------------------------------------------------------------- */
+const MOD_STR = Object.freeze({
+  SIDEPOD_INLET:    { strength: 0.25, rc: 0.12 },
+  SIDEPOD_EXHAUST:  { strength: 0.20, rc: 0.12 },
+  AIRBOX_INTAKE:    { strength: 0.15, rc: 0.10 },
+  EXHAUST_PIPE:     { strength: 0.30, rc: 0.12 },
+  BRAKE_DUCT:       { strength: 0.15, rc: 0.10 },
+  FRONT_WING_VORT:  { gamma:    0.6,  rc: 0.12 },
+  REAR_WING_VORT:   { gamma:    1.0,  rc: 0.12 },
+});
+
+/* Fallback (xi, eta) scaling when a profile lacks halfW/halfL. Matches the
+ * default basis used by traceStreamlinePath and CAR_AERO.F1. */
+const DEFAULT_HALF_L = 2.4;
+const DEFAULT_HALF_W = 0.9;
+
 /* ── Utility ───────────────────────────────────────────────────── */
 function rnd(min, max) { return min + Math.random() * (max - min); }
 
@@ -316,14 +336,22 @@ export class AirflowEffect {
     const scaledSideHeights = _rescaleSideHeights(profile, this._measure);
     this._scaledSideHeights = scaledSideHeights;
     this._seeds           = _buildSeedList(profile, scaledSideHeights);
+    // Phase C: derive analytical flow modifiers from role-tagged anchors.
+    // Procedural fallbacks (no measure.anchors) get an empty list ⇒ the
+    // potential-flow baseline is preserved.
+    this._modifiers       = this._buildModifiers(profile, this._measure);
     // When a body-occupancy field is attached, pass it per-path with a
     // toWorld closure that lifts the seed's Y into the lookup (xi→X, eta→Z).
     const occ = this._occupancy || null;
     const halfW = this._halfW, halfL = this._halfL;
+    const mods = this._modifiers;
     this._paths = this._seeds.map(s => {
-      const opts = occ
-        ? { occupancy: occ, toWorld: (xi, eta) => ({ x: xi * halfW, y: s.y, z: eta * halfL }) }
-        : {};
+      const opts = {};
+      if (occ) {
+        opts.occupancy = occ;
+        opts.toWorld = (xi, eta) => ({ x: xi * halfW, y: s.y, z: eta * halfL });
+      }
+      if (mods && mods.length > 0) opts.modifiers = mods;
       return traceStreamlinePath(s.seedXi, s.seedEta, STEPS, STEP_SIZE, opts);
     });
     this._vortexDefs      = this._resolveVortexDefs(profile, this._measure);
@@ -349,6 +377,83 @@ export class AirflowEffect {
       if (def.role === 'rearWing'  && hasRw) return { ...def, wz: rwZ };
       return { ...def };
     });
+  }
+
+  /**
+   * Phase C: build the analytical-modifier table from role-tagged anchors.
+   * Returns a NEW array of `{type, x, e, ...}` entries in the dimensionless
+   * (xi, eta) plane used by `sumVelocity`:
+   *   - xi  = car-local X / halfW   (lateral)
+   *   - eta = car-local Z / halfL   (longitudinal, front→back)
+   *
+   * Source of truth: `measure.anchors`. Each entry with `role: 'inlet'` or
+   * `'outlet'` is converted to a sink/source; the wing anchors `frontWing`
+   * and `rearWing` become vortex (dipole-surrogate) entries when present.
+   *
+   * All strengths are VISUAL approximations (see MOD_STR). Empty list when
+   * no anchors are supplied — procedural cars fall through to the baseline
+   * potential flow.
+   */
+  _buildModifiers(profile, measure) {
+    const out = [];
+    if (!measure?.anchors) return out;
+    const halfL = profile.halfL || DEFAULT_HALF_L;
+    const halfW = profile.halfW || DEFAULT_HALF_W;
+    const anchors = measure.anchors;
+
+    const add = (anchor, type, cfg) => {
+      if (!anchor) return;
+      const entry = {
+        type,
+        x: anchor.x / halfW,
+        e: anchor.z / halfL,
+        rc: cfg.rc,
+      };
+      if (type === 'vortex') entry.gamma    = cfg.gamma;
+      else                    entry.strength = cfg.strength;
+      out.push(entry);
+    };
+
+    // Iterate role-tagged vent anchors. Keyed lookup by known anchor names
+    // keeps the mapping explicit (no fuzzy name-matching).
+    const ventTable = [
+      ['sidepodInletL',   'sink',   MOD_STR.SIDEPOD_INLET,   'inlet'  ],
+      ['sidepodInletR',   'sink',   MOD_STR.SIDEPOD_INLET,   'inlet'  ],
+      ['sidepodExhaustL', 'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet' ],
+      ['sidepodExhaustR', 'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet' ],
+      ['airboxIntake',    'sink',   MOD_STR.AIRBOX_INTAKE,   'inlet'  ],
+      ['exhaustPipe',     'source', MOD_STR.EXHAUST_PIPE,    'outlet' ],
+      ['frontBrakeDuctL', 'sink',   MOD_STR.BRAKE_DUCT,      'inlet'  ],
+      ['frontBrakeDuctR', 'sink',   MOD_STR.BRAKE_DUCT,      'inlet'  ],
+      ['rearBrakeDuctL',  'sink',   MOD_STR.BRAKE_DUCT,      'inlet'  ],
+      ['rearBrakeDuctR',  'sink',   MOD_STR.BRAKE_DUCT,      'inlet'  ],
+    ];
+    for (const [key, type, cfg, expectedRole] of ventTable) {
+      const a = anchors[key];
+      if (!a) continue;
+      // Honour anchor role if present (safety net against manifest drift);
+      // unrolled anchors without `.role` still resolve to the table's intent.
+      if (a.role && a.role !== expectedRole) continue;
+      add(a, type, cfg);
+    }
+
+    // Wing dipole surrogates — placed slightly under each wing (anchor's xi/
+    // eta read directly; the gamma sign follows the downforce convention used
+    // by profile.vortexDefs so a clockwise vortex under the wing pulls the
+    // underside into suction).
+    if (anchors.frontWing) add(anchors.frontWing, 'vortex', MOD_STR.FRONT_WING_VORT);
+    if (anchors.rearWing)  add(anchors.rearWing,  'vortex', MOD_STR.REAR_WING_VORT);
+
+    return out;
+  }
+
+  /**
+   * Read-accessor for Phase-C analytical modifiers. Used by CfdEffect (via
+   * main.js wiring) so the CFD Cp recompute uses the same feature-aware
+   * velocity field as the airflow streamlines.
+   */
+  getModifiers() {
+    return this._modifiers || [];
   }
 
   /* ── Convert potential-flow (xi, eta) + y → world XYZ ── */
