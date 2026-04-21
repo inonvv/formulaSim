@@ -286,6 +286,40 @@ describe('alignment — heat haze Z tolerance (±0.10 m of rearAxleZ + 0.5)', ()
   });
 });
 
+describe('alignment — McLaren vortex cores anchor to wings (±0.05 m)', () => {
+  it('front-wing vortex pair wz tracks MCLAREN_MEASURE.anchors.frontWing.z', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', MCLAREN_MEASURE);
+    const fw = airflow._vortexDefs.filter(d => d.role === 'frontWing');
+    expect(fw.length).toBe(2);
+    for (const d of fw) {
+      expect(Math.abs(d.wz - MCLAREN_MEASURE.anchors.frontWing.z)).toBeLessThanOrEqual(0.05);
+    }
+  });
+
+  it('rear-wing vortex pair wz tracks MCLAREN_MEASURE.anchors.rearWing.z', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', MCLAREN_MEASURE);
+    const rw = airflow._vortexDefs.filter(d => d.role === 'rearWing');
+    expect(rw.length).toBe(2);
+    for (const d of rw) {
+      expect(Math.abs(d.wz - MCLAREN_MEASURE.anchors.rearWing.z)).toBeLessThanOrEqual(0.05);
+    }
+  });
+
+  it('floor vortex pair wz left at authored value (not anchor-driven)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', MCLAREN_MEASURE);
+    const fl = airflow._vortexDefs.filter(d => d.role === 'floor');
+    expect(fl.length).toBe(2);
+    // Authored F1 floor wz = 0.50 — floor vortices are NOT a wing-tip anchor.
+    for (const d of fl) expect(d.wz).toBeCloseTo(0.50, 5);
+  });
+});
+
 describe('alignment — McLaren stream peak hugs halo (±0.05 m of halo + 0.10)', () => {
   it('peak Y within 0.05 m of halo.y + 0.10 in local and world space', async () => {
     const { AirflowEffect } = await import('../effects.js');
