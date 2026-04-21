@@ -204,6 +204,55 @@ describe('RK4 streamline integration', () => {
   });
 });
 
+describe('traceStreamlinePath — occupancy opts-bag (Phase B2)', () => {
+  it('4-arg call behaves identically to 5-arg with empty opts', () => {
+    const a = traceStreamlinePath(2.0, -6.0, 30, 0.14);
+    const b = traceStreamlinePath(2.0, -6.0, 30, 0.14, {});
+    expect(a.length).toBe(b.length);
+    for (let i = 0; i < a.length; i++) {
+      expect(b[i].xi).toBeCloseTo(a[i].xi, 8);
+      expect(b[i].eta).toBeCloseTo(a[i].eta, 8);
+      expect(b[i].vxi).toBeCloseTo(a[i].vxi, 8);
+      expect(b[i].veta).toBeCloseTo(a[i].veta, 8);
+    }
+  });
+
+  it('default toWorld maps (xi,eta) → (z=xi, y=eta, x=0) — occupancy-free path unaffected', () => {
+    // Regression: the opts path with occupancy=null should not alter output.
+    const ref   = traceStreamlinePath(1.5, -5, 40, 0.14);
+    const withT = traceStreamlinePath(1.5, -5, 40, 0.14, { toWorld: (xi, eta) => ({ x: 0, y: eta, z: xi }) });
+    expect(withT.length).toBe(ref.length);
+    expect(withT[withT.length - 1].xi ).toBeCloseTo(ref[ref.length - 1].xi,  6);
+    expect(withT[withT.length - 1].eta).toBeCloseTo(ref[ref.length - 1].eta, 6);
+  });
+
+  it('cube occupancy blocking the path — path never contains a point where sample > 0.5', () => {
+    // Occupancy "cube" in world space covering eta∈[-2,2], y∈[-2,2], x∈[-2,2]
+    // (i.e. a large body straddling the streamline). Caller's toWorld maps
+    // (xi,eta) → (x=0, y=0.5 (fixed, above the cube midline), z=eta). We'll
+    // reinterpret: a sphere of radius 2 at origin in world space, with the
+    // streamline seeded at eta=-5 (well upstream). Default toWorld puts
+    // world Z = xi, world Y = eta — so the cube check covers the 2-D slice
+    // directly.
+    const occupancy = {
+      sample: (x, y, z) => (Math.abs(x) < 0.5 && Math.abs(y) < 2 && Math.abs(z) < 2) ? 1 : 0,
+      gradient: (x, y, z) => ({
+        x: 0,
+        y: Math.abs(y) < 2 ? -Math.sign(y) : 0,
+        z: Math.abs(z) < 2 ? -Math.sign(z) : 0,
+      }),
+    };
+    // Default toWorld: xi → z, eta → y, x=0. Seed at (xi=0.3, eta=-5).
+    const path = traceStreamlinePath(0.3, -5, 200, 0.14, { occupancy });
+    // No path point may land inside the occupancy field.
+    for (const pt of path) {
+      // xi → z, eta → y
+      const inside = occupancy.sample(0, pt.eta, pt.xi);
+      expect(inside).toBeLessThanOrEqual(0.5);
+    }
+  });
+});
+
 describe('vortexVelocity', () => {
   it('returns {0,0} at the vortex centre', () => {
     const v = vortexVelocity(1, 2, 1, 2, 1.0, 0.1);

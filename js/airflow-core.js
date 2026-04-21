@@ -93,19 +93,34 @@ export function cpToColor(cp) {
 }
 
 /**
- * Trace a single streamline by Euler integration.
+ * Trace a single streamline by RK4 integration.
  * Returns an array of sample points, each with position and velocity.
  * Stops early if the path enters the body (r² ≤ 1).
+ *
+ * When `opts.occupancy` is provided, each integration step also consults a
+ * body occupancy field. If the post-step point lands inside the body, the
+ * step is projected along the negative gradient (slides along the surface).
+ * If still inside after projection, the streamline terminates.
  *
  * @param {number} seedXi   - starting xi coordinate (|eta| seed should be ≥ 2)
  * @param {number} seedEta  - starting eta coordinate
  * @param {number} steps    - maximum number of integration steps
  * @param {number} stepSize - Euler step size (ds)
+ * @param {object} [opts]   - optional modifiers
+ * @param {{sample:(x:number,y:number,z:number)=>number,
+ *          gradient:(x:number,y:number,z:number)=>{x:number,y:number,z:number}}}
+ *          [opts.occupancy] - binary occupancy field (from body-sdf.js)
+ * @param {(xi:number,eta:number)=>{x:number,y:number,z:number}}
+ *          [opts.toWorld]   - map (xi,eta) → world-(x,y,z). Defaults to
+ *                             treating (xi,eta) as world-(z,y) with x=0.
  * @returns {Array<{xi: number, eta: number, vxi: number, veta: number}>}
  */
-export function traceStreamlinePath(seedXi, seedEta, steps = 200, stepSize = 0.14) {
+export function traceStreamlinePath(seedXi, seedEta, steps = 200, stepSize = 0.14, opts = {}) {
   const path = [];
   let xi = seedXi, eta = seedEta;
+
+  const occupancy = opts.occupancy || null;
+  const toWorld   = opts.toWorld   || ((xi_, eta_) => ({ x: 0, y: eta_, z: xi_ }));
 
   function normalizedDir(x, e) {
     const { vxi, veta } = topViewVelocity(x, e);
@@ -125,8 +140,62 @@ export function traceStreamlinePath(seedXi, seedEta, steps = 200, stepSize = 0.1
     if (k3.spd < 1e-6) break;
     const k4 = normalizedDir(xi +       stepSize * k3.dxi, eta +       stepSize * k3.deta);
 
-    xi  += (stepSize / 6) * (k1.dxi  + 2 * k2.dxi  + 2 * k3.dxi  + k4.dxi);
-    eta += (stepSize / 6) * (k1.deta + 2 * k2.deta + 2 * k3.deta + k4.deta);
+    let nextXi  = xi  + (stepSize / 6) * (k1.dxi  + 2 * k2.dxi  + 2 * k3.dxi  + k4.dxi);
+    let nextEta = eta + (stepSize / 6) * (k1.deta + 2 * k2.deta + 2 * k3.deta + k4.deta);
+
+    if (occupancy) {
+      const w = toWorld(nextXi, nextEta);
+      if (occupancy.sample(w.x, w.y, w.z) > 0.5) {
+        // Slide along the surface — subtract the component of the step vector
+        // projected onto the gradient direction.
+        const g   = occupancy.gradient(w.x, w.y, w.z);
+        const gMag = Math.sqrt(g.x * g.x + g.y * g.y + g.z * g.z);
+        if (gMag > 1e-9) {
+          const nx = g.x / gMag, ny = g.y / gMag, nz = g.z / gMag;
+          const dXi  = nextXi  - xi;
+          const dEta = nextEta - eta;
+          // Approximate step vector in world from (dXi, dEta) using toWorld-
+          // equivalent axes: treat dXi → world Z, dEta → world Y (caller
+          // supplies the real mapping via toWorld; the projection uses those
+          // world-space components anyway).
+          const wNow  = toWorld(xi, eta);
+          const stepWx = w.x - wNow.x;
+          const stepWy = w.y - wNow.y;
+          const stepWz = w.z - wNow.z;
+          const dotN   = stepWx * nx + stepWy * ny + stepWz * nz;
+          const projWx = stepWx - dotN * nx;
+          const projWy = stepWy - dotN * ny;
+          const projWz = stepWz - dotN * nz;
+          const projX  = wNow.x + projWx;
+          const projY  = wNow.y + projWy;
+          const projZ  = wNow.z + projWz;
+          // Translate the projected world-space back into (xi,eta) — since
+          // toWorld is one-to-one lookup for our axes, we approximate the
+          // reverse via the unchanged component mapping: Z→xi, Y→eta.
+          // Callers supplying a non-default toWorld should note this
+          // projection is an approximation; inside means the path is trying
+          // to enter the body, so we err toward terminating on repeated
+          // contact instead of drifting.
+          const projStillInside = occupancy.sample(projX, projY, projZ) > 0.5;
+          if (projStillInside) break;
+          // We can't cleanly invert a user-supplied toWorld, so use the step
+          // remaining in (dXi,dEta) scaled by (1 - |dotN|/|stepWorld|) as a
+          // safe approximation to keep the path moving.
+          const stepMag = Math.sqrt(stepWx * stepWx + stepWy * stepWy + stepWz * stepWz);
+          const slideScale = stepMag > 1e-9
+            ? Math.max(0, Math.min(1, 1 - Math.abs(dotN) / stepMag))
+            : 0;
+          nextXi  = xi  + dXi  * slideScale;
+          nextEta = eta + dEta * slideScale;
+        } else {
+          // Gradient ~0 means the sample is deep inside — terminate.
+          break;
+        }
+      }
+    }
+
+    xi  = nextXi;
+    eta = nextEta;
 
     if (xi * xi + eta * eta <= 1) break;
   }
@@ -156,51 +225,6 @@ export function sideViewVelocity(etaNorm, yNorm) {
     veta: 1 - (etaNorm * etaNorm - yNorm * yNorm) / r4,
     vy:  -2 * etaNorm * yNorm / r4,
   };
-}
-
-/**
- * Apply wing-stall modifications to an aerodynamic profile (pure function).
- * Returns the original profile when isStalled=false; otherwise returns a new
- * profile object with separated-flow characteristics:
- *   • Rear-wing pressure blobs → 15% intensity, 2.2× radius, neutral colour
- *   • Rear tip vortices removed
- *   • Wake count ×1.8, wake width ×2.5
- *   • Turbulent separation blob added behind wing
- *
- * @param {object}  profile   - CAR_AERO profile object
- * @param {boolean} isStalled - whether wing is in stall pose (default true)
- * @returns {object}
- */
-export function applyWingStall(profile, isStalled = true) {
-  if (!isStalled) return profile;
-
-  const p = {
-    ...profile,
-    // Deep-copy arrays so we never mutate the original
-    pressureBlobs: profile.pressureBlobs.map(b => ({ ...b })),
-    vortexDefs:    profile.vortexDefs.map(d => ({ ...d })),
-  };
-
-  // Rear-wing blobs (z > 1.5) → stalled: weak, wide, neutral grey
-  p.pressureBlobs = p.pressureBlobs.map(b =>
-    b.pos[2] > 1.5
-      ? { ...b, intensity: b.intensity * 0.15, r: b.r * 2.2, color: 0x888888 }
-      : b
-  );
-
-  // Add turbulent separation wake blob behind the rear wing
-  p.pressureBlobs = [...p.pressureBlobs,
-    { color: 0x888888, r: 1.8, intensity: 0.4, pos: [0, 0.90, 3.5] },
-  ];
-
-  // Remove rear tip vortices (wz > 1.5)
-  p.vortexDefs = p.vortexDefs.filter(d => d.wz <= 1.5);
-
-  // Wider, denser wake
-  p.wakeCount  = Math.round(profile.wakeCount  * 1.8);
-  p.wakeWidthX = profile.wakeWidthX * 2.5;
-
-  return p;
 }
 
 /**
