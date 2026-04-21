@@ -113,6 +113,10 @@ export function cpToColor(cp) {
  * @param {(xi:number,eta:number)=>{x:number,y:number,z:number}}
  *          [opts.toWorld]   - map (xi,eta) → world-(x,y,z). Defaults to
  *                             treating (xi,eta) as world-(z,y) with x=0.
+ * @param {Array<object>} [opts.modifiers] - optional analytical flow modifiers
+ *          (sinks / sources / vortices) summed on top of `topViewVelocity`
+ *          via `sumVelocity`. Omitted or empty ⇒ identical to the pure
+ *          cylinder flow (zero-regression path).
  * @returns {Array<{xi: number, eta: number, vxi: number, veta: number}>}
  */
 export function traceStreamlinePath(seedXi, seedEta, steps = 200, stepSize = 0.14, opts = {}) {
@@ -121,9 +125,13 @@ export function traceStreamlinePath(seedXi, seedEta, steps = 200, stepSize = 0.1
 
   const occupancy = opts.occupancy || null;
   const toWorld   = opts.toWorld   || ((xi_, eta_) => ({ x: 0, y: eta_, z: xi_ }));
+  const modifiers = opts.modifiers || null;
+  const hasMods   = Array.isArray(modifiers) && modifiers.length > 0;
 
   function normalizedDir(x, e) {
-    const { vxi, veta } = topViewVelocity(x, e);
+    const { vxi, veta } = hasMods
+      ? sumVelocity(x, e, topViewVelocity, modifiers)
+      : topViewVelocity(x, e);
     const spd = Math.sqrt(vxi * vxi + veta * veta);
     if (spd < 1e-6) return { dxi: 0, deta: 0, vxi, veta, spd: 0 };
     return { dxi: vxi / spd, deta: veta / spd, vxi, veta, spd };
@@ -225,6 +233,103 @@ export function sideViewVelocity(etaNorm, yNorm) {
     veta: 1 - (etaNorm * etaNorm - yNorm * yNorm) / r4,
     vy:  -2 * etaNorm * yNorm / r4,
   };
+}
+
+/**
+ * Analytical point-sink velocity contribution at (xi, eta) from a sink
+ * centred at (x0, e0) with visual strength `strength` and Rankine-core
+ * regularisation radius `rc`.
+ *
+ * Math: with dx = xi - x0, de = eta - e0, r2 = dx² + de² + rc²
+ *   vxi  = -strength · dx / r2
+ *   veta = -strength · de / r2
+ *
+ * At r = 0 the (x², y²) + rc² denominator avoids the singularity. As r → ∞,
+ * the contribution decays like 1/r (consistent with a 2-D potential sink).
+ *
+ * NOTE: `strength` is a VISUAL approximation, not a calibrated mass-flow
+ * rate — tuned per-feature in `effects.js`.
+ *
+ * @param {number} xi
+ * @param {number} eta
+ * @param {number} x0   - sink centre xi
+ * @param {number} e0   - sink centre eta
+ * @param {number} [strength=0.2]
+ * @param {number} [rc=0.12] - core-regularisation radius
+ * @returns {{vxi: number, veta: number}}
+ */
+export function sinkVelocity(xi, eta, x0, e0, strength = 0.2, rc = 0.12) {
+  const dx = xi  - x0;
+  const de = eta - e0;
+  const r2 = dx * dx + de * de + rc * rc;
+  return {
+    vxi:  -strength * dx / r2,
+    veta: -strength * de / r2,
+  };
+}
+
+/**
+ * Analytical point-source velocity contribution (opposite sign of `sinkVelocity`).
+ * Pushes fluid radially outward from (x0, e0).
+ *
+ * NOTE: `strength` is a VISUAL approximation.
+ *
+ * @param {number} xi
+ * @param {number} eta
+ * @param {number} x0
+ * @param {number} e0
+ * @param {number} [strength=0.2]
+ * @param {number} [rc=0.12]
+ * @returns {{vxi: number, veta: number}}
+ */
+export function sourceVelocity(xi, eta, x0, e0, strength = 0.2, rc = 0.12) {
+  const dx = xi  - x0;
+  const de = eta - e0;
+  const r2 = dx * dx + de * de + rc * rc;
+  return {
+    vxi:  strength * dx / r2,
+    veta: strength * de / r2,
+  };
+}
+
+/**
+ * Linear superposition of a base velocity field with a list of analytical
+ * modifiers (sinks, sources, vortices). The base field is evaluated at
+ * (xi, eta) via `baseFn`; each modifier adds its own contribution.
+ *
+ * Modifier shape:
+ *   { type: 'sink'   | 'source',  x, e, strength, rc }
+ *   { type: 'vortex',             x, e, gamma,    rc }
+ * (Fields `x` and `e` are the modifier's xi/eta centre — naming shortened
+ * to keep the table declarations compact in `effects.js`.)
+ *
+ * Empty or missing modifier list ⇒ identical to `baseFn(xi, eta)`.
+ *
+ * @param {number} xi
+ * @param {number} eta
+ * @param {(xi:number, eta:number)=>{vxi:number, veta:number}} baseFn
+ * @param {Array<object>} [modifiers=[]]
+ * @returns {{vxi: number, veta: number}}
+ */
+export function sumVelocity(xi, eta, baseFn, modifiers = []) {
+  const base = baseFn(xi, eta);
+  let vxi = base.vxi, veta = base.veta;
+  if (!modifiers || modifiers.length === 0) return { vxi, veta };
+  for (const m of modifiers) {
+    let c;
+    if (m.type === 'sink') {
+      c = sinkVelocity(xi, eta, m.x, m.e, m.strength, m.rc);
+    } else if (m.type === 'source') {
+      c = sourceVelocity(xi, eta, m.x, m.e, m.strength, m.rc);
+    } else if (m.type === 'vortex') {
+      c = vortexVelocity(xi, eta, m.x, m.e, m.gamma, m.rc);
+    } else {
+      continue;
+    }
+    vxi  += c.vxi;
+    veta += c.veta;
+  }
+  return { vxi, veta };
 }
 
 /**

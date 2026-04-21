@@ -5,6 +5,9 @@ import {
   cpToColor,
   traceStreamlinePath,
   vortexVelocity,
+  sinkVelocity,
+  sourceVelocity,
+  sumVelocity,
 } from '../airflow-core.js';
 
 /* ── helpers ── */
@@ -298,6 +301,85 @@ describe('traceStreamlinePath — McLaren halo clip regression (Phase B3)', () =
       if (occupancy.sample(w.x, w.y, w.z) > 0.5) crossings++;
     }
     expect(crossings).toBe(0);
+  });
+});
+
+describe('sinkVelocity / sourceVelocity / sumVelocity (Phase C1)', () => {
+  it('sinkVelocity at (+1, 0) offset from origin pulls back toward origin — vxi < 0', () => {
+    // Sink at (0, 0); test point at (1, 0). Expect vxi to point toward -x.
+    const v = sinkVelocity(1, 0, 0, 0, 0.2, 0.12);
+    expect(v.vxi).toBeLessThan(0);
+    expect(Math.abs(v.veta)).toBeLessThan(1e-9);
+  });
+
+  it('sinkVelocity at (0, +1) pulls back toward origin — veta < 0', () => {
+    const v = sinkVelocity(0, 1, 0, 0, 0.2, 0.12);
+    expect(Math.abs(v.vxi)).toBeLessThan(1e-9);
+    expect(v.veta).toBeLessThan(0);
+  });
+
+  it('sourceVelocity at (+1, 0) offset pushes away — vxi > 0', () => {
+    const v = sourceVelocity(1, 0, 0, 0, 0.2, 0.12);
+    expect(v.vxi).toBeGreaterThan(0);
+    expect(Math.abs(v.veta)).toBeLessThan(1e-9);
+  });
+
+  it('sink and source velocities at same offset are exact negatives', () => {
+    const vSi = sinkVelocity  (0.6, -0.4, 0.1, 0.2, 0.25, 0.12);
+    const vSo = sourceVelocity(0.6, -0.4, 0.1, 0.2, 0.25, 0.12);
+    expect(vSi.vxi ).toBeCloseTo(-vSo.vxi,  10);
+    expect(vSi.veta).toBeCloseTo(-vSo.veta, 10);
+  });
+
+  it('sumVelocity with [] modifiers returns exactly baseFn output', () => {
+    const testPts = [[0.5, -3], [1.5, -2], [2.0, -1], [0.1, -5]];
+    for (const [xi, eta] of testPts) {
+      const base = topViewVelocity(xi, eta);
+      const sum  = sumVelocity(xi, eta, topViewVelocity, []);
+      expect(sum.vxi ).toBeCloseTo(base.vxi,  10);
+      expect(sum.veta).toBeCloseTo(base.veta, 10);
+    }
+  });
+
+  it('sumVelocity with undefined modifiers equals baseFn', () => {
+    const xi = 1.2, eta = -3;
+    const base = topViewVelocity(xi, eta);
+    const sum  = sumVelocity(xi, eta, topViewVelocity);
+    expect(sum.vxi ).toBeCloseTo(base.vxi,  10);
+    expect(sum.veta).toBeCloseTo(base.veta, 10);
+  });
+
+  it('sumVelocity near a sink produces larger |v| than baseFn alone', () => {
+    // Choose a far-field point where baseFn ≈ freestream (veta ≈ 1, vxi ≈ 0).
+    // Place a sink so its pull reinforces (adds to) veta — i.e. sink lies
+    // ahead in +eta so dv = -(eta - e0) = positive.
+    const xi = 5.0, eta = -5.0;
+    const base = topViewVelocity(xi, eta);
+    const baseMag = Math.sqrt(base.vxi * base.vxi + base.veta * base.veta);
+    const sum = sumVelocity(xi, eta, topViewVelocity, [
+      // Sink ahead at eta = -4: pulls freestream forward ⇒ veta contribution > 0.
+      { type: 'sink', x: 5.0, e: -4.0, strength: 0.6, rc: 0.12 },
+    ]);
+    const sumMag = Math.sqrt(sum.vxi * sum.vxi + sum.veta * sum.veta);
+    expect(sumMag).toBeGreaterThan(baseMag);
+  });
+
+  it('traceStreamlinePath with mid-path sink ends closer (in xi) to the sink xi', () => {
+    // Seed a streamline in the +eta direction passing NEAR a sink; with the
+    // sink enabled it should deflect toward the sink xi.
+    const seedXi = 2.0, seedEta = -5.0;
+    const sinkXi = 1.5, sinkE  = -1.0;
+    const noMod = traceStreamlinePath(seedXi, seedEta, 200, 0.14);
+    const mods  = traceStreamlinePath(seedXi, seedEta, 200, 0.14, {
+      modifiers: [{ type: 'sink', x: sinkXi, e: sinkE, strength: 0.6, rc: 0.12 }],
+    });
+    const lastNo  = noMod[noMod.length - 1];
+    const lastMod = mods[mods.length - 1];
+    const dNo  = Math.abs(lastNo.xi  - sinkXi);
+    const dMod = Math.abs(lastMod.xi - sinkXi);
+    // With a sink pulling +x toward sinkXi, the deflected path's final xi
+    // should be strictly closer in xi to the sink than the unmodified path.
+    expect(dMod).toBeLessThan(dNo);
   });
 });
 
