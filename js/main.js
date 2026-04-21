@@ -154,9 +154,18 @@ async function spawnCar(type) {
   state.carMeasure = grp.userData.measure ?? null;
   state.wheels   = {};
   state.brakes   = {};
+  // GLB-wheel path exposes corner groups via grp.userData.wheels = { FL, FR, RL, RR }.
+  // Procedural path exposes wFL/wFR/wRL/wRR meshes by name. Populate state.wheels
+  // from whichever is present — animateCar treats both uniformly.
+  if (grp.userData?.wheels) {
+    Object.assign(state.wheels, grp.userData.wheels);
+  } else {
+    grp.traverse(obj => {
+      if (WHEEL_NAMES.includes(obj.name)) state.wheels[obj.name] = obj;
+    });
+  }
   grp.traverse(obj => {
-    if (WHEEL_NAMES.includes(obj.name))    state.wheels[obj.name] = obj;
-    if (obj.name?.startsWith('brake_'))    state.brakes[obj.name] = obj;
+    if (obj.name?.startsWith('brake_')) state.brakes[obj.name] = obj;
   });
   scene.add(grp);
   const carKey = String(type).toLowerCase();
@@ -371,12 +380,16 @@ function animateCar(dt) {
   const speed = state.speed;
   const t     = state.time;
 
-  // ─ Wheel rotation (proportional to speed)
-  const rotPerSec = wheelRotationRate(speed, 2.09);
+  // ─ Wheel rotation (proportional to speed). Circumference uses the car's
+  //   measured wheelRadius when available (GLB path) so rotation rate matches
+  //   the real tyre, not a hard-coded value.
+  const wR = state.carMeasure?.wheelRadius ?? 0.3325;   // 2π·0.3325 ≈ 2.09
+  const rotPerSec = wheelRotationRate(speed, 2 * Math.PI * wR);
   const dRot      = rotPerSec * dt * Math.PI * 2;
 
-  WHEEL_NAMES.forEach(name => {
-    const w = state.wheels[name];
+  // Rotate whatever wheel objects spawnCar populated — procedural (wFL/wFR/...)
+  // or GLB corner groups (FL/FR/RL/RR). Each spins independently around local X.
+  Object.values(state.wheels).forEach(w => {
     if (w) w.rotation.x += dRot;
   });
 
