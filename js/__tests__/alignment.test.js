@@ -491,6 +491,49 @@ describe('alignment — McLaren SDF halo clip regression (Phase B3)', () => {
   });
 });
 
+describe('alignment — McLaren Phase-C modifier deflection (streamline bends toward sidepodInletL)', () => {
+  it('final xi/eta of modifier-driven streamline is closer to sidepodInletL than baseline', async () => {
+    // Pull the REAL pure-math functions (bypassing the stub mock used by
+    // the rest of this file). traceStreamlinePath has no three dependency,
+    // so this is safe to re-import via the real module path.
+    const core = await vi.importActual('../airflow-core.js');
+    const { traceStreamlinePath } = core;
+
+    // McLaren-style sidepod-inlet anchor, car-local space (post-rotation):
+    // x ≈ -0.70, z ≈ -0.60 from docs-derived offsets.
+    const halfW = 0.90, halfL = 2.45;
+    const inletXi  = -0.70 / halfW;   // ≈ -0.778
+    const inletEta = -0.60 / halfL;   // ≈ -0.245
+
+    // Seed far upstream (plan recipe: (-1.0, 0.3, -5) car-local); our
+    // (xi, eta) basis ignores y, so the 2-D seed is (x/halfW, z/halfL).
+    const seedXi  = -1.0 / halfW;
+    const seedEta = -5.0 / halfL;
+
+    // Strong sink at the inlet — strength tuned so the expected deflection
+    // exceeds the ≥10% threshold (plan tolerance).
+    const sink = [{ type: 'sink', x: inletXi, e: inletEta, strength: 0.6, rc: 0.12 }];
+
+    const noMod = traceStreamlinePath(seedXi, seedEta, 400, 0.08);
+    const mods  = traceStreamlinePath(seedXi, seedEta, 400, 0.08, { modifiers: sink });
+
+    const lastNo  = noMod[noMod.length - 1];
+    const lastMod = mods[mods.length - 1];
+
+    const dist = (a, b) => Math.hypot(a.xi - b.xi, a.eta - b.eta);
+    const inletPt = { xi: inletXi, eta: inletEta };
+    const seedPt  = { xi: seedXi,  eta: seedEta  };
+
+    const dNo   = dist(lastNo,  inletPt);
+    const dMod  = dist(lastMod, inletPt);
+    const dSeed = dist(seedPt,  inletPt);
+
+    // Plan tolerance: closer by ≥ 10% of the initial seed → inlet distance.
+    expect(dNo - dMod).toBeGreaterThanOrEqual(0.10 * dSeed);
+    expect(dMod).toBeLessThan(dNo);
+  });
+});
+
 describe('alignment — McLaren stream peak hugs halo (±0.05 m of halo + 0.10)', () => {
   it('peak Y within 0.05 m of halo.y + 0.10 in local and world space', async () => {
     const { AirflowEffect } = await import('../effects.js');
