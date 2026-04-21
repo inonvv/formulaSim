@@ -728,10 +728,30 @@ export class RainEffect {
 
   setSpeed(speed) { this._speed = speed; }
 
-  setCarType(type, _measure) {
-    // _measure is accepted for forward-compat (Phase 3 will consume it);
-    // today we still read from the RAIN_POS lookup table.
-    this._rainPos = RAIN_POS[type] || RAIN_POS.F1;
+  setCarType(type, measure) {
+    // Prefer measured rear-axle position when the car builder exposed it.
+    // Falls back to the per-type RAIN_POS table for procedural cars that
+    // didn't publish a measure, or when measure.rearAxleZ is absent.
+    const base = RAIN_POS[type] || RAIN_POS.F1;
+    if (measure && typeof measure.rearAxleZ === 'number') {
+      // Spray originates from the wheel contact patch (just outboard of
+      // the tyre) and the rooster tail sweeps slightly further back and
+      // wider — nudges preserved from the authored RAIN_POS deltas.
+      const axleX = (typeof measure.rearAxleX === 'number')
+        ? measure.rearAxleX
+        : base.sprayX;
+      const axleZ = measure.rearAxleZ;
+      const sprayDx   = base.roosterX - base.sprayX;     // rooster sits ~0.07-0.08 outboard
+      const sprayDz   = base.roosterZ - base.sprayZ;     // rooster trails ~0.13-0.17 aft
+      this._rainPos = {
+        sprayX:   axleX,
+        sprayZ:   axleZ,
+        roosterX: axleX + sprayDx,
+        roosterZ: axleZ + sprayDz,
+      };
+    } else {
+      this._rainPos = base;
+    }
     // Re-place rooster tail particles at the new car's rear wheel positions
     for (let i = 0; i < this._roosterCount; i++) {
       const side = i < this._roosterCount / 2 ? -1 : 1;
@@ -894,6 +914,18 @@ export class OptimalWeatherEffect {
     this.hazeBlob.position.set(0, 0.18, 2.1);
     this.group.add(this.hazeBlob);
     this._hazeMat = mat;
+  }
+
+  /**
+   * Reposition the heat-haze blob behind the rear axle when measure is
+   * supplied. Heat sits ~0.5 m aft of the contact patch — same nudge used
+   * for the rain rooster tails.
+   */
+  setCarType(_type, measure) {
+    if (!this.hazeBlob) return;
+    if (measure && typeof measure.rearAxleZ === 'number') {
+      this.hazeBlob.position.z = measure.rearAxleZ + 0.5;
+    }
   }
 
   setSpeed(speed)  { this._speed = speed; }

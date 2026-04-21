@@ -210,6 +210,43 @@ describe('RainEffect', () => {
     const rain = new RainEffect(makeScene());
     expect(rain._roosterCount).toBeGreaterThan(0);
   });
+
+  it('setCarType adopts measure.rearAxleZ and rearAxleX when supplied', async () => {
+    const { RainEffect } = await import('../effects.js');
+    const rain = new RainEffect(makeScene());
+    // McLaren-style measure: rear axle Z = 2.10, X = 0.81
+    rain.setCarType('F1', { rearAxleZ: 2.10, rearAxleX: 0.81 });
+    expect(rain._rainPos.sprayZ).toBeCloseTo(2.10, 5);
+    expect(rain._rainPos.sprayX).toBeCloseTo(0.81, 5);
+    // Rooster preserves authored offset of ~0.07 outboard / ~0.13 aft from base RAIN_POS.F1
+    expect(rain._rainPos.roosterX).toBeGreaterThan(rain._rainPos.sprayX);
+    expect(rain._rainPos.roosterZ).toBeGreaterThan(rain._rainPos.sprayZ);
+  });
+
+  it('setCarType falls back to RAIN_POS when measure lacks axles', async () => {
+    const { RainEffect } = await import('../effects.js');
+    const rain = new RainEffect(makeScene());
+    rain.setCarType('F2', {});     // measure without rearAxleZ
+    // F2 authored: sprayZ = 1.38
+    expect(rain._rainPos.sprayZ).toBeCloseTo(1.38, 5);
+  });
+});
+
+describe('OptimalWeatherEffect', () => {
+  it('setCarType repositions heat haze to rearAxleZ + 0.5', async () => {
+    const { OptimalWeatherEffect } = await import('../effects.js');
+    const opt = new OptimalWeatherEffect(makeScene(), {});
+    opt.setCarType('F1', { rearAxleZ: 2.10 });
+    expect(opt.hazeBlob.position.z).toBeCloseTo(2.60, 5);
+  });
+
+  it('setCarType leaves haze untouched when measure has no axles', async () => {
+    const { OptimalWeatherEffect } = await import('../effects.js');
+    const opt = new OptimalWeatherEffect(makeScene(), {});
+    const zBefore = opt.hazeBlob.position.z;
+    opt.setCarType('F1', {});
+    expect(opt.hazeBlob.position.z).toBe(zBefore);
+  });
 });
 
 describe('AirflowEffect', () => {

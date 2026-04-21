@@ -164,6 +164,7 @@ async function spawnCar(type) {
   airflow.setCarType(type);
   cfd.setCarType(type, state.carMeasure);
   rain.setCarType(type, state.carMeasure);
+  optimal.setCarType(type, state.carMeasure);
 
   // Propagate ground-lift: all effect groups author coords in car-local
   // space (y=0 at ground-contact plane). Shift them onto the world surface
@@ -187,7 +188,7 @@ async function spawnCar(type) {
 ══════════════════════════════════════════════════════════════════ */
 // Stub used if an effect fails to construct, so animate() always runs
 class EffectStub {
-  setSpeed() {} setVisible() {} setCarType() {} update() {} dispose() {}
+  setSpeed() {} setVisible() {} setCarType() {} setBaseY() {} update() {} dispose() {}
 }
 
 let airflow, rain, optimal, cfd;
