@@ -11,12 +11,10 @@
  *   Wheel nodes (Object_24–Object_34) are stripped; procedural wheels render instead.
  *   Object_28 = rear_wheel_cover (the "orphaned papaya cape" at Z≈+2.1) is stripped.
  *   Object_19 = main_body — primary livery paint surface.
- *   Object_9  = rear_wing — rearWing pivot for wing-flip animation.
  *
  * GT (TwiXeR 992 GT3 RS):
  *   No wheel nodes in the GLB; stripMeshes is empty.
  *   Largest body mesh carries PaletteMaterial001 (the main painted shell).
- *   rearWing: null — GT rear wing is integral to body, no wing-flip.
  */
 
 export const CAR_MANIFEST = {
@@ -38,7 +36,35 @@ export const CAR_MANIFEST = {
       'Object_9',   // rear_wing — painted wing assembly
       'Object_12',  // front_wing — painted front wing
     ],
-    rearWing: 'Object_9',  // rear_wing node — pivot for wing-flip animation
+    //
+    // Pre-strip tire measurement: these meshes define the ground-contact plane
+    // and the front/rear axle positions for the procedural wheels. They must be
+    // listed ALSO in stripMeshes above — the loader measures them, then the strip
+    // pass removes them so procedural wheels render in their place.
+    // Values derived from docs/f1-bboxes.json + rotation [0, π, 0]:
+    //   Object_33 front_tire: world Y-min = -0.6187, world Z-center = -1.47
+    //   Object_26 rear_tire:  world Y-min = -0.6232, world Z-center = +2.10
+    wheelSources: {
+      front: 'Object_33',
+      rear:  'Object_26',
+    },
+    //
+    // Per-feature anchor sources (measured in world-space pre-strip).
+    // use: 'peak' takes bbox max.y; 'center' takes bbox center.y.
+    // Consumed by airflow/CFD placement so visuals track the real GLB geometry
+    // instead of halfH-fraction estimates.
+    //   Object_22 halo         — peak Y ≈ 0.373
+    //   Object_17 headrest     — used as cockpit anchor (top of seat/airbox region)
+    //   Object_12 front_wing   — center Z ≈ -2.297 after rotation, peak Y just below nose
+    //   Object_9  rear_wing    — center Z ≈ +2.412 after rotation, peak Y ≈ 0.454
+    //   Object_19 main_body    — bodyShell bbox for sidepodTop/floor synthesis
+    anchorSources: {
+      halo:      { mesh: 'Object_22', use: 'peak'   },
+      cockpit:   { mesh: 'Object_17', use: 'peak'   },
+      frontWing: { mesh: 'Object_12', use: 'peak'   },
+      rearWing:  { mesh: 'Object_9',  use: 'peak'   },
+      bodyShell: { mesh: 'Object_19', use: 'center' },
+    },
   },
   gt: {
     url: new URL('../assets/models/gt.glb', import.meta.url).href,
@@ -47,7 +73,6 @@ export const CAR_MANIFEST = {
     liveryMeshes: [
       'TwiXeR_992_gt3rs_carbon_Wing_TwiXeR_992_plastic_mgl_060606FF.001_0',  // main body shell
     ],
-    rearWing: null,  // GT wing is integral — no wing-flip
   },
 };
 

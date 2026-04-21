@@ -31,6 +31,7 @@ vi.mock('three', () => {
     this.position = new Vec3();
     this.rotation = new Euler();
     this.castShadow = false;
+    this.userData = {};
   }
   Group.prototype.add = function (...items) { this.children.push(...items); return this; };
   Group.prototype.traverse = function (fn) {
@@ -246,50 +247,6 @@ describe('Sharp sidepod geometry (Phase 1)', () => {
   });
 });
 
-/* ── Phase 2a: Named rearWing Group ───────────────────────────────── */
-describe('rearWing named group', () => {
-  it('F1 car has a child/descendant named "rearWing"', async () => {
-    const { buildCar } = await import('../cars.js');
-    const car = await buildCar('F1');
-    let found = false;
-    car.traverse(obj => { if (obj.name === 'rearWing') found = true; });
-    expect(found).toBe(true);
-  });
-
-  it('F2 car has a child/descendant named "rearWing"', async () => {
-    const { buildCar } = await import('../cars.js');
-    const car = await buildCar('F2');
-    let found = false;
-    car.traverse(obj => { if (obj.name === 'rearWing') found = true; });
-    expect(found).toBe(true);
-  });
-
-  it('F3 car has a child/descendant named "rearWing"', async () => {
-    const { buildCar } = await import('../cars.js');
-    const car = await buildCar('F3');
-    let found = false;
-    car.traverse(obj => { if (obj.name === 'rearWing') found = true; });
-    expect(found).toBe(true);
-  });
-
-  it('GT car has a child/descendant named "rearWing"', async () => {
-    const { buildCar } = await import('../cars.js');
-    const car = await buildCar('GT');
-    let found = false;
-    car.traverse(obj => { if (obj.name === 'rearWing') found = true; });
-    expect(found).toBe(true);
-  });
-
-  it('F1 rearWing group has ≥ 2 children', async () => {
-    const { buildCar } = await import('../cars.js');
-    const car = await buildCar('F1');
-    let rearWing = null;
-    car.traverse(obj => { if (obj.name === 'rearWing') rearWing = obj; });
-    expect(rearWing).not.toBeNull();
-    expect(rearWing.children.length).toBeGreaterThanOrEqual(2);
-  });
-});
-
 /* ── Wheel ground contact ─────────────────────────────────────────── */
 describe('wheel ground contact (grp.position.y places wheels at Y = -0.34)', () => {
   const GROUND_Y = -0.34;
@@ -335,6 +292,75 @@ describe('wheel ground contact (grp.position.y places wheels at Y = -0.34)', () 
     const wheel = findWheel(car, 'wFL');
     expect(wheel).not.toBeNull();
     expect(car.position.y + wheel.position.y - wR).toBeCloseTo(GROUND_Y, 3);
+  });
+});
+
+/* ── Measurement contract (Unified Car Measurement v2) ─────────── */
+describe('car measurement contract (grp.userData.measure)', () => {
+  it('F1 procedural exposes measure with expected fields', async () => {
+    const { buildCar } = await import('../cars.js');
+    const car = await buildCar('F1');
+    const m = car.userData.measure;
+    expect(m).toBeDefined();
+    expect(m.wheelRadius).toBeCloseTo(0.345, 3);
+    expect(m.groundContactY).toBeCloseTo(-0.385, 3);   // -0.04 - 0.345
+    expect(m.wheelbase).toBeCloseTo(Math.abs(1.60 - (-1.50)), 3); // 3.10
+    expect(m.trackWidth).toBeCloseTo(2 * 0.82, 3);
+  });
+
+  it('F2 procedural exposes measure with expected fields', async () => {
+    const { buildCar } = await import('../cars.js');
+    const car = await buildCar('F2');
+    const m = car.userData.measure;
+    expect(m.wheelRadius).toBeCloseTo(0.328, 3);
+    expect(m.groundContactY).toBeCloseTo(-0.368, 3);   // -0.04 - 0.328
+    expect(m.wheelbase).toBeCloseTo(Math.abs(1.48 - (-1.38)), 3); // 2.86
+  });
+
+  it('F3 procedural exposes measure with expected fields', async () => {
+    const { buildCar } = await import('../cars.js');
+    const car = await buildCar('F3');
+    const m = car.userData.measure;
+    expect(m.wheelRadius).toBeCloseTo(0.300, 3);
+    expect(m.groundContactY).toBeCloseTo(-0.34, 3);    // -0.04 - 0.300
+  });
+
+  it('GT procedural exposes measure with expected fields', async () => {
+    const { buildCar } = await import('../cars.js');
+    const car = await buildCar('GT');
+    const m = car.userData.measure;
+    expect(m.wheelRadius).toBeCloseTo(0.338, 3);
+    expect(m.groundContactY).toBeCloseTo(-0.388, 3);   // -0.05 - 0.338
+  });
+
+  it('grp.userData.baseY matches TRACK.SURFACE_Y - groundContactY', async () => {
+    const { buildCar } = await import('../cars.js');
+    const car = await buildCar('F1');
+    const m = car.userData.measure;
+    expect(car.userData.baseY).toBeCloseTo(-0.34 - m.groundContactY, 3);
+    expect(car.position.y).toBeCloseTo(car.userData.baseY, 3);
+  });
+
+  it('all variants expose measure.anchors with named feature points', async () => {
+    const { buildCar } = await import('../cars.js');
+    for (const t of ['F1', 'F2', 'F3', 'GT']) {
+      const car = await buildCar(t);
+      const a = car.userData.measure.anchors;
+      expect(a).toBeDefined();
+      expect(a.cockpit).toBeDefined();
+      expect(a.halo).toBeDefined();
+      expect(a.frontWing).toBeDefined();
+      expect(a.rearWing).toBeDefined();
+      expect(a.sidepodTop).toBeDefined();
+      expect(a.floor).toBeDefined();
+      expect(a.diffuser).toBeDefined();
+      expect(a.noseTip).toBeDefined();
+      // Anchors are in car-local coordinates with sensible Y/Z signs.
+      expect(typeof a.cockpit.y).toBe('number');
+      expect(typeof a.halo.y).toBe('number');
+      expect(a.frontWing.z).toBeLessThan(0);   // nose is -Z
+      expect(a.rearWing.z).toBeGreaterThan(0); // tail is +Z
+    }
   });
 });
 
@@ -410,14 +436,14 @@ describe('buildF1Hybrid (Phase 4)', () => {
 
   it('H3. GLB path — imported scene is child of returned group', async () => {
     const scene = fakeScene([]);
-    _loaderManifestResult = { scene, liveryMeshes: [], rearWing: null };
+    _loaderManifestResult = { scene, liveryMeshes: [] };
     const { buildF1Hybrid } = await import('../cars.js');
     const grp = await buildF1Hybrid({ color: 0xe8132a });
     expect(grp.children).toContain(scene);
   });
 
   it('H4. GLB path — 4 procedural wheels present', async () => {
-    _loaderManifestResult = { scene: fakeScene([]), liveryMeshes: [], rearWing: null };
+    _loaderManifestResult = { scene: fakeScene([]), liveryMeshes: [] };
     const { buildF1Hybrid } = await import('../cars.js');
     const grp = await buildF1Hybrid({ color: 0xe8132a });
     const names = new Set();
@@ -425,23 +451,68 @@ describe('buildF1Hybrid (Phase 4)', () => {
     ['wFL','wFR','wRL','wRR'].forEach(n => expect(names.has(n)).toBe(true));
   });
 
-  it('H5. GLB path — grp.position.y is bbox-derived (not hardcoded)', async () => {
-    _mockBboxMinY = -0.6;   // deliberately not the old 0.045 value
-    _loaderManifestResult = { scene: fakeScene([]), liveryMeshes: [], rearWing: null };
+  it('H5. GLB path — grp.position.y is glbMeasure-derived (not hardcoded)', async () => {
+    _loaderManifestResult = {
+      scene: fakeScene([]), liveryMeshes: [],
+      glbMeasure: { groundContactY: -0.6232, frontAxleZ: -1.47, rearAxleZ: 2.10, frontAxleX: 0.82, rearAxleX: 0.80, wheelRadius: 0.440 },
+    };
     const { buildF1Hybrid } = await import('../cars.js');
     const grp = await buildF1Hybrid({ color: 0xe8132a });
-    expect(grp.position.y).toBeCloseTo(-(-0.6 + 0.34), 3);  // 0.26
+    // baseY = TRACK.SURFACE_Y - groundContactY = -0.34 - (-0.6232) = 0.2832
+    expect(grp.position.y).toBeCloseTo(0.2832, 3);
+    // measure propagates to userData
+    expect(grp.userData.measure.groundContactY).toBeCloseTo(-0.6232, 4);
+    expect(grp.userData.measure.frontAxleZ).toBeCloseTo(-1.47, 3);
+    expect(grp.userData.measure.rearAxleZ).toBeCloseTo(2.10, 3);
   });
 
-  it('H6. rearWing node in loaded scene is wrapped in a named group', async () => {
-    const rwMesh = fakeMesh('wing_rear_main');
-    const scene  = fakeScene([rwMesh]);
-    _loaderManifestResult = { scene, liveryMeshes: [], rearWing: rwMesh };
+  it('H6. GLB path — wheelRadius taken from glbMeasure (no hardcoded fallback)', async () => {
+    _loaderManifestResult = {
+      scene: fakeScene([]), liveryMeshes: [],
+      glbMeasure: { groundContactY: -0.6232, frontAxleZ: -1.47, rearAxleZ: 2.10, frontAxleX: 0.82, rearAxleX: 0.80, wheelRadius: 0.440 },
+    };
     const { buildF1Hybrid } = await import('../cars.js');
     const grp = await buildF1Hybrid({ color: 0xe8132a });
-    let rearWingGrp = null;
-    grp.traverse(o => { if (o.name === 'rearWing') rearWingGrp = o; });
-    expect(rearWingGrp).not.toBeNull();
+    expect(grp.userData.measure.wheelRadius).toBeCloseTo(0.440, 3);
+  });
+
+  it('H9. GLB path — anchors from glbMeasure propagate to userData.measure', async () => {
+    const fakeAnchors = {
+      cockpit:    { x: 0, y: 0.32, z: -0.10 },
+      halo:       { x: 0, y: 0.373, z: 0.05 },
+      frontWing:  { x: 0, y: -0.05, z: -2.30 },
+      rearWing:   { x: 0, y: 0.454, z: 2.41 },
+      sidepodTop: { x: 0, y: 0.30, z: 0.13 },
+      floor:      { x: 0, y: -0.37, z: 0.13 },
+    };
+    _loaderManifestResult = {
+      scene: fakeScene([]), liveryMeshes: [],
+      glbMeasure: {
+        groundContactY: -0.6232, frontAxleZ: -1.47, rearAxleZ: 2.10,
+        frontAxleX: 0.82, rearAxleX: 0.80, wheelRadius: 0.440,
+        anchors: fakeAnchors,
+      },
+    };
+    const { buildF1Hybrid } = await import('../cars.js');
+    const grp = await buildF1Hybrid({ color: 0xe8132a });
+    expect(grp.userData.measure.anchors).toBe(fakeAnchors);
+  });
+
+  it('H8. GLB path — procedural wheel positions track glbMeasure', async () => {
+    _loaderManifestResult = {
+      scene: fakeScene([]), liveryMeshes: [],
+      glbMeasure: { groundContactY: -0.6232, frontAxleZ: -1.47, rearAxleZ: 2.10, frontAxleX: 0.82, rearAxleX: 0.80, wheelRadius: 0.440 },
+    };
+    const { buildF1Hybrid } = await import('../cars.js');
+    const grp = await buildF1Hybrid({ color: 0xe8132a });
+    let wFL = null, wRR = null;
+    grp.traverse(o => { if (o.name === 'wFL') wFL = o; if (o.name === 'wRR') wRR = o; });
+    expect(wFL.position.x).toBeCloseTo(-0.82, 3);
+    expect(wFL.position.z).toBeCloseTo(-1.47, 3);
+    // wheel bottom in local = wheelY - wR = groundContactY
+    expect(wFL.position.y - 0.440).toBeCloseTo(-0.6232, 3);
+    expect(wRR.position.x).toBeCloseTo(0.80, 3);
+    expect(wRR.position.z).toBeCloseTo(2.10, 3);
   });
 
   it('H7. livery mesh gets a cloned material with color set', async () => {
@@ -450,7 +521,7 @@ describe('buildF1Hybrid (Phase 4)', () => {
     let colorCopied = false;
     const cloned = { ...originalMat, color: { copy: () => { colorCopied = true; } } };
     originalMat.clone = () => cloned;
-    _loaderManifestResult = { scene: fakeScene([livMesh]), liveryMeshes: [livMesh], rearWing: null };
+    _loaderManifestResult = { scene: fakeScene([livMesh]), liveryMeshes: [livMesh] };
     const { buildF1Hybrid } = await import('../cars.js');
     await buildF1Hybrid({ color: 0xe8132a });
     expect(livMesh.material).toBe(cloned);
@@ -458,34 +529,15 @@ describe('buildF1Hybrid (Phase 4)', () => {
   });
 });
 
-/* ── Phase 5: buildGTHybrid ──────────────────────────────────────── */
-describe('buildGTHybrid (Phase 5)', () => {
-  beforeEach(() => { _loaderManifestResult = null; _mockBboxMinY = -0.385; });
-
-  it('G1. null loader → procedural GT; wFL present and grounded', async () => {
-    const { buildGTHybrid } = await import('../cars.js');
-    const grp = await buildGTHybrid({ color: 0xff8800 });
+/* ── Phase 5: GT is procedural-only (buildGTHybrid removed) ─────── */
+describe('GT procedural is wired through buildCar', () => {
+  it('GT. buildCar("GT") uses procedural path — wheels present and grounded', async () => {
+    const { buildCar } = await import('../cars.js');
+    const grp = await buildCar('GT');
     let wFL = null;
     grp.traverse(o => { if (o.name === 'wFL') wFL = o; });
     expect(wFL).not.toBeNull();
     expect(grp.position.y + wFL.position.y - 0.338).toBeCloseTo(-0.34, 3);
-  });
-
-  it('G2. GLB path — 4 procedural wheels present', async () => {
-    _loaderManifestResult = { scene: fakeScene([]), liveryMeshes: [], rearWing: null };
-    const { buildGTHybrid } = await import('../cars.js');
-    const grp = await buildGTHybrid({ color: 0xff8800 });
-    const names = new Set();
-    grp.traverse(o => { if (o.name) names.add(o.name); });
-    ['wFL','wFR','wRL','wRR'].forEach(n => expect(names.has(n)).toBe(true));
-  });
-
-  it('G3. GLB path — grp.position.y is bbox-derived (not hardcoded)', async () => {
-    _mockBboxMinY = -0.7;   // deliberately not the old 0.048 value
-    _loaderManifestResult = { scene: fakeScene([]), liveryMeshes: [], rearWing: null };
-    const { buildGTHybrid } = await import('../cars.js');
-    const grp = await buildGTHybrid({ color: 0xff8800 });
-    expect(grp.position.y).toBeCloseTo(-(-0.7 + 0.34), 3);  // 0.36
   });
 });
 
@@ -499,7 +551,7 @@ describe('GLB fallback acceptance (Phase 6)', () => {
     const names = new Set();
     grp.traverse(o => { if (o.name) names.add(o.name); });
     expect(names.has('wFL')).toBe(true);
-    expect(names.has('rearWing')).toBe(true);
+    expect(names.has('wRR')).toBe(true);
   });
 
   it('GT procedural renders when loader returns null (simulates missing GLB)', async () => {

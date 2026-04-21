@@ -11,15 +11,21 @@
  *
  * Coordinate system (car at rest):
  *   +Z = rear   −Z = nose   +Y = up   −X = left   +X = right
- * grp.position.y lifts car so wheels sit on track surface (y = −0.34).
+ * grp.position.y lifts car so wheels sit on track surface (y = TRACK.SURFACE_Y).
  */
 
 import * as THREE from 'three';
 import { CAR_MANIFEST } from './car-manifest.js';
 import { loadCarFromManifest } from './car-loader.js';
+import { TRACK } from './scene-config.js';
 
-/* ── Feature flag — flip per-car once GLBs are aligned ── */
-export const USE_IMPORTED_MODELS = { F1: true, F2: false, F3: false, GT: true };
+/* ── Feature flag — flip per-car once GLBs are aligned ──
+ * GT: false — the gt.glb body mesh is monolithic with no separable wheel nodes,
+ * so hybrid-import would bake in whatever proportions gltf-transform decided.
+ * The procedural GT builder delivers the same UX (livery, wheel spin, brakes)
+ * with measurements that are provably correct against the track frame.
+ */
+export const USE_IMPORTED_MODELS = { F1: true, F2: false, F3: false, GT: false };
 
 /* ── Livery clone-and-tint helper ─────────────────────────────────── */
 function applyLivery(meshes, color) {
@@ -382,69 +388,39 @@ export async function buildF1Hybrid({ color }) {
   grp.add(loaded.scene);
   applyLivery(loaded.liveryMeshes, color);
 
-  if (loaded.rearWing) {
-    const parent = loaded.rearWing.parent;
-    if (parent) {
-      const wingGrp = new THREE.Group();
-      wingGrp.name = 'rearWing';
-      parent.remove(loaded.rearWing);
-      wingGrp.add(loaded.rearWing);
-      parent.add(wingGrp);
-    } else {
-      loaded.rearWing.name = 'rearWing';
-    }
-  }
-
   const matTyre = makeMat(0x0d0d0d, 0.92, 0.04);
   const matHub  = makeMat(0xe0e0e0, 0.08, 1.00);
-  const wR = 0.345, wW = 0.340;
+
+  // Derive wheel radius & positions from GLB tire bboxes (measured pre-strip by car-loader).
+  // Fallback to procedural F1 defaults only if loader didn't provide a measurement.
+  const gm = loaded.glbMeasure;
+  const wR = gm ? gm.wheelRadius : 0.345;
+  const wW = 0.340;
+  const wheelY = gm ? (gm.groundContactY + wR) : -0.04;
+  const fX = gm ? gm.frontAxleX : 0.82;
+  const rX = gm ? gm.rearAxleX  : 0.80;
+  const fZ = gm ? gm.frontAxleZ : -1.50;
+  const rZ = gm ? gm.rearAxleZ  :  1.60;
   const wPos = {
-    wFL: [-0.82, -0.04, -1.50],
-    wFR: [ 0.82, -0.04, -1.50],
-    wRL: [-0.80, -0.04,  1.60],
-    wRR: [ 0.80, -0.04,  1.60],
+    wFL: [-fX, wheelY, fZ],
+    wFR: [ fX, wheelY, fZ],
+    wRL: [-rX, wheelY, rZ],
+    wRR: [ rX, wheelY, rZ],
   };
   Object.entries(wPos).forEach(([n, [x, y, z]]) => {
     const w = wheel(wR, wW, matHub, matTyre, n);
     w.name = n; w.position.set(x, y, z); grp.add(w);
   });
 
-  const bboxF1 = new THREE.Box3().setFromObject(grp);
-  grp.position.y -= (bboxF1.min.y + 0.34);
-  return grp;
-}
-
-/* ── GT hybrid: GLB body + procedural wheels (no wing-flip) ───────── */
-export async function buildGTHybrid({ color }) {
-  const grp = new THREE.Group();
-  grp.name = 'car';
-
-  const loaded = await loadCarFromManifest(CAR_MANIFEST.gt);
-  if (!loaded) {
-    console.warn('[buildGTHybrid] GLB load failed — using procedural GT');
-    return buildGTProcedural({ color });
-  }
-
-  grp.add(loaded.scene);
-  applyLivery(loaded.liveryMeshes, color);
-  // GT: rearWing is null in manifest — no wing wrapping needed
-
-  const matTyre = makeMat(0x0d0d0d, 0.92, 0.04);
-  const matHub  = makeMat(0xe0e0e0, 0.08, 1.00);
-  const wR = 0.338, wW = 0.260;
-  const wPos = {
-    wFL: [-0.86, -0.05, -1.38],
-    wFR: [ 0.86, -0.05, -1.38],
-    wRL: [-0.86, -0.05,  1.42],
-    wRR: [ 0.86, -0.05,  1.42],
-  };
-  Object.entries(wPos).forEach(([n, [x, y, z]]) => {
-    const w = wheel(wR, wW, matHub, matTyre, n);
-    w.name = n; w.position.set(x, y, z); grp.add(w);
-  });
-
-  const bboxGT = new THREE.Box3().setFromObject(grp);
-  grp.position.y -= (bboxGT.min.y + 0.34);
+  const measure = measureFromWheels(wPos, wR);
+  // Forward GLB-measured per-feature anchors to consumers. Keys: cockpit,
+  // halo, frontWing, rearWing, sidepodTop (synthesised by car-loader), floor,
+  // noseTip. Falls back to procedural-F1 anchor template if loader didn't
+  // measure any (e.g. GLB missing the named meshes).
+  measure.anchors = (gm && gm.anchors) ? gm.anchors : proceduralAnchors('F1');
+  grp.userData.measure = measure;
+  grp.userData.baseY   = TRACK.SURFACE_Y - measure.groundContactY;
+  grp.position.y       = grp.userData.baseY;
   return grp;
 }
 
@@ -454,10 +430,7 @@ export async function buildCar(type) {
   switch (type) {
     case 'F2': return buildF2Procedural(meta);
     case 'F3': return buildF3Procedural(meta);
-    case 'GT':
-      return (flag === true || flag?.GT === true)
-        ? buildGTHybrid(meta)
-        : buildGTProcedural(meta);
+    case 'GT': return buildGTProcedural(meta);
     default:
       return (flag === true || flag?.F1 === true)
         ? buildF1Hybrid(meta)
@@ -467,6 +440,81 @@ export async function buildCar(type) {
 
 export function getCarMeta(type) { return CAR_META[type] || CAR_META.F1; }
 export const WHEEL_NAMES = ['wFL', 'wFR', 'wRL', 'wRR'];
+
+/**
+ * Build the measurement contract from procedural wheel positions.
+ * groundContactY is the car-LOCAL Y of the lowest ground-touching point (wheel bottom).
+ * Consumers (main.js, debug overlay) translate to world-Y via TRACK.SURFACE_Y - groundContactY.
+ */
+function measureFromWheels(wPos, wR) {
+  return {
+    groundContactY: wPos.wFL[1] - wR,
+    frontAxleZ:     wPos.wFL[2],
+    rearAxleZ:      wPos.wRL[2],
+    frontAxleX:     Math.abs(wPos.wFL[0]),
+    rearAxleX:      Math.abs(wPos.wRL[0]),
+    wheelbase:      Math.abs(wPos.wRL[2] - wPos.wFL[2]),
+    trackWidth:     2 * Math.abs(wPos.wFL[0]),
+    wheelRadius:    wR,
+  };
+}
+
+/**
+ * Per-feature anchor coordinates in car-LOCAL space (pre-baseY lift).
+ * Each anchor is { x, y, z } in car-local coordinates, matching the authored
+ * geometry positions. Effect/camera consumers translate by baseY to world.
+ *
+ * For GLB variants the loader measures anchors from named mesh bboxes; for
+ * procedural cars we synthesise from the known local coordinates authored
+ * in the build functions. Keys: cockpit, halo, frontWing, rearWing,
+ * sidepodTop, floor, diffuser, noseTip.
+ */
+const PROCEDURAL_ANCHORS = {
+  F1: {
+    cockpit:    { x: 0, y: 0.55, z: 0.30 },    // cockpit tub top centre
+    halo:       { x: 0, y: 1.06, z: 0.42 },    // halo arch peak
+    frontWing:  { x: 0, y: 0.04, z: -2.60 },   // main-plane center
+    rearWing:   { x: 0, y: 0.98, z:  1.95 },   // rearWingGrp origin
+    sidepodTop: { x: 0, y: 0.46, z:  0.28 },   // sidepod top-face center
+    floor:      { x: 0, y: 0.04, z:  0.00 },   // floor panel top centre
+    diffuser:   { x: 0, y:-0.044,z:  1.93 },   // diffuser centre
+    noseTip:    { x: 0, y: 0.08, z: -2.72 },   // ogiveNose apex
+  },
+  F2: {
+    cockpit:    { x: 0, y: 0.50, z: 0.30 },
+    halo:       { x: 0, y: 0.92, z: 0.42 },
+    frontWing:  { x: 0, y: 0.04, z: -2.36 },
+    rearWing:   { x: 0, y: 0.90, z:  1.80 },
+    sidepodTop: { x: 0, y: 0.42, z:  0.22 },
+    floor:      { x: 0, y: 0.04, z:  0.00 },
+    diffuser:   { x: 0, y:-0.042,z:  1.80 },
+    noseTip:    { x: 0, y: 0.08, z: -2.48 },
+  },
+  F3: {
+    cockpit:    { x: 0, y: 0.46, z: 0.38 },
+    halo:       { x: 0, y: 0.92, z: 0.42 },
+    frontWing:  { x: 0, y: 0.04, z: -2.12 },
+    rearWing:   { x: 0, y: 0.82, z:  1.68 },
+    sidepodTop: { x: 0, y: 0.38, z:  0.24 },
+    floor:      { x: 0, y: 0.036,z:  0.00 },
+    diffuser:   { x: 0, y:-0.038,z:  1.68 },
+    noseTip:    { x: 0, y: 0.08, z: -2.24 },
+  },
+  GT: {
+    cockpit:    { x: 0, y: 0.60, z: 0.00 },    // roof interior / driver head
+    halo:       { x: 0, y: 0.72, z: 0.12 },    // GT uses roof peak as "halo"
+    frontWing:  { x: 0, y: 0.00, z: -2.32 },   // front splitter
+    rearWing:   { x: 0, y: 0.84, z:  1.92 },   // rear wing pivot
+    sidepodTop: { x: 0, y: 0.44, z:  0.12 },   // belt-line
+    floor:      { x: 0, y: 0.03, z:  0.00 },
+    diffuser:   { x: 0, y:-0.095,z:  2.14 },
+    noseTip:    { x: 0, y: 0.00, z: -2.48 },
+  },
+};
+
+function proceduralAnchors(type) {
+  return PROCEDURAL_ANCHORS[type] || PROCEDURAL_ANCHORS.F1;
+}
 
 /* ════════════════════════════════════════════════════════════════
    F1  —  2022+ ground-effect open-wheel single-seater
@@ -646,16 +694,13 @@ function buildF1Procedural({ color }) {
     grp.add(mesh(cyl(0.017, 0.020, 0.24, 8), matCarbon, s * 0.22, -0.082, -2.60));
   }
 
-  /* ── REAR WING — two-element DRS airfoil (named group for flip) */
+  /* ── REAR WING — two-element DRS airfoil */
   const rearWingGrp = new THREE.Group();
-  rearWingGrp.name = 'rearWing';
   rearWingGrp.position.set(0, 0.98, 1.95);   // pivot at main-plane leading edge
   // Main plane at pivot origin
   rearWingGrp.add(mesh(wingGeo(1.92, 0.36, 0.100), matBody, 0, 0, 0));
-  // DRS flap — named so wing-stall animation rotates only this element
-  const f1Flap = mesh(wingGeo(1.92, 0.26, 0.080), matBody, 0, -0.11, -0.06);
-  f1Flap.name = 'rearWingFlap';
-  rearWingGrp.add(f1Flap);
+  // DRS flap
+  rearWingGrp.add(mesh(wingGeo(1.92, 0.26, 0.080), matBody, 0, -0.11, -0.06));
   // Endplates (tall, louvred)
   for (const s of [-1, 1]) {
     rearWingGrp.add(mesh(box(0.040, 0.56, 0.40), matCarbon, s * 0.96, -0.21, 0));
@@ -723,7 +768,11 @@ function buildF1Procedural({ color }) {
   });
 
   buildLivery(grp, color, 'F1');
-  grp.position.y = -0.34 + wR - (-0.04);
+  const measure = measureFromWheels(wPos, wR);
+  measure.anchors = proceduralAnchors('F1');
+  grp.userData.measure = measure;
+  grp.userData.baseY   = TRACK.SURFACE_Y - measure.groundContactY;
+  grp.position.y       = grp.userData.baseY;
   return grp;
 }
 
@@ -857,14 +906,11 @@ function buildF2Procedural({ color }) {
     grp.add(mesh(cyl(0.016, 0.018, 0.20, 8), matCarbon, s * 0.20, -0.076, -2.40));
   }
 
-  /* ── REAR WING — named group for flip animation ──────────── */
+  /* ── REAR WING ────────────────────────────────────────────── */
   const rearWingGrp = new THREE.Group();
-  rearWingGrp.name = 'rearWing';
   rearWingGrp.position.set(0, 0.90, 1.80);
   rearWingGrp.add(mesh(wingGeo(1.74, 0.30, 0.090), matBody, 0, 0, 0));
-  const f2Flap = mesh(wingGeo(1.74, 0.22, 0.070), matBody, 0, -0.10, -0.06);
-  f2Flap.name = 'rearWingFlap';
-  rearWingGrp.add(f2Flap);
+  rearWingGrp.add(mesh(wingGeo(1.74, 0.22, 0.070), matBody, 0, -0.10, -0.06));
   for (const s of [-1, 1]) {
     rearWingGrp.add(mesh(box(0.038, 0.48, 0.34), matCarbon, s * 0.87, -0.20, 0));
   }
@@ -923,7 +969,11 @@ function buildF2Procedural({ color }) {
   });
 
   buildLivery(grp, color, 'F2');
-  grp.position.y = -0.34 + wR - (-0.04);
+  const measure = measureFromWheels(wPos, wR);
+  measure.anchors = proceduralAnchors('F2');
+  grp.userData.measure = measure;
+  grp.userData.baseY   = TRACK.SURFACE_Y - measure.groundContactY;
+  grp.position.y       = grp.userData.baseY;
   return grp;
 }
 
@@ -1022,14 +1072,11 @@ function buildF3Procedural({ color }) {
     grp.add(mesh(cyl(0.014, 0.016, 0.17, 8), matCarbon, s * 0.18, -0.066, -2.17));
   }
 
-  /* ── REAR WING — named group for flip animation ──────────── */
+  /* ── REAR WING ────────────────────────────────────────────── */
   const rearWingGrp = new THREE.Group();
-  rearWingGrp.name = 'rearWing';
   rearWingGrp.position.set(0, 0.82, 1.68);
   rearWingGrp.add(mesh(wingGeo(1.56, 0.26, 0.080), matBody, 0, 0, 0));
-  const f3Flap = mesh(wingGeo(1.56, 0.18, 0.062), matBody, 0, -0.09, -0.05);
-  f3Flap.name = 'rearWingFlap';
-  rearWingGrp.add(f3Flap);
+  rearWingGrp.add(mesh(wingGeo(1.56, 0.18, 0.062), matBody, 0, -0.09, -0.05));
   for (const s of [-1, 1]) {
     rearWingGrp.add(mesh(box(0.034, 0.42, 0.28), matCarbon, s * 0.78, -0.18, 0));
   }
@@ -1087,7 +1134,11 @@ function buildF3Procedural({ color }) {
   });
 
   buildLivery(grp, color, 'F3');
-  grp.position.y = -0.34 + wR - (-0.04);
+  const measure = measureFromWheels(wPos, wR);
+  measure.anchors = proceduralAnchors('F3');
+  grp.userData.measure = measure;
+  grp.userData.baseY   = TRACK.SURFACE_Y - measure.groundContactY;
+  grp.position.y       = grp.userData.baseY;
   return grp;
 }
 
@@ -1231,16 +1282,13 @@ function buildGTProcedural({ color }) {
     grp.add(mesh(cyl(0.048, 0.048, 0.020, 14), matChrome, ox, -0.090, 2.40));
   }
 
-  /* ── REAR WING — GT3 swan-neck (named group for flip) ────── */
+  /* ── REAR WING — GT3 swan-neck ───────────────────────────── */
   const rearWingGrp = new THREE.Group();
-  rearWingGrp.name = 'rearWing';
   rearWingGrp.position.set(0, 0.84, 1.92);
   // Main element at pivot origin
   rearWingGrp.add(mesh(wingGeo(1.76, 0.42, 0.110), matBody, 0, 0, 0));
-  // Second element (Gurney-like flap) — named for wing-stall animation
-  const gtFlap = mesh(wingGeo(1.76, 0.28, 0.075), matBody, 0, -0.10, -0.06);
-  gtFlap.name = 'rearWingFlap';
-  rearWingGrp.add(gtFlap);
+  // Second element (Gurney-like flap)
+  rearWingGrp.add(mesh(wingGeo(1.76, 0.28, 0.075), matBody, 0, -0.10, -0.06));
   // Large endplates with louvres
   for (const s of [-1, 1]) {
     rearWingGrp.add(mesh(box(0.046, 0.48, 0.46), matCarbon, s * 0.88, -0.20, 0));
@@ -1298,6 +1346,10 @@ function buildGTProcedural({ color }) {
   });
 
   buildLivery(grp, color, 'GT');
-  grp.position.y = -0.34 + wR - (-0.05);
+  const measure = measureFromWheels(wPos, wR);
+  measure.anchors = proceduralAnchors('GT');
+  grp.userData.measure = measure;
+  grp.userData.baseY   = TRACK.SURFACE_Y - measure.groundContactY;
+  grp.position.y       = grp.userData.baseY;
   return grp;
 }
