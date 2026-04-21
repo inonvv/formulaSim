@@ -273,10 +273,13 @@ export class AirflowEffect {
   }
 
   setCarType(type, measure) {
-    // Always refresh measure — caller may re-invoke with a new measure snapshot
-    // (e.g. when the same type's GLB resolves after the initial procedural build).
+    // Detect whether we need to rebuild: either a type change, or the same
+    // type with a new measure (e.g. a GLB-derived measure replacing the
+    // procedural fallback used by the constructor's initial _build).
+    const measureChanged = (measure || null) !== (this._measure || null);
+    const typeChanged    = this._type !== type;
     this._measure = measure || null;
-    if (this._type === type) return;
+    if (!typeChanged && !measureChanged) return;
     this._type = type;
     this._disposeAll();
     this._build(getProfile(type), this._measure);
