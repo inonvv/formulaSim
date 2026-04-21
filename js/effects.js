@@ -183,7 +183,28 @@ const CAR_AERO = {
 
 function getProfile(type) { return CAR_AERO[type] || CAR_AERO.F1; }
 
-function _buildSeedList(p) {
+/**
+ * Rescale `profile.sideHeights` so the maximum value lands at the halo
+ * anchor + CLEARANCE. Preserves the curve shape via scalar multiply.
+ *
+ * Fallback when no measure is supplied: treat `halfH * 1.93` as the halo
+ * stand-in (matches the procedural anchor ratio — see PROCEDURAL_ANCHORS
+ * in cars.js). Keeps all 5 variants on the same "hugs halo" intent.
+ */
+const _STREAM_PEAK_CLEARANCE = 0.10;
+function _rescaleSideHeights(profile, measure) {
+  const authored = profile.sideHeights;
+  const authoredPeak = Math.max(...authored);
+  if (authoredPeak <= 0) return authored.slice();
+  const haloY = (measure?.anchors?.halo?.y != null)
+    ? measure.anchors.halo.y
+    : profile.halfH * 1.93;
+  const targetPeak = haloY + _STREAM_PEAK_CLEARANCE;
+  const k = targetPeak / authoredPeak;
+  return authored.map(y => y * k);
+}
+
+function _buildSeedList(p, sideHeightsOverride) {
   const seeds = [];
   // Top-plane sweep (plan view, multiple heights for 3-D coverage)
   for (const xi of p.topSeeds) {
@@ -191,7 +212,8 @@ function _buildSeedList(p) {
     seeds.push({ seedXi: xi,   seedEta: -8, y: 0.70,  group: 'top',   halfH: p.halfH });
   }
   // Side-height sweep (lateral slice at x≈0)
-  for (const y of p.sideHeights) {
+  const sideHeights = sideHeightsOverride || p.sideHeights;
+  for (const y of sideHeights) {
     seeds.push({ seedXi: 0.01, seedEta: -8, y,        group: 'side',  halfH: p.halfH });
   }
   // Ground-effect underbody
@@ -281,7 +303,13 @@ export class AirflowEffect {
     this._wakeWidthX      = profile.wakeWidthX;
     this._wakeHeightRange = profile.wakeHeightRange;
     this._strouhal        = profile.strouhal || 0.20;
-    this._seeds           = _buildSeedList(profile);
+    // Rescale sideHeights so the streamline peak hugs the halo (+0.10 m
+    // clearance). Shape preserved via scalar multiply. Non-side seed groups
+    // keep their authored Y — their intent is lateral coverage, not
+    // halo-hugging.
+    const scaledSideHeights = _rescaleSideHeights(profile, this._measure);
+    this._scaledSideHeights = scaledSideHeights;
+    this._seeds           = _buildSeedList(profile, scaledSideHeights);
     this._paths           = this._seeds.map(s =>
       traceStreamlinePath(s.seedXi, s.seedEta, STEPS, STEP_SIZE)
     );
