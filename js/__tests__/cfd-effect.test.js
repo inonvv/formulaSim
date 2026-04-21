@@ -131,15 +131,22 @@ vi.mock('three', () => {
   };
 });
 
-/* ── Mock airflow-core dependency ─────────────────────────────────── */
-vi.mock('../airflow-core.js', () => ({
-  topViewVelocity:  (xi, eta) => ({ vxi: 0, veta: 1 }),
-  pressureCoeff:    (vxi, veta) => 0,
-  cpToColor:        (cp) => ({ r: 0.5, g: 0.5, b: 0.5 }),
-  vortexVelocity:   () => ({ vxi: 0, veta: 0 }),
-  sideViewVelocity: () => ({ veta: 1, vy: 0 }),
-  traceStreamlinePath: () => [],
-}));
+/* ── Mock airflow-core dependency ─────────────────────────────────── *
+ * Uses the REAL pure-math functions for topViewVelocity, pressureCoeff,
+ * sinkVelocity, sourceVelocity, sumVelocity — they're three-free and
+ * deterministic, so the CFD Cp recompute path (Phase C4) can be exercised
+ * against actual numbers rather than constants. cpToColor still returns a
+ * neutral colour so the colouring doesn't mask Cp assertions. */
+vi.mock('../airflow-core.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    cpToColor:           () => ({ r: 0.5, g: 0.5, b: 0.5 }),
+    vortexVelocity:      () => ({ vxi: 0, veta: 0 }),
+    sideViewVelocity:    () => ({ veta: 1, vy: 0 }),
+    traceStreamlinePath: () => [],
+  };
+});
 
 /* ── Scene stub ───────────────────────────────────────────────────── */
 function makeScene() {
@@ -256,6 +263,44 @@ describe('CfdEffect', () => {
     const cfd = new CfdEffect(makeScene());
     cfd.setVisible(false);
     expect(() => cfd.update(0.016, 1.0)).not.toThrow();
+  });
+
+  it('setModifiers() stores the modifier list and flags a Cp rebuild', async () => {
+    const { CfdEffect } = await import('../cfd-effect.js');
+    const cfd = new CfdEffect(makeScene());
+    const mods = [{ type: 'sink', x: 0, e: 0, strength: 0.5, rc: 0.12 }];
+    cfd.setModifiers(mods);
+    expect(cfd._modifiers).toBe(mods);
+    expect(cfd._speedDirty).toBe(true);
+  });
+
+  it('setModifiers(undefined) produces empty modifier list (graceful default)', async () => {
+    const { CfdEffect } = await import('../cfd-effect.js');
+    const cfd = new CfdEffect(makeScene());
+    cfd.setModifiers(undefined);
+    expect(cfd._modifiers).toEqual([]);
+  });
+
+  it('Cp sampling with modifiers produces a more-negative Cp near a sink (Δ ≥ 0.5)', async () => {
+    // Reproduces _updatePatchColors' Cp calc at a sample point near the
+    // sink. Plan recipe: sink at (x=0, e=0.5), sample near (0, 0.5).
+    // At a small radial offset from the sink centre, |v| jumps → Cp ≪ 0.
+    const core = await import('../airflow-core.js');
+    const { topViewVelocity, pressureCoeff, sumVelocity } = core;
+
+    const sampleXi  = 0.05;    // small offset from sink centre in xi
+    const sampleEta = 0.55;    // small offset from sink centre in eta
+
+    const base = topViewVelocity(sampleXi, sampleEta);
+    const cpBase = pressureCoeff(base.vxi, base.veta);
+
+    const mods = [{ type: 'sink', x: 0, e: 0.5, strength: 0.5, rc: 0.12 }];
+    const withMods = sumVelocity(sampleXi, sampleEta, topViewVelocity, mods);
+    const cpMod = pressureCoeff(withMods.vxi, withMods.veta);
+
+    // Plan tuning target: delta ≥ 0.5 more negative than the baseline Cp.
+    expect(cpBase - cpMod).toBeGreaterThanOrEqual(0.5);
+    expect(cpMod).toBeLessThan(cpBase);
   });
 
   it('cockpit + rearWing blobs adopt measured anchor y/z when measure supplied', async () => {

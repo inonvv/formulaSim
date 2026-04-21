@@ -13,7 +13,7 @@
  */
 
 import * as THREE from 'three';
-import { topViewVelocity, pressureCoeff, cpToColor, vortexVelocity } from './airflow-core.js';
+import { topViewVelocity, pressureCoeff, cpToColor, vortexVelocity, sumVelocity } from './airflow-core.js';
 
 /* ── Helpers ──────────────────────────────────────────────────────── */
 function rnd(a, b) { return a + Math.random() * (b - a); }
@@ -270,6 +270,7 @@ export class CfdEffect {
     this._lastBuiltSpeed = -1;
     this._baseY          = 0;
     this._anchors        = null;   // set by setCarType(type, measure)
+    this._modifiers      = [];     // Phase C: injected via setModifiers()
 
     this._patchMeshes    = [];
     this._blobMeshes     = [];
@@ -316,6 +317,22 @@ export class CfdEffect {
   setSpeed(speed) {
     this._speed      = speed;
     this._speedDirty = true;
+  }
+
+  /**
+   * Phase C: inject the analytical modifier list produced by
+   * AirflowEffect.getModifiers() so the CFD Cp map reflects the same
+   * feature-aware flow (sinks at inlets, sources at outlets, wing dipoles).
+   *
+   * Triggers a vertex-colour regeneration; an empty list restores the
+   * pre-Phase-C colouring exactly.
+   */
+  setModifiers(modifiers) {
+    this._modifiers  = Array.isArray(modifiers) ? modifiers : [];
+    this._speedDirty = true;
+    // Rebake vertex colours on the next update() pass. Force the threshold
+    // test by bumping lastBuiltSpeed away from current.
+    this._lastBuiltSpeed = -9999;
   }
 
   setVisible(v) {
@@ -491,10 +508,18 @@ export class CfdEffect {
 
         let cp;
         {
-          // Potential-flow perturbation on top of role-specific bias
+          // Potential-flow perturbation on top of role-specific bias.
+          // Phase C: when Phase-C modifiers are wired in, sample the
+          // superposed velocity field (sinks at inlets, sources at outlets,
+          // wing dipoles) so the Cp map reflects feature-aware flow.
+          // Empty modifier list ⇒ identical to the pre-Phase-C result.
           const xi  = hw > 0 ? lx / hw : 0;
           const eta = hh > 0 ? ly / hh : 0;
-          const { vxi, veta } = topViewVelocity(xi * 1.6 + 0.01, eta * 1.6 + 0.01);
+          const sampleXi  = xi  * 1.6 + 0.01;
+          const sampleEta = eta * 1.6 + 0.01;
+          const { vxi, veta } = (this._modifiers && this._modifiers.length > 0)
+            ? sumVelocity(sampleXi, sampleEta, topViewVelocity, this._modifiers)
+            : topViewVelocity(sampleXi, sampleEta);
           const baseCp = pressureCoeff(vxi, veta);
 
           let groundScale = 1.0;

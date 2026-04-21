@@ -232,6 +232,10 @@ async function spawnCar(type) {
 
   airflow.setCarType(type, state.carMeasure, state.bodyOccupancy);
   cfd.setCarType(type, state.carMeasure);
+  // Phase C: pipe the same feature-aware modifier list into CFD so the
+  // pressure map sinks under inlets / low-pressure under the rear wing
+  // match the airflow streamlines.
+  cfd.setModifiers(airflow.getModifiers());
   rain.setCarType(type, state.carMeasure);
   optimal.setCarType(type, state.carMeasure);
   vents.setCarType(type, state.carMeasure);
