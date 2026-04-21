@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { sliceGeometryByPredicate } from './geometry-split.js';
 
 const _loader = new GLTFLoader();
 const _draco  = new DRACOLoader();
@@ -122,11 +123,177 @@ function measureAnchors(scene, anchorSources) {
   return anchors;
 }
 
+/* ── Wheel split config ──────────────────────────────────────────────
+ * Source mesh names → split mode.
+ *   'x'   → 2-way by world-X sign (front_tire / rear_tire / front_cover)
+ *   'xz'  → 4-way by (X sign, Z sign) (rim / nut / screws)
+ * The 'side' flag on 'x' sources tells us which half of the car the whole
+ * mesh lives on ('front' → both fragments land at front axle Z, etc.).
+ */
+const WHEEL_SPLIT_CONFIG = {
+  Object_33: { mode: 'x',  side: 'front' },   // front_tire        — merged L+R fronts
+  Object_26: { mode: 'x',  side: 'rear'  },   // rear_tire         — merged L+R rears
+  Object_34: { mode: 'x',  side: 'front' },   // front_wheel_cover — merged L+R fronts
+  Object_27: { mode: 'xz' },                  // wheel_rim         — all 4 corners
+  Object_29: { mode: 'xz' },                  // wheel_nut         — all 4 corners
+  Object_24: { mode: 'xz' },                  // wheel_screw.001   — all 4 corners
+  Object_25: { mode: 'xz' },                  // wheel_screw       — all 4 corners
+};
+
+/**
+ * Split merged GLB wheel meshes (front_tire / rear_tire / wheel_rim / wheel_nut /
+ * wheel_screws / front_wheel_cover) into 4 per-corner wheel groups FL/FR/RL/RR.
+ *
+ * Implementation:
+ *   1. For each source mesh listed in WHEEL_SPLIT_CONFIG that exists in `scene`,
+ *      clone its geometry and apply its world matrix so vertex positions are
+ *      in car-local (scene-world) coordinates.
+ *   2. Run `sliceGeometryByPredicate` per corner. Predicates use world X sign
+ *      for 'x' mode and (X sign, Z sign) for 'xz' mode; 4-way splits use the
+ *      midpoint of measured front/rear axle Z as the Z-split plane.
+ *   3. Translate each fragment's geometry so its bbox center sits at (0,0,0).
+ *      Wrap in a Mesh with the SHARED (un-cloned) source material.
+ *   4. Attach the mesh to the corresponding corner Group, which is positioned
+ *      at the bbox center in car-local space (= fragment's axle point).
+ *   5. Remove the source meshes from the scene so they don't double-render.
+ *
+ * Returns { wheelsRoot, wheels: { FL, FR, RL, RR }, debug: { counts } }.
+ * `debug.counts` maps corner → { <srcName>: { fragmentVertCount, sourceVertCount } }
+ * so callers (and tests) can verify no > 5% vertex loss per corner.
+ */
+export function buildWheelsFromGLB(scene, measure) {
+  if (!scene || !measure) return null;
+
+  scene.updateMatrixWorld?.(true);
+
+  // Z-plane between front and rear axles — splits rim/nut/screws into F vs R halves.
+  // In car-local post-rotation space: frontAxleZ ≈ -1.47, rearAxleZ ≈ +2.10.
+  const zMid = 0.5 * (measure.frontAxleZ + measure.rearAxleZ);
+  const wheelY = measure.groundContactY + measure.wheelRadius;
+
+  const wheels = {
+    FL: new THREE.Group(),
+    FR: new THREE.Group(),
+    RL: new THREE.Group(),
+    RR: new THREE.Group(),
+  };
+  wheels.FL.name = 'FL';
+  wheels.FR.name = 'FR';
+  wheels.RL.name = 'RL';
+  wheels.RR.name = 'RR';
+
+  const wheelsRoot = new THREE.Group();
+  wheelsRoot.name = 'wheelsRoot';
+  wheelsRoot.add(wheels.FL, wheels.FR, wheels.RL, wheels.RR);
+
+  const debug = { counts: { FL: {}, FR: {}, RL: {}, RR: {} } };
+  const toRemove = [];
+
+  for (const [srcName, cfg] of Object.entries(WHEEL_SPLIT_CONFIG)) {
+    const srcMesh = findByName(scene, srcName);
+    if (!srcMesh || !srcMesh.geometry || !srcMesh.geometry.attributes?.position) {
+      continue;   // source absent or geometry-less (test stub) — skip quietly
+    }
+    srcMesh.updateMatrixWorld?.(true);
+
+    // Clone geometry and bake the source's world matrix so split predicates
+    // can work in world / car-local coordinates instead of mesh-local ones.
+    const worldGeo = srcMesh.geometry.clone();
+    if (srcMesh.matrixWorld && worldGeo.applyMatrix4) {
+      worldGeo.applyMatrix4(srcMesh.matrixWorld);
+    }
+
+    const srcVertCount = worldGeo.attributes.position.count;
+
+    // Build the per-corner predicates this source contributes to.
+    const cornerPreds = [];
+    if (cfg.mode === 'x') {
+      // 2-way: whole mesh is on front or rear. Just split by X sign.
+      const z = cfg.side === 'front' ? measure.frontAxleZ : measure.rearAxleZ;
+      const xFront = measure.frontAxleX;
+      const xRear  = measure.rearAxleX;
+      const ax = cfg.side === 'front' ? xFront : xRear;
+      if (cfg.side === 'front') {
+        cornerPreds.push({ corner: 'FL', axle: { x: -ax, z }, pred: (x) => x < 0 });
+        cornerPreds.push({ corner: 'FR', axle: { x:  ax, z }, pred: (x) => x > 0 });
+      } else {
+        cornerPreds.push({ corner: 'RL', axle: { x: -ax, z }, pred: (x) => x < 0 });
+        cornerPreds.push({ corner: 'RR', axle: { x:  ax, z }, pred: (x) => x > 0 });
+      }
+    } else {
+      // 4-way: X sign + Z sign (front = Z < zMid, rear = Z > zMid in car-local).
+      // With frontAxleZ ≈ -1.47 and rearAxleZ ≈ +2.10, zMid ≈ +0.315; front halves
+      // have Z < zMid and rear halves have Z > zMid.
+      cornerPreds.push({
+        corner: 'FL',
+        axle: { x: -measure.frontAxleX, z: measure.frontAxleZ },
+        pred: (x, _y, z) => x < 0 && z < zMid,
+      });
+      cornerPreds.push({
+        corner: 'FR',
+        axle: { x:  measure.frontAxleX, z: measure.frontAxleZ },
+        pred: (x, _y, z) => x > 0 && z < zMid,
+      });
+      cornerPreds.push({
+        corner: 'RL',
+        axle: { x: -measure.rearAxleX, z: measure.rearAxleZ },
+        pred: (x, _y, z) => x < 0 && z > zMid,
+      });
+      cornerPreds.push({
+        corner: 'RR',
+        axle: { x:  measure.rearAxleX, z: measure.rearAxleZ },
+        pred: (x, _y, z) => x > 0 && z > zMid,
+      });
+    }
+
+    for (const { corner, axle, pred } of cornerPreds) {
+      const fragGeo = sliceGeometryByPredicate(worldGeo, pred);
+      const fragVertCount = fragGeo.attributes.position?.count ?? 0;
+      debug.counts[corner][srcName] = { fragmentVertCount: fragVertCount, sourceVertCount: srcVertCount };
+      if (fragVertCount === 0) continue;
+
+      // Translate fragment geometry so its bbox center lies at the corner's
+      // axle point — subtracting (axle.x, wheelY, axle.z) in world/car-local.
+      // This way the fragment mesh sits at (0,0,0) inside a group whose
+      // .position is the axle; rotating the group around X spins the wheel
+      // in place around its own axle.
+      if (fragGeo.translate) {
+        fragGeo.translate(-axle.x, -wheelY, -axle.z);
+      }
+
+      const mesh = new THREE.Mesh(fragGeo, srcMesh.material);
+      mesh.name = `${srcName}_${corner}`;
+      mesh.castShadow    = true;
+      mesh.receiveShadow = true;
+      wheels[corner].add(mesh);
+    }
+
+    // Position the corner groups — shared across all 4 sources; last write wins
+    // but they all map the same corner → same axle, so no conflict.
+    wheels.FL.position.set(-measure.frontAxleX, wheelY, measure.frontAxleZ);
+    wheels.FR.position.set( measure.frontAxleX, wheelY, measure.frontAxleZ);
+    wheels.RL.position.set(-measure.rearAxleX,  wheelY, measure.rearAxleZ);
+    wheels.RR.position.set( measure.rearAxleX,  wheelY, measure.rearAxleZ);
+
+    toRemove.push(srcMesh);
+  }
+
+  // Strip the originals from the scene so they don't double-render alongside
+  // the new per-corner fragments. Skip gracefully when parent.remove is absent
+  // (some test stubs don't implement it).
+  for (const m of toRemove) {
+    m.parent?.remove?.(m);
+  }
+
+  return { wheelsRoot, wheels, debug };
+}
+
 /**
  * Manifest-aware GLB loader.
  * @param {object} manifest  — entry from CAR_MANIFEST (not a type string).
- * @returns {{ scene, liveryMeshes, glbMeasure } | null}
+ * @returns {{ scene, liveryMeshes, glbMeasure, wheelsRoot } | null}
  *   glbMeasure is null when manifest.wheelSources is not set.
+ *   wheelsRoot is null when no merged-wheel meshes are present (procedural path).
  */
 export async function loadCarFromManifest(manifest) {
   const loaded = await loadCarModel(manifest.url);
@@ -144,6 +311,17 @@ export async function loadCarFromManifest(manifest) {
   const anchors    = measureAnchors(scene, manifest.anchorSources);
   if (glbMeasure && anchors) glbMeasure.anchors = anchors;
 
+  // Split the merged GLB wheel meshes into 4 per-corner groups BEFORE the
+  // strip pass runs — buildWheelsFromGLB removes the originals from the
+  // scene itself, so the remaining strip list only handles orphans like
+  // Object_28 (rear-wheel cape) that aren't wheels at all.
+  let wheelsRoot = null;
+  if (glbMeasure && manifest.buildWheels !== false) {
+    const built = buildWheelsFromGLB(scene, glbMeasure);
+    wheelsRoot = built?.wheelsRoot ?? null;
+    if (built) glbMeasure.wheelDebug = built.debug;
+  }
+
   const toStrip      = [];
   const liveryMeshes = [];
 
@@ -156,5 +334,5 @@ export async function loadCarFromManifest(manifest) {
 
   toStrip.forEach(m => m.parent?.remove(m));
 
-  return { scene, liveryMeshes, glbMeasure };
+  return { scene, liveryMeshes, glbMeasure, wheelsRoot };
 }

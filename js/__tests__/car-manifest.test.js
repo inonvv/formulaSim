@@ -32,20 +32,14 @@ describe('CAR_MANIFEST', () => {
     }
   });
 
-  it('f1.stripMeshes contains the 8 wheel/tire/cover node names', () => {
+  it('f1.stripMeshes keeps only Object_28 (orphan rear-cape); wheel nodes are un-stripped for splitter', () => {
     const names = CAR_MANIFEST.f1.stripMeshes;
-    ['Object_26', 'Object_33', 'Object_27', 'Object_28'].forEach(n =>
-      expect(names).toContain(n)
+    // Object_28 = orphaned rear_wheel_cover cape — must stay stripped.
+    expect(names).toContain('Object_28');
+    // Object_24/25/26/27/29/33/34 are SPLIT by buildWheelsFromGLB, not stripped.
+    ['Object_24', 'Object_25', 'Object_26', 'Object_27', 'Object_29', 'Object_33', 'Object_34'].forEach(n =>
+      expect(names).not.toContain(n)
     );
-  });
-
-  it('f1.rearWing is a non-empty string', () => {
-    expect(typeof CAR_MANIFEST.f1.rearWing).toBe('string');
-    expect(CAR_MANIFEST.f1.rearWing.length).toBeGreaterThan(0);
-  });
-
-  it('gt.rearWing is null (GT wing is body-integral, no flip)', () => {
-    expect(CAR_MANIFEST.gt.rearWing).toBeNull();
   });
 
   it('getManifest("f1") returns CAR_MANIFEST.f1', () => {

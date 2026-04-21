@@ -21,15 +21,12 @@ export const CAR_MANIFEST = {
   f1: {
     url: new URL('../assets/models/f1.glb', import.meta.url).href,
     transform: { scale: 1.0, rotation: [0, Math.PI, 0], position: [0, 0, 0] },
+    //
+    // Wheel meshes (Object_24/25/26/27/29/33/34) are NOT stripped here —
+    // buildWheelsFromGLB splits them into 4 per-corner groups and removes the
+    // originals from the scene. Only the orphaned rear-wheel cape stays stripped.
     stripMeshes: [
-      'Object_24',  // wheel_screw.001   — all-4-corner merged
-      'Object_25',  // wheel_screw       — all-4-corner merged
-      'Object_26',  // rear_tire         — both rear tires merged
-      'Object_27',  // wheel_rim         — all-4-corner merged
       'Object_28',  // rear_wheel_cover  — orphaned cape (Z≈+2.1 after rotation)
-      'Object_29',  // wheel_nut         — all-4-corner merged
-      'Object_33',  // front_tire        — both front tires merged
-      'Object_34',  // front_wheel_cover — both front covers merged
     ],
     liveryMeshes: [
       'Object_19',  // main_body — primary papaya paint surface
@@ -38,9 +35,9 @@ export const CAR_MANIFEST = {
     ],
     //
     // Pre-strip tire measurement: these meshes define the ground-contact plane
-    // and the front/rear axle positions for the procedural wheels. They must be
-    // listed ALSO in stripMeshes above — the loader measures them, then the strip
-    // pass removes them so procedural wheels render in their place.
+    // and the front/rear axle positions. After measurement, buildWheelsFromGLB
+    // (in car-loader.js) splits these merged meshes into per-corner fragments
+    // and removes the originals from the scene.
     // Values derived from docs/f1-bboxes.json + rotation [0, π, 0]:
     //   Object_33 front_tire: world Y-min = -0.6187, world Z-center = -1.47
     //   Object_26 rear_tire:  world Y-min = -0.6232, world Z-center = +2.10
