@@ -115,7 +115,10 @@ const CAR_AERO = {
       {role:'floor',     wx:-0.88,wy:-0.05,wz: 0.50,sign: 1, gamma:0.4, rc:0.10},
       {role:'floor',     wx: 0.88,wy:-0.05,wz: 0.50,sign:-1, gamma:0.4, rc:0.10},
     ],
-    vortexMaxRadius:0.40, wakeWidthX:1.0,
+    // Reduced from 0.40 — the 0.40 spiral overlapped the front-left wheel
+    // when wz snapped to measure.anchors.frontWing.z, reading as a rainbow
+    // bullseye on the tyre. 0.22 keeps the core visible without tyre clash.
+    vortexMaxRadius:0.22, wakeWidthX:1.0,
     wakeHeightRange:[-0.10,1.20], wakeCount:220,
     strouhal: 0.21,  // Strouhal number for vortex shedding frequency
   },
@@ -240,13 +243,15 @@ function _buildSeedList(p, sideHeightsOverride, measure) {
     seeds.push({ seedXi: xi,   seedEta: -8, y: 0.70,  group: 'top',   halfH: p.halfH });
   }
   // Nose / front-wing top band — paints airflow hugging the wing top + nose.
-  // Only when the anchor is present (GLB measure). 5 streams at wing-top
-  // height cover the region Phase C sinks would otherwise leave bare.
+  // Seeds are STAGGERED on seedEta so smoke particles don't arrive at the
+  // wing synchronously (previous version read as one strong bunched line).
   const fwY = measure?.anchors?.frontWing?.y;
   if (Number.isFinite(fwY)) {
     const noseY = fwY + 0.10;
-    for (const xi of [-0.6, -0.3, 0, 0.3, 0.6]) {
-      seeds.push({ seedXi: xi, seedEta: -8, y: noseY, group: 'nose', halfH: p.halfH });
+    const noseXi  = [-0.6,  -0.3,     0,   0.3,   0.6];
+    const noseEta = [-8.0, -7.75, -8.25, -7.65, -8.15];  // ≤0.4 stagger
+    for (let k = 0; k < noseXi.length; k++) {
+      seeds.push({ seedXi: noseXi[k], seedEta: noseEta[k], y: noseY, group: 'nose', halfH: p.halfH });
     }
   }
   // Sidepod / body flank — streams seeded just outside the unit-cylinder body
@@ -257,6 +262,32 @@ function _buildSeedList(p, sideHeightsOverride, measure) {
       for (const y of [0.15, 0.35, 0.55]) {
         seeds.push({ seedXi: x, seedEta: -8, y, group: 'flank', halfH: p.halfH });
       }
+    }
+  }
+  // Halo-wrap band — 4 thin streams that curve around the halo sides and
+  // continue to the rear. Keeps the upper-body flow continuous from front
+  // wing → halo → rear. Anchored variants only.
+  const haloAnchor = measure?.anchors?.halo;
+  if (haloAnchor && Number.isFinite(haloAnchor.y)) {
+    const haloXi  = [-0.45, 0.45, -0.30, 0.30];
+    const haloEta = [-8.0,  -7.5, -7.8,  -8.3];
+    const haloYLo = haloAnchor.y - 0.05;
+    const haloYHi = haloAnchor.y + 0.10;
+    for (let k = 0; k < haloXi.length; k++) {
+      const y = (k < 2) ? haloYLo : haloYHi;
+      seeds.push({ seedXi: haloXi[k], seedEta: haloEta[k], y, group: 'halo', halfH: p.halfH });
+    }
+  }
+  // Rear-wing leading-edge band — 4 thin streams that feed into the rear
+  // wing from the roof, so the flow reads as "enters wing" rather than
+  // cutting off behind the cockpit.
+  const rwAnchor = measure?.anchors?.rearWing;
+  if (rwAnchor && Number.isFinite(rwAnchor.y)) {
+    const rwY   = rwAnchor.y + 0.10;
+    const rwXi  = [-0.6, -0.3, 0.3, 0.6];
+    const rwEta = [-8.0, -7.6, -7.9, -8.2];
+    for (let k = 0; k < rwXi.length; k++) {
+      seeds.push({ seedXi: rwXi[k], seedEta: rwEta[k], y: rwY, group: 'rearWing', halfH: p.halfH });
     }
   }
   // Side-height sweep (lateral slice at x≈0)

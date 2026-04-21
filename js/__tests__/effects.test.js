@@ -356,6 +356,53 @@ describe('AirflowEffect', () => {
     const flank = airflow._seeds.filter(s => s.group === 'flank');
     expect(flank.length).toBe(0);
   });
+
+  it('nose seeds are staggered on seedEta so smoke does not arrive in sync', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    const measure = { anchors: { frontWing: { x: 0, y: 0.05, z: -2.3 } } };
+    airflow.setCarType('F1', measure);
+    const nose = airflow._seeds.filter(s => s.group === 'nose');
+    const etas = new Set(nose.map(s => s.seedEta));
+    // All 5 eta values must be distinct (staggered) and within 0.5 of -8.
+    expect(etas.size).toBe(nose.length);
+    for (const e of nose.map(s => s.seedEta)) {
+      expect(Math.abs(e + 8)).toBeLessThanOrEqual(0.5);
+    }
+  });
+
+  it('halo-wrap band appears when measure carries halo anchor', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    const measure = { anchors: { halo: { x: 0, y: 0.66, z: -0.05 } } };
+    airflow.setCarType('F1', measure);
+    const halo = airflow._seeds.filter(s => s.group === 'halo');
+    expect(halo.length).toBe(4);
+    // 2 heights straddle halo.y
+    const ys = [...new Set(halo.map(s => s.y))].sort();
+    expect(ys.length).toBe(2);
+    expect(ys[0]).toBeCloseTo(0.61, 6);
+    expect(ys[1]).toBeCloseTo(0.76, 6);
+  });
+
+  it('rear-wing leading-edge band appears when measure carries rearWing anchor', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    const measure = { anchors: { rearWing: { x: 0, y: 0.85, z: 2.41 } } };
+    airflow.setCarType('F1', measure);
+    const rw = airflow._seeds.filter(s => s.group === 'rearWing');
+    expect(rw.length).toBe(4);
+    for (const s of rw) expect(s.y).toBeCloseTo(0.95, 6);
+  });
+
+  it('F1 vortexMaxRadius stays small enough to avoid front-wheel overlap', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1');
+    // 0.25 m is the tuning ceiling — above that, the spiral visibly
+    // overlaps a tyre (radius ~0.345). Reassert as a regression guard.
+    expect(airflow._vortexMaxRadius).toBeLessThanOrEqual(0.25);
+  });
 });
 
 describe('AirflowEffect — vortexDefs role tagging', () => {
