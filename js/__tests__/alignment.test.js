@@ -167,7 +167,37 @@ vi.mock('three', () => {
 
   const MathUtils = { degToRad: d => d * Math.PI / 180 };
 
+  // Box3 reads from nested __testBbox markers so the car-loader's
+  // measureAnchors / measureTires pick up our test fixtures.
+  function Box3() {
+    this.min = new Vec3(+Infinity, +Infinity, +Infinity);
+    this.max = new Vec3(-Infinity, -Infinity, -Infinity);
+  }
+  Box3.prototype.setFromObject = function (node) {
+    const walk = (n) => {
+      if (n.__testBbox) {
+        const b = n.__testBbox;
+        if (b.min.x < this.min.x) this.min.x = b.min.x;
+        if (b.min.y < this.min.y) this.min.y = b.min.y;
+        if (b.min.z < this.min.z) this.min.z = b.min.z;
+        if (b.max.x > this.max.x) this.max.x = b.max.x;
+        if (b.max.y > this.max.y) this.max.y = b.max.y;
+        if (b.max.z > this.max.z) this.max.z = b.max.z;
+      }
+      (n.children || []).forEach(walk);
+    };
+    walk(node);
+    return this;
+  };
+  Box3.prototype.getCenter = function (target) {
+    target.x = (this.min.x + this.max.x) / 2;
+    target.y = (this.min.y + this.max.y) / 2;
+    target.z = (this.min.z + this.max.z) / 2;
+    return target;
+  };
+
   return {
+    Box3,
     Group, Mesh, Points, Line, LineSegments,
     BufferGeometry, BufferAttribute,
     PlaneGeometry, SphereGeometry, BoxGeometry, CylinderGeometry, ConeGeometry,
@@ -317,6 +347,127 @@ describe('alignment — McLaren vortex cores anchor to wings (±0.05 m)', () => 
     expect(fl.length).toBe(2);
     // Authored F1 floor wz = 0.50 — floor vortices are NOT a wing-tip anchor.
     for (const d of fl) expect(d.wz).toBeCloseTo(0.50, 5);
+  });
+});
+
+/* ════════════════════════════════════════════════════════════════════
+   Phase A vent-anchor regressions — McLaren (GLB) and procedural parity
+════════════════════════════════════════════════════════════════════ */
+
+// Reuse the loader mocks from car-loader.test.js style, but stand up our own
+// scene and manifest here so this file stays self-contained.
+vi.mock('three/addons/loaders/GLTFLoader.js', () => ({
+  GLTFLoader: class {
+    setDRACOLoader() {}
+    async loadAsync(_url) { return _GLTF_RESOLVE; }
+  },
+}));
+vi.mock('three/addons/loaders/DRACOLoader.js', () => ({
+  DRACOLoader: class { setDecoderPath() {} },
+}));
+
+let _GLTF_RESOLVE = null;
+
+function _alignMakeNode(name, isMesh = true) {
+  return {
+    name, isMesh,
+    castShadow: false, receiveShadow: false,
+    children: [],
+    updateMatrixWorld() {},
+    traverse(fn) {
+      fn(this);
+      this.children.forEach(c => c.traverse ? c.traverse(fn) : fn(c));
+    },
+  };
+}
+function _alignMakeSceneNode(children = []) {
+  const s = {
+    name: 'Scene', isMesh: false, children,
+    position: { x: 0, y: 0, z: 0, set(x, y, z) { this.x = x; this.y = y; this.z = z; } },
+    scale:    { x: 1,            setScalar(v)   { this.x = v; } },
+    rotation: { x: 0, y: 0, z: 0, set(x, y, z) { this.x = x; this.y = y; this.z = z; } },
+    updateMatrixWorld() {},
+    remove(c) { this.children = this.children.filter(x => x !== c); },
+    traverse(fn) {
+      fn(this);
+      this.children.forEach(c => c.traverse ? c.traverse(fn) : fn(c));
+    },
+  };
+  children.forEach(c => { c.parent = s; });
+  return s;
+}
+
+describe('alignment — McLaren vent anchors (Phase A)', () => {
+  it('sidepodInletL.x ≈ bodyShell.x + (-0.70) within ±0.05 m', async () => {
+    const { loadCarFromManifest } = await import('../car-loader.js');
+
+    // Real McLaren main_body bbox (post-rotation flips X and Z signs).
+    // Source: docs/f1-bboxes.json Object_19 bounds — center ≈ (0, 0.0142, 0.1292).
+    const body = _alignMakeNode('Object_19');
+    body.__testBbox = { min: { x: -0.8125, y: -0.4674, z: -2.8072 }, max: { x: 0.8125, y: 0.4958, z: 2.5487 } };
+    // Minimal tyre pair so wheelSources measurement succeeds.
+    const front = _alignMakeNode('Object_33');
+    front.__testBbox = { min: { x: -0.98, y: -0.6187, z: -1.82 }, max: { x: 0.96, y: 0.2546, z: -1.11 } };
+    const rear  = _alignMakeNode('Object_26');
+    rear.__testBbox  = { min: { x: -1.03, y: -0.6232, z: 1.74 },  max: { x: 1.03, y: 0.2570, z: 2.46 } };
+    const scene = _alignMakeSceneNode([body, front, rear]);
+    _GLTF_RESOLVE = { scene };
+
+    const manifest = {
+      url: '/models/cars/f1.glb',
+      transform: { scale: 1.0, rotation: [0, 0, 0], position: [0, 0, 0] },
+      stripMeshes: [], liveryMeshes: [],
+      wheelSources: { front: 'Object_33', rear: 'Object_26' },
+      buildWheels: false,   // skip GLB wheel split — we only need anchor readouts
+      anchorSources: {
+        bodyShell:       { mesh: 'Object_19', use: 'center' },
+        sidepodInletL:   { anchor: 'bodyShell', offset: [-0.70, 0.00, -0.40],
+                           direction: [0.25, 0, -1], role: 'inlet' },
+        sidepodInletR:   { mirrored: 'sidepodInletL' },
+      },
+    };
+    const result = await loadCarFromManifest(manifest);
+    const anchors = result.glbMeasure.anchors;
+
+    expect(anchors.bodyShell).toBeDefined();
+    expect(anchors.sidepodInletL).toBeDefined();
+    // Offset math: inletL.x = bodyShell.x + (-0.70)
+    const expectedX = anchors.bodyShell.x + (-0.70);
+    expect(Math.abs(anchors.sidepodInletL.x - expectedX)).toBeLessThanOrEqual(0.05);
+  });
+
+  it('sidepodInletR.x ≈ -sidepodInletL.x (auto-mirror)', async () => {
+    const { loadCarFromManifest } = await import('../car-loader.js');
+
+    const body = _alignMakeNode('Object_19');
+    body.__testBbox = { min: { x: -0.8125, y: -0.4674, z: -2.8072 }, max: { x: 0.8125, y: 0.4958, z: 2.5487 } };
+    const front = _alignMakeNode('Object_33');
+    front.__testBbox = { min: { x: -0.98, y: -0.6187, z: -1.82 }, max: { x: 0.96, y: 0.2546, z: -1.11 } };
+    const rear  = _alignMakeNode('Object_26');
+    rear.__testBbox  = { min: { x: -1.03, y: -0.6232, z: 1.74 },  max: { x: 1.03, y: 0.2570, z: 2.46 } };
+    const scene = _alignMakeSceneNode([body, front, rear]);
+    _GLTF_RESOLVE = { scene };
+
+    const manifest = {
+      url: '/models/cars/f1.glb',
+      transform: { scale: 1.0, rotation: [0, 0, 0], position: [0, 0, 0] },
+      stripMeshes: [], liveryMeshes: [],
+      wheelSources: { front: 'Object_33', rear: 'Object_26' },
+      buildWheels: false,   // skip GLB wheel split — we only need anchor readouts
+      anchorSources: {
+        bodyShell:       { mesh: 'Object_19', use: 'center' },
+        sidepodInletL:   { anchor: 'bodyShell', offset: [-0.70, 0.00, -0.40],
+                           direction: [0.25, 0, -1], role: 'inlet' },
+        sidepodInletR:   { mirrored: 'sidepodInletL' },
+      },
+    };
+    const result = await loadCarFromManifest(manifest);
+    const anchors = result.glbMeasure.anchors;
+    expect(anchors.sidepodInletL).toBeDefined();
+    expect(anchors.sidepodInletR).toBeDefined();
+    expect(anchors.sidepodInletR.x).toBeCloseTo(-anchors.sidepodInletL.x, 5);
+    expect(anchors.sidepodInletR.z).toBeCloseTo( anchors.sidepodInletL.z, 5);
+    expect(anchors.sidepodInletR.direction.x).toBeCloseTo(-anchors.sidepodInletL.direction.x, 5);
   });
 });
 
