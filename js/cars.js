@@ -521,6 +521,61 @@ const PROCEDURAL_ANCHORS = {
   },
 };
 
+/**
+ * Vent/duct anchor template — 10 entries mirroring the McLaren GLB manifest.
+ * Each entry is synthesised from an existing PROCEDURAL_ANCHORS entry + an
+ * offset tuned so the procedural variants (F1 proc / F2 / F3 / GT) read the
+ * same as the GLB on screen. Offsets are authored in car-local space; the
+ * reference halfW for offset scaling is the McLaren bodyShell (≈0.81 m
+ * half-width), but for procedural cars we use the profile-authored body
+ * proportions directly — numbers chosen to land inlets on the sidepod inlet
+ * mouth and outlets in the tail-pipe area of each body.
+ *
+ * Directions copied verbatim from the GLB manifest; role likewise.
+ * Auto-mirror (L→R) handled inline rather than via a 'mirrored' field to
+ * keep the PROCEDURAL_ANCHORS shape strictly numeric.
+ */
+function _buildProceduralVentAnchors(base) {
+  const bs = base.sidepodTop ?? base.bodyShell;   // fall back to bodyShell if present
+  const fw = base.frontWing;
+  const rw = base.rearWing;
+  const halo = base.halo;
+  const unit = (x, y, z) => {
+    const L = Math.sqrt(x * x + y * y + z * z) || 1;
+    return { x: x / L, y: y / L, z: z / L };
+  };
+  const vents = {};
+  if (bs) {
+    vents.sidepodInletL   = { x: bs.x - 0.70, y: bs.y + 0.00, z: bs.z - 0.40, direction: unit( 0.25, 0, -1), role: 'inlet'  };
+    vents.sidepodInletR   = { x: -vents.sidepodInletL.x, y: vents.sidepodInletL.y, z: vents.sidepodInletL.z, direction: unit(-0.25, 0, -1), role: 'inlet' };
+    vents.sidepodExhaustL = { x: bs.x - 0.60, y: bs.y + 0.05, z: bs.z + 1.20, direction: unit(-0.10, 0,  1), role: 'outlet' };
+    vents.sidepodExhaustR = { x: -vents.sidepodExhaustL.x, y: vents.sidepodExhaustL.y, z: vents.sidepodExhaustL.z, direction: unit( 0.10, 0, 1), role: 'outlet' };
+  }
+  if (halo) {
+    vents.airboxIntake = { x: halo.x, y: halo.y + 0.30, z: halo.z - 0.20, direction: unit(0, -0.3, -1), role: 'inlet' };
+  }
+  if (rw) {
+    vents.exhaustPipe    = { x: rw.x, y: rw.y - 0.30, z: rw.z - 0.15, direction: unit(0, 0.1, 1), role: 'outlet' };
+    vents.rearBrakeDuctL = { x: rw.x - 0.90, y: rw.y + 0.30, z: rw.z - 0.40, direction: unit( 0.10, 0, -1), role: 'inlet' };
+    vents.rearBrakeDuctR = { x: -vents.rearBrakeDuctL.x, y: vents.rearBrakeDuctL.y, z: vents.rearBrakeDuctL.z, direction: unit(-0.10, 0, -1), role: 'inlet' };
+  }
+  if (fw) {
+    vents.frontBrakeDuctL = { x: fw.x - 0.45, y: fw.y + 0.15, z: fw.z + 0.10, direction: unit( 0.10, 0, -1), role: 'inlet' };
+    vents.frontBrakeDuctR = { x: -vents.frontBrakeDuctL.x, y: vents.frontBrakeDuctL.y, z: vents.frontBrakeDuctL.z, direction: unit(-0.10, 0, -1), role: 'inlet' };
+  }
+  return vents;
+}
+
+/**
+ * Merge the vent-anchor template onto every PROCEDURAL_ANCHORS entry so
+ * consumers (VentEmitterSystem, later modifier table) see the same anchor
+ * surface on GLB and procedural paths.
+ */
+for (const type of Object.keys(PROCEDURAL_ANCHORS)) {
+  const base = PROCEDURAL_ANCHORS[type];
+  Object.assign(base, _buildProceduralVentAnchors(base));
+}
+
 function proceduralAnchors(type) {
   return PROCEDURAL_ANCHORS[type] || PROCEDURAL_ANCHORS.F1;
 }

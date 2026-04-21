@@ -61,6 +61,25 @@ export const CAR_MANIFEST = {
       frontWing: { mesh: 'Object_12', use: 'peak'   },
       rearWing:  { mesh: 'Object_9',  use: 'peak'   },
       bodyShell: { mesh: 'Object_19', use: 'center' },
+
+      // ── Vent / duct anchors (Phase A) ────────────────────────────
+      // Each entry is one of:
+      //   { mesh, use }                          → bbox-derived (above)
+      //   { anchor, offset, direction, role }    → offset relative to another anchor
+      //   { mirrored: '<key>' }                  → auto-mirror the named entry (X, dir.x negated)
+      // role: 'inlet' | 'outlet' — consumed by VentEmitterSystem.
+      // Offsets authored in car-local space; measurement runs post-rotation,
+      // so offsets compose directly with the anchor's car-local position.
+      sidepodInletL:   { anchor: 'bodyShell', offset: [-0.70,  0.00, -0.40], direction: [ 0.25,  0, -1], role: 'inlet'  },
+      sidepodInletR:   { mirrored: 'sidepodInletL' },
+      sidepodExhaustL: { anchor: 'bodyShell', offset: [-0.60,  0.05,  1.20], direction: [-0.10,  0,  1], role: 'outlet' },
+      sidepodExhaustR: { mirrored: 'sidepodExhaustL' },
+      airboxIntake:    { anchor: 'halo',      offset: [ 0.00,  0.30, -0.20], direction: [ 0,   -0.3, -1], role: 'inlet'  },
+      exhaustPipe:     { anchor: 'rearWing',  offset: [ 0.00, -0.30, -0.15], direction: [ 0,    0.1,  1], role: 'outlet' },
+      frontBrakeDuctL: { anchor: 'frontWing', offset: [-0.45,  0.15,  0.10], direction: [ 0.10, 0, -1], role: 'inlet' },
+      frontBrakeDuctR: { mirrored: 'frontBrakeDuctL' },
+      rearBrakeDuctL:  { anchor: 'rearWing',  offset: [-0.90,  0.30, -0.40], direction: [ 0.10, 0, -1], role: 'inlet' },
+      rearBrakeDuctR:  { mirrored: 'rearBrakeDuctL' },
     },
   },
   gt: {

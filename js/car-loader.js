@@ -101,7 +101,10 @@ function measureAnchors(scene, anchorSources) {
   if (!anchorSources) return null;
   scene.updateMatrixWorld?.(true);
   const anchors = {};
+
+  // Pass 1: bbox-derived entries (original behaviour).
   for (const [key, src] of Object.entries(anchorSources)) {
+    if (!src.mesh) continue;   // anchor-relative or mirrored — handled in later passes
     const node = findByName(scene, src.mesh);
     if (!node) continue;
     node.updateMatrixWorld?.(true);
@@ -114,13 +117,53 @@ function measureAnchors(scene, anchorSources) {
       bbox: { minY: bb.min.y, maxY: bb.max.y, minZ: bb.min.z, maxZ: bb.max.z },
     };
   }
+
   const bs = anchors.bodyShell;
   if (bs) {
     const h = bs.bbox.maxY - bs.bbox.minY;
     anchors.sidepodTop = { x: 0, y: bs.bbox.maxY - h * 0.20, z: bs.z };
     anchors.floor      = { x: 0, y: bs.bbox.minY + h * 0.10, z: bs.z };
   }
+
+  // Pass 2: anchor-relative entries (authored vent offsets).
+  // Computed after pass 1 so `src.anchor` resolves to a measured position.
+  for (const [key, src] of Object.entries(anchorSources)) {
+    if (!src.anchor || !src.offset) continue;
+    const base = anchors[src.anchor];
+    if (!base) continue;   // source anchor missing (mesh not in GLB) — skip gracefully
+    const [ox, oy, oz] = src.offset;
+    const entry = { x: base.x + ox, y: base.y + oy, z: base.z + oz };
+    if (src.direction) {
+      entry.direction = _normalizedVec3(src.direction);
+    }
+    if (src.role) entry.role = src.role;
+    anchors[key] = entry;
+  }
+
+  // Pass 3: mirrored entries — negate X and direction.x.
+  for (const [key, src] of Object.entries(anchorSources)) {
+    if (!src.mirrored) continue;
+    const source = anchors[src.mirrored];
+    if (!source) continue;
+    const entry = { x: -source.x, y: source.y, z: source.z };
+    if (source.direction) {
+      entry.direction = new THREE.Vector3(-source.direction.x, source.direction.y, source.direction.z);
+    }
+    if (source.role) entry.role = source.role;
+    anchors[key] = entry;
+  }
+
   return anchors;
+}
+
+/**
+ * Normalise a [dx, dy, dz] array into a THREE.Vector3 (unit length).
+ * Zero vectors return (0,0,0) unchanged to avoid NaN.
+ */
+function _normalizedVec3([x, y, z]) {
+  const len = Math.sqrt(x * x + y * y + z * z);
+  if (len < 1e-9) return new THREE.Vector3(0, 0, 0);
+  return new THREE.Vector3(x / len, y / len, z / len);
 }
 
 /* ── Wheel split config ──────────────────────────────────────────────
