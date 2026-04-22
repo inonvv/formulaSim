@@ -26,7 +26,7 @@ A mini wind‑tunnel simulator showcasing physics + environment effects.
 
 ## Core Principle
 
-Never allow inconsistent trip state. Validation must protect data integrity. State must always mirror selected destinations. Keep architecture clean and predictable. Prefer clarity over cleverness.
+Never let the rendered scene drift from selected state. Car geometry, speed-driven animation, and environment effects (Airflow / Rain / Optimal Weather / CFD) must always mirror the current user selection. Keep architecture clean and predictable. Prefer clarity over cleverness.
 
 
 ## Development Approach — TDD
