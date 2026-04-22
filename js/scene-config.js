@@ -9,6 +9,11 @@
  *     objects (brake glow, headlights, cockpit) bloom, not the sky or body.
  */
 
+/* ── Track frame (single source of truth for ground plane) ──── */
+export const TRACK = {
+  SURFACE_Y: -0.34,   // world-Y of the drivable surface — all cars measure against this
+};
+
 /* ── Background & clear colour ───────────────────────────────── */
 export const BACKGROUND_COLOR = 0x87ceeb;   // sky blue — never black
 
@@ -27,7 +32,7 @@ export const RIM_COLOR      = 0xffcc88;
 export const RIM_INTENSITY  = 0.5;
 
 /* ── Tone-mapping exposure ───────────────────────────────────── */
-export const EXPOSURE = 1.4;               // must be >= 1.3 for bright outdoors
+export const EXPOSURE = 1.3;               // must be >= 1.3 for bright outdoors
 
 /* ── Sky shader uniforms (Three.js Sky addon) ────────────────── */
 export const SKY = {
@@ -44,7 +49,7 @@ export const SKY = {
 export const BLOOM = {
   strength:  0.28,   // subtle glow
   radius:    0.08,   // tight spread
-  threshold: 0.85,   // must be > 0.7 — only emissive surfaces bloom
+  threshold: 1.05,   // must be > 0.7 — only emissive surfaces bloom
 };
 
 /* ── Weather override tables ─────────────────────────────────── */
