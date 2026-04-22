@@ -5,8 +5,8 @@
 
 import * as THREE from 'three';
 import {
-  traceStreamlinePath, topViewVelocity, pressureCoeff,
-  cpToColor, vortexVelocity, sideViewVelocity,
+  traceStreamlinePath, topViewVelocity,
+  vortexVelocity, sideViewVelocity,
 } from './airflow-core.js';
 
 /* ── Phase C modifier strengths (VISUAL approximations, not CFD-calibrated) ── *
@@ -32,8 +32,32 @@ const DEFAULT_HALF_W = 0.9;
 /* ── Utility ───────────────────────────────────────────────────── */
 function rnd(min, max) { return min + Math.random() * (max - min); }
 
-/* ── Radial-gradient soft puff texture (shared singleton) ───────── */
+/* ── Soft radial puff for ribbon fog haloes (shared singleton) ── */
 let _puffTex = null;
+function _makePuffTexture() {
+  if (_puffTex) return _puffTex;
+  if (typeof document === 'undefined' || !document.createElement) {
+    _puffTex = new THREE.CanvasTexture({});
+    return _puffTex;
+  }
+  const size   = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const grd = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  // Softer, fluffier falloff — lower peak + broader mid-band so stacked
+  // puffs blur into each other as diffuse haze instead of bright dots.
+  grd.addColorStop(0.00, 'rgba(255,255,255,0.38)');
+  grd.addColorStop(0.25, 'rgba(255,255,255,0.26)');
+  grd.addColorStop(0.55, 'rgba(255,255,255,0.12)');
+  grd.addColorStop(0.85, 'rgba(255,255,255,0.03)');
+  grd.addColorStop(1.00, 'rgba(255,255,255,0.0)');
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, size, size);
+  _puffTex = new THREE.CanvasTexture(canvas);
+  _puffTex.needsUpdate = true;
+  return _puffTex;
+}
 
 /* ── Elliptical alpha-mask for wet-ground soft edges ────────────── */
 let _wetMaskTex = null;
@@ -53,22 +77,6 @@ function _makeWetMaskTexture() {
   tex.needsUpdate = true;
   return tex;
 }
-function _makePuffTexture() {
-  const size   = 128;
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  const grd = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  grd.addColorStop(0.00, 'rgba(255,255,255,0.22)');
-  grd.addColorStop(0.35, 'rgba(255,255,255,0.14)');
-  grd.addColorStop(0.70, 'rgba(255,255,255,0.05)');
-  grd.addColorStop(1.00, 'rgba(255,255,255,0.0)');
-  ctx.fillStyle = grd;
-  ctx.fillRect(0, 0, size, size);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.needsUpdate = true;
-  return tex;
-}
 
 /* ════════════════════════════════════════════════════════════════ */
 /*  AIRFLOW EFFECT — potential-flow based, 3-D corrected            */
@@ -76,25 +84,18 @@ function _makePuffTexture() {
 
 const STEPS     = 200;
 const STEP_SIZE = 0.14;
-const SMOKE_PTS  = 260;    // smoke-chain particles per streamline
 const VORTEX_PTS = 100;
 
-/* ── Per-car aerodynamic profiles ── */
+/* ── Per-car aerodynamic profiles ── *
+ * Seed lists are no longer authored here — `_buildSeedList` synthesises the
+ * full streamline set from `measure.anchors` (front wing, sidepod, halo,
+ * rear wing, floor) + `measure.rearAxleX/Z`. The previous generic sweeps
+ * (`top`, `side`, `under`, `fw`, `body`, `spine`, `far`) painted the whole
+ * airspace regardless of car shape and drowned the anchor-driven streams.
+ * --------------------------------------------------------------------- */
 const CAR_AERO = {
   F1: {
     halfW: 0.90, halfL: 2.45, halfH: 0.55,
-    /* Top-plane seeds: multiple lateral offsets for dense coverage */
-    topSeeds:    [-2.8,-2.2,-1.6,-1.0,-0.4, 0.4, 1.0, 1.6, 2.2, 2.8],
-    /* Side-height seeds: more layers for 3-D vertical structure */
-    sideHeights: [-0.12, 0.05, 0.20, 0.38, 0.58, 0.78, 1.00, 1.22, 1.45, 1.65],
-    /* Under-floor ground-effect zone — critical for downforce */
-    underSeeds:  [-0.45,-0.25,-0.08, 0.08, 0.25, 0.45],  underY: -0.04,
-    /* Outer far-field seeds to show undisturbed flow */
-    farSeeds:    [-4.5,-3.5,-2.5, 2.5, 3.5, 4.5],
-    /* Front wing cascade seeds — at wing height */
-    fwSeeds:     [-1.4,-0.9,-0.4, 0.4, 0.9, 1.4],  fwY: 0.04, fwEta: -2.6,
-    /* Body-hugging seeds — boundary layer along sidepod/body edge */
-    bodySeeds:   [-1.04,-0.96,-0.88, 0.88, 0.96, 1.04],  bodyY: [0.28, 0.50],
     pressureBlobs: [
       { color:0xff2200, r:0.40, intensity:1.00, pos:[0, 0.12,-2.50] },
       { color:0x2266ff, r:0.50, intensity:0.90, pos:[0, 0.02,-2.60] },
@@ -124,12 +125,6 @@ const CAR_AERO = {
   },
   F2: {
     halfW: 0.82, halfL: 2.20, halfH: 0.50,
-    topSeeds:    [-2.8,-2.0,-1.4,-0.8,-0.3, 0.3, 0.8, 1.4, 2.0, 2.8],
-    sideHeights: [-0.10, 0.05, 0.20, 0.36, 0.55, 0.72, 0.92, 1.12, 1.32, 1.50],
-    underSeeds:  [-0.40,-0.22,-0.07, 0.07, 0.22, 0.40],  underY: -0.03,
-    farSeeds:    [-4.5,-3.5,-2.5, 2.5, 3.5, 4.5],
-    fwSeeds:     [-1.3,-0.8,-0.3, 0.3, 0.8, 1.3],  fwY: 0.04, fwEta: -2.36,
-    bodySeeds:   [-1.04,-0.96,-0.88, 0.88, 0.96, 1.04],  bodyY: [0.24, 0.46],
     pressureBlobs: [
       { color:0xff2200, r:0.38, intensity:0.85, pos:[0, 0.12,-2.35] },
       { color:0x2266ff, r:0.45, intensity:0.72, pos:[0, 0.02,-2.36] },
@@ -153,12 +148,6 @@ const CAR_AERO = {
   },
   F3: {
     halfW: 0.72, halfL: 1.90, halfH: 0.44,
-    topSeeds:    [-2.6,-1.9,-1.3,-0.7,-0.2, 0.2, 0.7, 1.3, 1.9, 2.6],
-    sideHeights: [-0.10, 0.05, 0.18, 0.32, 0.48, 0.64, 0.80, 0.96, 1.10, 1.25],
-    underSeeds:  [-0.30,-0.15,-0.05, 0.05, 0.15, 0.30],  underY: -0.02,
-    farSeeds:    [-4.0,-3.0,-2.2, 2.2, 3.0, 4.0],
-    fwSeeds:     [-1.2,-0.7,-0.2, 0.2, 0.7, 1.2],  fwY: 0.04, fwEta: -2.12,
-    bodySeeds:   [-1.04,-0.96,-0.88, 0.88, 0.96, 1.04],  bodyY: [0.20, 0.40],
     pressureBlobs: [
       { color:0xff2200, r:0.32, intensity:0.68, pos:[0, 0.11,-2.10] },
       { color:0x2266ff, r:0.35, intensity:0.48, pos:[0, 0.02,-2.12] },
@@ -177,12 +166,6 @@ const CAR_AERO = {
   },
   GT: {
     halfW: 1.05, halfL: 2.40, halfH: 0.65,
-    topSeeds:    [-2.8,-2.0,-1.4,-0.8,-0.3, 0.3, 0.8, 1.4, 2.0, 2.8],
-    sideHeights: [-0.08, 0.10, 0.28, 0.46, 0.64, 0.82, 1.00, 1.16, 1.30, 1.48],
-    underSeeds:  [-0.35,-0.18,-0.06, 0.06, 0.18, 0.35],  underY: -0.07,
-    farSeeds:    [-4.5,-3.5,-2.5, 2.5, 3.5, 4.5],
-    fwSeeds:     [], fwY: 0, fwEta: 0,  // GT has no dedicated front wing
-    bodySeeds:   [-1.04,-0.96,-0.88, 0.88, 0.96, 1.04],  bodyY: [0.20, 0.46],
     pressureBlobs: [
       { color:0xff2200, r:0.55, intensity:0.85, pos:[ 0.00, 0.25,-2.26] },
       { color:0x2266ff, r:0.45, intensity:0.55, pos:[ 0.00, 0.10,-2.30] },
@@ -207,115 +190,90 @@ const CAR_AERO = {
 function getProfile(type) { return CAR_AERO[type] || CAR_AERO.F1; }
 
 /**
- * Rescale `profile.sideHeights` so the maximum value lands at the halo
- * anchor + CLEARANCE. Preserves the curve shape via scalar multiply.
- *
- * Fallback when no measure is supplied: treat `halfH * 1.93` as the halo
- * stand-in (matches the procedural anchor ratio — see PROCEDURAL_ANCHORS
- * in cars.js). Keeps all 5 variants on the same "hugs halo" intent.
+ * When no measure is supplied (unit-test path, or pre-setCarType bootstrap),
+ * synthesise a minimal anchor set from `profile.halfW/halfL/halfH`. The
+ * ratios match the PROCEDURAL_ANCHORS table in `cars.js` so the same
+ * streamlines render whether the car builder published a measure or not.
  */
-const _STREAM_PEAK_CLEARANCE = 0.10;
-function _rescaleSideHeights(profile, measure) {
-  const authored = profile.sideHeights;
-  const authoredPeak = Math.max(...authored);
-  if (authoredPeak <= 0) return authored.slice();
-  const haloY = (measure?.anchors?.halo?.y != null)
-    ? measure.anchors.halo.y
-    : profile.halfH * 1.93;
-  const targetPeak = haloY + _STREAM_PEAK_CLEARANCE;
-  const k = targetPeak / authoredPeak;
-  return authored.map(y => y * k);
+function _fallbackAnchors(p) {
+  return {
+    frontWing:  { x: 0, y: 0.04,             z: -p.halfL * 1.06 },
+    rearWing:   { x: 0, y: p.halfH * 1.79,   z:  p.halfL * 0.80 },
+    halo:       { x: 0, y: p.halfH * 1.93,   z:  0.00           },
+    sidepodTop: { x: 0, y: p.halfH * 0.84,   z:  0.10           },
+    floor:      { x: 0, y: 0.04,             z:  0.00           },
+  };
 }
 
-// Top-seed cap: dimensionless xi at which the stream still grazes the body.
-// Beyond |xi| > 1.6, seeds render (in top-down view) as horizontal fog bars
-// floating ~1 m outside the tyres — pure "freestream reference" that reads
-// as noise. Seeds at |xi| ≤ 1.6 graze the wheels/bodywork and curve properly.
-const _TOP_XI_CAP = 1.6;
+/**
+ * Deterministic 1-D hash → small ±range jitter so each seed's `seedEta`
+ * starts at a slightly different advection phase. Keeps the streams from
+ * arriving synchronously without breaking test determinism (identical seed
+ * indices always produce identical jitter).
+ */
+function _seedEtaJitter(seedIdx, range = 0.3) {
+  // Cheap bit-mix hash (Mulberry32 step) → [0,1) → (-range, +range).
+  let h = (seedIdx * 0x9e3779b1) >>> 0;
+  h ^= h >>> 15; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13;
+  h  = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16;
+  return ((h / 0xffffffff) * 2 - 1) * range;
+}
 
-function _buildSeedList(p, sideHeightsOverride, measure) {
+/**
+ * Build the streamline seed list as a wind-tunnel-style parallel ribbon
+ * grid: 8 heights (floor → above halo) × 5 lateral positions, all seeded
+ * far upstream at `seedEta ≈ -8`. Every seed produces one continuous line
+ * from upstream entry, around the car body, out behind — reproducing the
+ * "smoke ribbons" look in `fog.png` rather than isolated anchor chunks.
+ *
+ * Anchors are still consumed, but only for vertical placement of the
+ * ribbons (halo pins the upper half; floor/frontWing pin the lower half).
+ * Flow bending at features (sidepod sinks, wing vortices) is handled by
+ * `_buildModifiers`, not by the seed list.
+ */
+function _buildSeedList(p, measure) {
+  const anchors = measure?.anchors ?? _fallbackAnchors(p);
+
+  // Anchor-aware vertical extent: bottom = floor.y, top = halo.y + 0.40.
+  // Falls back to the profile's halfH ratio when anchors are missing.
+  const floorY = Number.isFinite(anchors.floor?.y) ? anchors.floor.y : 0.02;
+  const haloY  = Number.isFinite(anchors.halo?.y)  ? anchors.halo.y  : p.halfH * 1.93;
+  const fwY    = Number.isFinite(anchors.frontWing?.y) ? anchors.frontWing.y : 0.04;
+
+  // 10 heights — dense enough to read as volumetric fog rather than a thin
+  // grid, with extra sampling around the cockpit / halo band where most of
+  // the visible flow action happens. Order low → high.
+  const heights = [
+    floorY + 0.02,                 // underbody skim
+    Math.max(fwY + 0.02, 0.08),    // wing-top / nose
+    0.18,                          // sidepod lower
+    0.30,                          // sidepod mid
+    Math.max(0.42, haloY - 0.18),  // sidepod upper / mirrors
+    haloY - 0.08,                  // halo underside
+    haloY + 0.02,                  // halo top
+    haloY + 0.15,                  // airbox
+    haloY + 0.30,                  // engine cover
+    haloY + 0.50,                  // freestream reference
+  ];
+
+  // 7 lateral positions — tighter spacing than before (min gap 0.45) so
+  // the layered ribbons blur into a cloud front rather than reading as
+  // five discrete lanes.
+  const xiLanes = [-1.4, -0.9, -0.45, 0, 0.45, 0.9, 1.4];
+
   const seeds = [];
-  // Top-plane sweep (plan view, multiple heights for 3-D coverage).
-  // Drop extreme-lateral entries — they paint empty track, not airflow.
-  for (const xi of p.topSeeds) {
-    if (Math.abs(xi) > _TOP_XI_CAP) continue;
-    seeds.push({ seedXi: xi,   seedEta: -8, y: 0.38,  group: 'top',   halfH: p.halfH });
-    seeds.push({ seedXi: xi,   seedEta: -8, y: 0.70,  group: 'top',   halfH: p.halfH });
-  }
-  // Nose / front-wing top band — paints airflow hugging the wing top + nose.
-  // Seeds are STAGGERED on seedEta so smoke particles don't arrive at the
-  // wing synchronously (previous version read as one strong bunched line).
-  const fwY = measure?.anchors?.frontWing?.y;
-  if (Number.isFinite(fwY)) {
-    const noseY = fwY + 0.10;
-    const noseXi  = [-0.6,  -0.3,     0,   0.3,   0.6];
-    const noseEta = [-8.0, -7.75, -8.25, -7.65, -8.15];  // ≤0.4 stagger
-    for (let k = 0; k < noseXi.length; k++) {
-      seeds.push({ seedXi: noseXi[k], seedEta: noseEta[k], y: noseY, group: 'nose', halfH: p.halfH });
-    }
-  }
-  // Sidepod / body flank — streams seeded just outside the unit-cylinder body
-  // so they deflect around the sidepod edge rather than flying past in empty
-  // air. 3 heights × 2 sides = 6 streams. Anchored-body variants only (GLB).
-  if (measure?.anchors?.sidepodTop) {
-    for (const x of [-1.05, 1.05]) {
-      for (const y of [0.15, 0.35, 0.55]) {
-        seeds.push({ seedXi: x, seedEta: -8, y, group: 'flank', halfH: p.halfH });
-      }
-    }
-  }
-  // Halo-wrap band — 4 thin streams that curve around the halo sides and
-  // continue to the rear. Keeps the upper-body flow continuous from front
-  // wing → halo → rear. Anchored variants only.
-  const haloAnchor = measure?.anchors?.halo;
-  if (haloAnchor && Number.isFinite(haloAnchor.y)) {
-    const haloXi  = [-0.45, 0.45, -0.30, 0.30];
-    const haloEta = [-8.0,  -7.5, -7.8,  -8.3];
-    const haloYLo = haloAnchor.y - 0.05;
-    const haloYHi = haloAnchor.y + 0.10;
-    for (let k = 0; k < haloXi.length; k++) {
-      const y = (k < 2) ? haloYLo : haloYHi;
-      seeds.push({ seedXi: haloXi[k], seedEta: haloEta[k], y, group: 'halo', halfH: p.halfH });
-    }
-  }
-  // Rear-wing leading-edge band — 4 thin streams that feed into the rear
-  // wing from the roof, so the flow reads as "enters wing" rather than
-  // cutting off behind the cockpit.
-  const rwAnchor = measure?.anchors?.rearWing;
-  if (rwAnchor && Number.isFinite(rwAnchor.y)) {
-    const rwY   = rwAnchor.y + 0.10;
-    const rwXi  = [-0.6, -0.3, 0.3, 0.6];
-    const rwEta = [-8.0, -7.6, -7.9, -8.2];
-    for (let k = 0; k < rwXi.length; k++) {
-      seeds.push({ seedXi: rwXi[k], seedEta: rwEta[k], y: rwY, group: 'rearWing', halfH: p.halfH });
-    }
-  }
-  // Side-height sweep (lateral slice at x≈0)
-  const sideHeights = sideHeightsOverride || p.sideHeights;
-  for (const y of sideHeights) {
-    seeds.push({ seedXi: 0.01, seedEta: -8, y,        group: 'side',  halfH: p.halfH });
-  }
-  // Ground-effect underbody
-  for (const xi of p.underSeeds) {
-    seeds.push({ seedXi: xi,   seedEta: -8, y: p.underY, group: 'under', halfH: p.halfH });
-  }
-  // NOTE: far-field seeds (previously xi=±2.5..±4.5) removed — they rendered
-  // as ghost horizontal bars floating metres outside the tyres in top-down
-  // view, with no visual purpose tied to the car body.
-  // Front-wing zone (if defined)
-  for (const xi of (p.fwSeeds || [])) {
-    seeds.push({ seedXi: xi,   seedEta: p.fwEta - 1, y: p.fwY, group: 'fw', halfH: p.halfH });
-  }
-  // Body-hugging boundary layer (traces surface airflow along body edges)
-  for (const xi of (p.bodySeeds || [])) {
-    for (const y of (p.bodyY || [])) {
-      seeds.push({ seedXi: xi, seedEta: -8, y, group: 'body', halfH: p.halfH });
-    }
-  }
-  // Rooftop spine — dense centerline trail directly above the car body
-  for (const xi of [-0.08, -0.03, 0, 0.03, 0.08]) {
-    for (const yMul of [1.80, 1.95, 2.10, 2.25]) {
-      seeds.push({ seedXi: xi, seedEta: -8, y: p.halfH * yMul, group: 'spine', halfH: p.halfH });
+  for (const y of heights) {
+    for (const xi of xiLanes) {
+      // Tiny deterministic jitter (±0.05) so ribbons don't advect in
+      // perfect lockstep — keeps the flow from reading as a rigid grid.
+      const etaJ = _seedEtaJitter(seeds.length, 0.05);
+      seeds.push({
+        seedXi: xi,
+        seedEta: -8 + etaJ,
+        y,
+        group: 'ribbon',
+        halfH: p.halfH,
+      });
     }
   }
   return seeds;
@@ -387,13 +345,14 @@ export class AirflowEffect {
     this._wakeWidthX      = profile.wakeWidthX;
     this._wakeHeightRange = profile.wakeHeightRange;
     this._strouhal        = profile.strouhal || 0.20;
-    // Rescale sideHeights so the streamline peak hugs the halo (+0.10 m
-    // clearance). Shape preserved via scalar multiply. Non-side seed groups
-    // keep their authored Y — their intent is lateral coverage, not
-    // halo-hugging.
-    const scaledSideHeights = _rescaleSideHeights(profile, this._measure);
-    this._scaledSideHeights = scaledSideHeights;
-    this._seeds           = _buildSeedList(profile, scaledSideHeights, this._measure);
+    this._seeds           = _buildSeedList(profile, this._measure);
+    // Surface the ribbon count on rebuild so a stale browser cache is easy to
+    // detect in DevTools — expected output is `{ ribbon: 40 } (total 40)`.
+    if (typeof console !== 'undefined' && console.info) {
+      const countByGroup = {};
+      for (const s of this._seeds) countByGroup[s.group] = (countByGroup[s.group] || 0) + 1;
+      console.info('[airflow] seeds by group:', countByGroup, '(total ' + this._seeds.length + ')');
+    }
     // Phase C: derive analytical flow modifiers from role-tagged anchors.
     // Procedural fallbacks (no measure.anchors) get an empty list ⇒ the
     // potential-flow baseline is preserved.
@@ -413,7 +372,7 @@ export class AirflowEffect {
       return traceStreamlinePath(s.seedXi, s.seedEta, STEPS, STEP_SIZE, opts);
     });
     this._vortexDefs      = this._resolveVortexDefs(profile, this._measure);
-    this._buildSmokeParticles();
+    this._buildRibbonLines();
     this._buildVortexSpirals(this._vortexDefs);
     this._buildWakeParticles(profile.wakeCount);
   }
@@ -528,52 +487,98 @@ export class AirflowEffect {
     return vy * scale;
   }
 
-  /* ── Smoke particles — soft billboarded puff chains ── */
-  _buildSmokeParticles() {
-    const total     = this._seeds.length * SMOKE_PTS;
-    const positions = new Float32Array(total * 3);
-    const colors    = new Float32Array(total * 3);
-
-    this._smokeSeedIdx = new Int32Array(total);
-    this._smokeT       = new Float32Array(total);
-    this._smokeJx      = new Float32Array(total);
-    this._smokeJy      = new Float32Array(total);
-    this._smokeJz      = new Float32Array(total);
-    this._smokeYAcc    = new Float32Array(total);
-    this._smokeLife    = new Float32Array(total);
-
-    let idx = 0;
+  /**
+   * Wind-tunnel streamline ribbons — one THREE.Line per seed.
+   *
+   * Each seed's traced path (in (xi, eta) dimensionless flow-plane coordinates)
+   * is converted to world XYZ and written into a fixed-size Float32 position
+   * buffer. The line itself is STABLE — its shape is defined by the flow field
+   * around the car, not by stochastic per-particle life cycles — so it reads
+   * as a continuous smoke ribbon front-to-back, matching fog.png.
+   *
+   * Flow animation is done via per-vertex brightness: a bright "puff" band
+   * slides along the line each frame (advanced in `_updateRibbonLines`), giving
+   * a visible sense of flow direction without breaking line continuity.
+   */
+  _buildRibbonLines() {
+    const puffTex = _makePuffTexture();
+    const lines = [];
     for (let s = 0; s < this._seeds.length; s++) {
-      const pathLen = this._paths[s].length;
-      for (let k = 0; k < SMOKE_PTS; k++) {
-        this._smokeSeedIdx[idx] = s;
-        this._smokeT[idx]       = (k / SMOKE_PTS) * (pathLen - 1);
-        this._smokeLife[idx]    = rnd(0, 1); // stagger fades so trails look continuous
-        idx++;
-      }
+      const path     = this._paths[s];
+      const nVerts   = path.length;
+      // Shared position & color buffers — the crisp line and the soft fog
+      // halo read from the same Float32Arrays. One write per vertex per
+      // frame; both geometries' needsUpdate flags get flipped.
+      const positions = new Float32Array(nVerts * 3);
+      const colors    = new Float32Array(nVerts * 3);
+
+      // Line (crisp core)
+      const lineGeo  = new THREE.BufferGeometry();
+      const linePos  = new THREE.BufferAttribute(positions, 3);
+      const lineCol  = new THREE.BufferAttribute(colors,    3);
+      lineGeo.setAttribute('position', linePos);
+      lineGeo.setAttribute('color',    lineCol);
+      const lineMat = new THREE.LineBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      const line = new THREE.Line(lineGeo, lineMat);
+      this.group.add(line);
+
+      // Inner halo (mid-sized fog puffs) — samples the SAME path vertices
+      // with a radial-gradient puff texture. Additive blending over the
+      // crisp line yields the aura/thickness of the ribbon.
+      const haloGeo = new THREE.BufferGeometry();
+      const haloPos = new THREE.BufferAttribute(positions, 3);   // shared array
+      const haloCol = new THREE.BufferAttribute(colors,    3);   // shared array
+      haloGeo.setAttribute('position', haloPos);
+      haloGeo.setAttribute('color',    haloCol);
+      const haloMat = new THREE.PointsMaterial({
+        size: 0.55,
+        map: puffTex,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        sizeAttenuation: true,
+      });
+      const halo = new THREE.Points(haloGeo, haloMat);
+      this.group.add(halo);
+
+      // Outer halo (large diffuse fog) — same buffer, bigger sprite, low
+      // opacity. Stacks with the inner halo to read as volumetric haze.
+      const outerHaloGeo = new THREE.BufferGeometry();
+      const outerHaloPos = new THREE.BufferAttribute(positions, 3);
+      const outerHaloCol = new THREE.BufferAttribute(colors,    3);
+      outerHaloGeo.setAttribute('position', outerHaloPos);
+      outerHaloGeo.setAttribute('color',    outerHaloCol);
+      const outerHaloMat = new THREE.PointsMaterial({
+        size: 1.10,
+        map: puffTex,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        sizeAttenuation: true,
+      });
+      const outerHalo = new THREE.Points(outerHaloGeo, outerHaloMat);
+      this.group.add(outerHalo);
+
+      lines.push({
+        line, lineMat, lineGeo, linePos, lineCol,
+        halo, haloMat, haloGeo, haloPos, haloCol,
+        outerHalo, outerHaloMat, outerHaloGeo, outerHaloPos, outerHaloCol,
+        positions, colors,
+        seedIdx: s,
+        phase: Math.random(),
+      });
     }
-
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geo.setAttribute('color',    new THREE.BufferAttribute(colors,    3));
-
-    const mat = new THREE.PointsMaterial({
-      size: 0.55,
-      map: (_puffTex ||= _makePuffTexture()),
-      alphaTest: 0,
-      vertexColors: true,
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      sizeAttenuation: true,
-    });
-
-    this._smokePoints  = new THREE.Points(geo, mat);
-    this._smokeMat     = mat;
-    this._smokePos     = positions;
-    this._smokeColors  = colors;
-    this.group.add(this._smokePoints);
+    this._ribbonLines = lines;
   }
 
   /* ── Wing-tip vortex spirals — physics-based trajectories ── */
@@ -648,96 +653,107 @@ export class AirflowEffect {
 
     const speedFactor = Math.min(this._speed / 350, 1);
 
-    /* ── Smoke particles — soft billboarded puff chains ── */
-    const advRate = speedFactor * 9.0;
-    const jBase   = 0.002 * speedFactor;
-    const jDecay  = 0.90;
-    const sPos    = this._smokePos;
-    const sCol    = this._smokeColors;
+    /* ── Ribbon streamlines — one THREE.Line per seed ── *
+     * Lines are stable polylines: every vertex is written from the pre-traced
+     * path in world space, with a small vortex-coupled nudge per frame. A
+     * bright "puff" band slides along each line (vertex brightness wave) to
+     * show flow direction without breaking line continuity.
+     * ---------------------------------------------------------------------- */
+    // Line is the crisp core — kept dim so the two halo layers dominate
+    // visually (the user wants fog-like, not pinstripe ribbons).
+    const ribbonOpacity   = Math.min(0.70, 0.30 + speedFactor * 0.40);
+    // Puff-wave travel speed along the line, in vertex-indices per second.
+    const PUFF_ADV_RATE   = 12 + speedFactor * 40;
+    // Puff half-width (in vertex indices). Narrower at low speed (subtle),
+    // wider at high speed (a visible pulse sweeping past).
+    const PUFF_HALF_WIDTH = 4 + speedFactor * 8;
 
-    for (let i = 0; i < this._smokeT.length; i++) {
-      const s    = this._smokeSeedIdx[i];
+    if (this._ribbonLines) for (const R of this._ribbonLines) {
+      const s    = R.seedIdx;
       const path = this._paths[s];
       if (!path || path.length < 2) continue;
+      const seed = this._seeds[s];
 
-      // Life cycle — bell-curve fade so puffs appear/disappear softly
-      this._smokeLife[i] += dt * 0.45;
-      if (this._smokeLife[i] > 1) this._smokeLife[i] = 0;
-      const fade = Math.sin(this._smokeLife[i] * Math.PI);
+      R.phase += dt * PUFF_ADV_RATE;
+      while (R.phase >= path.length) R.phase -= path.length;
 
-      const ptNow = path[Math.min(Math.floor(this._smokeT[i]), path.length - 1)];
-      const localSpeed = Math.sqrt(ptNow.vxi * ptNow.vxi + ptNow.veta * ptNow.veta);
-      this._smokeT[i] += dt * advRate * Math.max(0.4, Math.min(localSpeed, 3.2));
+      const positions = R.positions;
+      const colors    = R.colors;
 
-      if (this._smokeT[i] >= path.length - 1) {
-        this._smokeT[i]    = 0;
-        this._smokeJx[i]   = 0;
-        this._smokeJy[i]   = 0;
-        this._smokeJz[i]   = 0;
-        this._smokeYAcc[i] = 0;
-      }
+      for (let i = 0; i < path.length; i++) {
+        const pt  = path[i];
+        const xi  = pt.xi;
+        const eta = pt.eta;
+        // Per-vertex vertical delta from side-view potential flow — same as
+        // the old smoke system so ribbons still rise over the nose & halo.
+        const dy = this._verticalDelta(eta, seed.y);
+        const y  = seed.y + dy * Math.max(0, Math.min(1, (eta + 1) / 2));
 
-      const ti   = Math.floor(this._smokeT[i]);
-      const frac = this._smokeT[i] - ti;
-      const ptA  = path[Math.min(ti,     path.length - 1)];
-      const ptB  = path[Math.min(ti + 1, path.length - 1)];
-      const xi   = ptA.xi  + (ptB.xi  - ptA.xi)  * frac;
-      const eta  = ptA.eta + (ptB.eta - ptA.eta)  * frac;
-      const vxi  = ptA.vxi + (ptB.vxi - ptA.vxi)  * frac;
-      const veta = ptA.veta + (ptB.veta - ptA.veta) * frac;
-      const y0   = this._seeds[s].y;
+        const w = this._toWorld(xi, eta, y);
+        let wx = w.x, wy = w.y, wz = w.z;
 
-      const dy = this._verticalDelta(eta, y0 + this._smokeYAcc[i]);
-      this._smokeYAcc[i] += dy * 0.05;
-
-      const normFrac  = Math.max(0, Math.min(1, (eta - 1) / 7));
-      const jitterAmp = jBase * (1 + normFrac * 4);
-      this._smokeJx[i] = this._smokeJx[i] * jDecay + (Math.random() * 2 - 1) * jitterAmp * 0.7;
-      this._smokeJy[i] = this._smokeJy[i] * jDecay + (Math.random() * 2 - 1) * jitterAmp * 1.0;
-      this._smokeJz[i] = this._smokeJz[i] * jDecay + (Math.random() * 2 - 1) * jitterAmp * 0.7;
-
-      const w = this._toWorld(xi, eta, y0 + this._smokeYAcc[i]);
-      // Body-occupancy collision — if the particle lands inside the body,
-      // nudge its path parameter back one step so the next frame retries
-      // upstream. Minimal/cheap: no per-particle SDF gradient descent.
-      if (this._occupancy && this._occupancy.sample(w.x, w.y, w.z) > 0.5) {
-        this._smokeT[i] = Math.max(0, this._smokeT[i] - 1);
-        continue;
-      }
-      sPos[i * 3]     = w.x + this._smokeJx[i];
-      sPos[i * 3 + 1] = w.y + this._smokeJy[i];
-      sPos[i * 3 + 2] = w.z + this._smokeJz[i];
-
-      // Vortex-coupled drift — bend smoke near wing-tip vortex cores
-      if (this._vortexDefs) {
-        for (const def of this._vortexDefs) {
-          const vxiC = def.wx / this._halfW;
-          const vetaC = def.wz / this._halfL;
-          const dx = xi - vxiC, de = eta - vetaC;
-          const rcN = def.rc / Math.min(this._halfW, this._halfL);
-          if (dx * dx + de * de < (rcN * 3) ** 2) {
-            const vv = vortexVelocity(xi, eta, vxiC, vetaC, def.gamma, rcN);
-            sPos[i * 3]     += vv.vxi  * this._halfW * speedFactor * 0.008;
-            sPos[i * 3 + 2] += vv.veta * this._halfL * speedFactor * 0.008;
+        // Vortex-coupled drift — bend the ribbon near wing-tip vortex cores.
+        if (this._vortexDefs) {
+          for (const def of this._vortexDefs) {
+            const vxiC = def.wx / this._halfW;
+            const vetaC = def.wz / this._halfL;
+            const dx = xi - vxiC, de = eta - vetaC;
+            const rcN = def.rc / Math.min(this._halfW, this._halfL);
+            if (dx * dx + de * de < (rcN * 3) ** 2) {
+              const vv = vortexVelocity(xi, eta, vxiC, vetaC, def.gamma, rcN);
+              wx += vv.vxi  * this._halfW * speedFactor * 0.08;
+              wz += vv.veta * this._halfL * speedFactor * 0.08;
+            }
           }
         }
+
+        // Body-occupancy deflection — if the line would pass through the
+        // car body, lift it along the gradient so the ribbon hugs the shell
+        // instead of cutting through it.
+        if (this._occupancy && this._occupancy.sample(wx, wy, wz) > 0.5) {
+          const g = this._occupancy.gradient
+            ? this._occupancy.gradient(wx, wy, wz)
+            : { x: 0, y: 1, z: 0 };
+          const mag = Math.hypot(g.x, g.y, g.z) || 1;
+          const lift = 0.12;
+          wx += (g.x / mag) * lift;
+          wy += (g.y / mag) * lift;
+          wz += (g.z / mag) * lift;
+        }
+
+        positions[i * 3]     = wx;
+        positions[i * 3 + 1] = wy;
+        positions[i * 3 + 2] = wz;
+
+        // Per-vertex brightness wave — a Gaussian pulse centred on R.phase,
+        // travelling along the line. Keeps a visible baseline so the line
+        // reads even where the pulse isn't currently sitting.
+        let d = Math.abs(i - R.phase);
+        if (d > path.length / 2) d = path.length - d;
+        const pulse    = Math.exp(-(d * d) / (2 * PUFF_HALF_WIDTH * PUFF_HALF_WIDTH));
+        const baseline = 0.35;
+        const bright   = baseline + pulse * 0.65;
+        colors[i * 3]     = 0.92 * bright;
+        colors[i * 3 + 1] = 0.95 * bright;
+        colors[i * 3 + 2] = 1.00 * bright;
       }
 
-      // Cp color modulated by life fade — soft in/out
-      const cp = pressureCoeff(vxi, veta);
-      const c  = cpToColor(cp);
-      const r = (0.85 + c.r * 0.15) * fade;
-      const g = (0.85 + c.g * 0.15) * fade;
-      const b = (0.88 + c.b * 0.15) * fade;
-      sCol[i * 3]     = r;
-      sCol[i * 3 + 1] = g;
-      sCol[i * 3 + 2] = b;
+      // All three geometries share the same Float32Array but each
+      // BufferAttribute carries its own needsUpdate flag — flip all of them.
+      R.linePos.needsUpdate      = true;
+      R.lineCol.needsUpdate      = true;
+      R.haloPos.needsUpdate      = true;
+      R.haloCol.needsUpdate      = true;
+      R.outerHaloPos.needsUpdate = true;
+      R.outerHaloCol.needsUpdate = true;
+      // Crisp line stays dim; two halo layers stack to read as fog. Inner
+      // halo is mid-sized / denser; outer halo is big / low-opacity haze.
+      R.lineMat.opacity      = ribbonOpacity;
+      R.haloMat.opacity      = 0.35 + speedFactor * 0.30;
+      R.haloMat.size         = 0.55 + speedFactor * 0.25;
+      R.outerHaloMat.opacity = 0.12 + speedFactor * 0.18;
+      R.outerHaloMat.size    = 1.10 + speedFactor * 0.40;
     }
-
-    this._smokePoints.geometry.attributes.position.needsUpdate = true;
-    this._smokePoints.geometry.attributes.color.needsUpdate    = true;
-    this._smokeMat.opacity = Math.min(1, 0.65 + speedFactor * 0.35);
-    this._smokeMat.size    = 0.45 + 0.25 * speedFactor;
 
     /* ── Vortex spirals — physics-based with vortexVelocity ── */
     const vortexRadius  = speedFactor * speedFactor * this._vortexMaxRadius;

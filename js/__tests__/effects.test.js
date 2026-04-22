@@ -170,7 +170,15 @@ vi.mock('../airflow-core.js', () => ({
   cpToColor:           () => ({ r: 0.5, g: 0.5, b: 0.5 }),
   vortexVelocity:      () => ({ vxi: 0.1, veta: 0.2 }),
   sideViewVelocity:    () => ({ veta: 1, vy: 0 }),
-  traceStreamlinePath: () => [{ xi: 0, eta: -8, vxi: 0, veta: 1 }],
+  // Return a multi-vertex path so ribbon-line rendering (needs ≥2 vertices)
+  // can exercise the update loop in tests.
+  traceStreamlinePath: (seedXi, seedEta) => {
+    const path = [];
+    for (let i = 0; i < 16; i++) {
+      path.push({ xi: seedXi, eta: seedEta + i * 0.5, vxi: 0, veta: 1 });
+    }
+    return path;
+  },
 }));
 
 /* ── Scene stub ───────────────────────────────────────────────────── */
@@ -250,15 +258,11 @@ describe('OptimalWeatherEffect', () => {
 });
 
 describe('AirflowEffect', () => {
-  it('_smokeJx/y/z all exist with equal length > 0', async () => {
+  it('_ribbonLines exists with one entry per seed', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
-    expect(airflow._smokeJx).toBeDefined();
-    expect(airflow._smokeJy).toBeDefined();
-    expect(airflow._smokeJz).toBeDefined();
-    expect(airflow._smokeJx.length).toBeGreaterThan(0);
-    expect(airflow._smokeJx.length).toBe(airflow._smokeJy.length);
-    expect(airflow._smokeJy.length).toBe(airflow._smokeJz.length);
+    expect(Array.isArray(airflow._ribbonLines)).toBe(true);
+    expect(airflow._ribbonLines.length).toBe(airflow._seeds.length);
   });
 
   it('setBaseY lifts the group position.y so local coords land on ground plane', async () => {
@@ -285,114 +289,96 @@ describe('AirflowEffect', () => {
     expect(airflow._measure).toBe(measure);
   });
 
-  it('stream peak lands within 0.05 m of anchors.halo.y + 0.10 after setCarType(type, measure)', async () => {
+  it('ribbon model: every seed is group "ribbon" (no anchor-clustered groups)', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
-    const measure = { anchors: { halo: { x: 0, y: 0.373, z: -0.05 } } };
-    airflow.setCarType('F2', measure);
-    const sideYs = airflow._seeds.filter(s => s.group === 'side').map(s => s.y);
-    const peakY = Math.max(...sideYs);
-    const expected = measure.anchors.halo.y + 0.10;
-    expect(Math.abs(peakY - expected)).toBeLessThanOrEqual(0.05);
+    airflow.setCarType('F1', { anchors: {
+      frontWing:  { x: 0, y: 0.04,  z: -2.30 },
+      rearWing:   { x: 0, y: 0.454, z:  2.412 },
+      halo:       { x: 0, y: 0.373, z: -0.05 },
+      sidepodTop: { x: 0, y: 0.28,  z:  0.0 },
+      floor:      { x: 0, y: 0.014, z:  0.129 },
+    } });
+    for (const s of airflow._seeds) expect(s.group).toBe('ribbon');
   });
 
-  it('nose seed band is created at frontWing.y + 0.10 when measure carries frontWing anchor', async () => {
+  it('ribbon model: 10 heights × 7 xiLanes = 70 seeds on F1 + McLaren measure', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
-    const measure = { anchors: { frontWing: { x: 0, y: 0.047, z: -2.297 } } };
-    airflow.setCarType('F1', measure);
-    const nose = airflow._seeds.filter(s => s.group === 'nose');
-    expect(nose.length).toBe(5);
-    const noseY = measure.anchors.frontWing.y + 0.10;
-    for (const s of nose) expect(s.y).toBeCloseTo(noseY, 6);
+    airflow.setCarType('F1', { anchors: {
+      frontWing:  { x: 0, y: 0.04,  z: -2.30 },
+      rearWing:   { x: 0, y: 0.454, z:  2.412 },
+      halo:       { x: 0, y: 0.373, z: -0.05 },
+      sidepodTop: { x: 0, y: 0.28,  z:  0.0 },
+      floor:      { x: 0, y: 0.014, z:  0.129 },
+    } });
+    expect(airflow._seeds.length).toBe(70);
   });
 
-  it('nose seed band is omitted when measure lacks frontWing anchor (procedural variant)', async () => {
+  it('ribbon model: no seed belongs to a banned generic or anchor-clustered group', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
-    airflow.setCarType('F1');   // no measure
-    const nose = airflow._seeds.filter(s => s.group === 'nose');
-    expect(nose.length).toBe(0);
+    airflow.setCarType('F1', { anchors: {
+      frontWing:  { x: 0, y: 0.04,  z: -2.30 },
+      rearWing:   { x: 0, y: 0.454, z:  2.412 },
+      halo:       { x: 0, y: 0.373, z: -0.05 },
+      sidepodTop: { x: 0, y: 0.28,  z:  0.0 },
+      floor:      { x: 0, y: 0.014, z:  0.129 },
+    } });
+    const banned = new Set([
+      'top', 'side', 'body', 'fw', 'under', 'spine', 'far',
+      'nose', 'flank', 'halo', 'rearWing', 'frontWing', 'rearWheelWake', 'floor',
+    ]);
+    for (const s of airflow._seeds) expect(banned.has(s.group)).toBe(false);
   });
 
-  it('far-field seed group is never populated (ghost lines removed)', async () => {
+  it('ribbon model: 7 lateral lanes at xi in [-1.4, -0.9, -0.45, 0, 0.45, 0.9, 1.4]', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
     airflow.setCarType('F1');
-    const far = airflow._seeds.filter(s => s.group === 'far');
-    expect(far.length).toBe(0);
+    const xis = [...new Set(airflow._seeds.map(s => s.seedXi))].sort((a, b) => a - b);
+    expect(xis.length).toBe(7);
+    expect(xis[0]).toBeCloseTo(-1.40, 6);
+    expect(xis[1]).toBeCloseTo(-0.90, 6);
+    expect(xis[2]).toBeCloseTo(-0.45, 6);
+    expect(xis[3]).toBeCloseTo( 0.00, 6);
+    expect(xis[4]).toBeCloseTo( 0.45, 6);
+    expect(xis[5]).toBeCloseTo( 0.90, 6);
+    expect(xis[6]).toBeCloseTo( 1.40, 6);
   });
 
-  it('top-plane seeds are capped to |xi| <= 1.6 (no extreme-lateral ghost streams)', async () => {
+  it('ribbon model: vertical coverage spans floor-skim to well-above-halo', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    const haloY = 0.66;
+    airflow.setCarType('F1', { anchors: {
+      halo:  { x: 0, y: haloY, z: -0.05 },
+      floor: { x: 0, y: 0.02,  z:  0.0  },
+      frontWing: { x: 0, y: 0.04, z: -2.30 },
+    } });
+    const ys = airflow._seeds.map(s => s.y);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    expect(minY).toBeLessThan(0.10);             // near floor
+    expect(maxY).toBeGreaterThan(haloY + 0.30);  // above halo
+  });
+
+  it('ribbon model: every seedEta is within ±0.1 of -8 (parallel upstream seeding)', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
     airflow.setCarType('F1');
-    const top = airflow._seeds.filter(s => s.group === 'top');
-    expect(top.length).toBeGreaterThan(0);
-    for (const s of top) {
-      expect(Math.abs(s.seedXi)).toBeLessThanOrEqual(1.6);
+    for (const s of airflow._seeds) {
+      expect(Math.abs(s.seedEta + 8)).toBeLessThanOrEqual(0.1);
     }
   });
 
-  it('flank seeds appear when measure has sidepodTop anchor', async () => {
-    const { AirflowEffect } = await import('../effects.js');
-    const airflow = new AirflowEffect(makeScene());
-    const measure = { anchors: { sidepodTop: { x: 0, y: 0.28, z: 0.0 } } };
-    airflow.setCarType('F1', measure);
-    const flank = airflow._seeds.filter(s => s.group === 'flank');
-    expect(flank.length).toBe(6);
-    // 3 heights on each side.
-    const left  = flank.filter(s => s.seedXi < 0);
-    const right = flank.filter(s => s.seedXi > 0);
-    expect(left.length).toBe(3);
-    expect(right.length).toBe(3);
-    for (const s of flank) expect(Math.abs(s.seedXi)).toBeCloseTo(1.05, 6);
-  });
-
-  it('flank seeds are omitted without sidepodTop anchor (procedural)', async () => {
+  it('ribbon model: seedEta jitter breaks perfect sync (distinct values present)', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
     airflow.setCarType('F1');
-    const flank = airflow._seeds.filter(s => s.group === 'flank');
-    expect(flank.length).toBe(0);
-  });
-
-  it('nose seeds are staggered on seedEta so smoke does not arrive in sync', async () => {
-    const { AirflowEffect } = await import('../effects.js');
-    const airflow = new AirflowEffect(makeScene());
-    const measure = { anchors: { frontWing: { x: 0, y: 0.05, z: -2.3 } } };
-    airflow.setCarType('F1', measure);
-    const nose = airflow._seeds.filter(s => s.group === 'nose');
-    const etas = new Set(nose.map(s => s.seedEta));
-    // All 5 eta values must be distinct (staggered) and within 0.5 of -8.
-    expect(etas.size).toBe(nose.length);
-    for (const e of nose.map(s => s.seedEta)) {
-      expect(Math.abs(e + 8)).toBeLessThanOrEqual(0.5);
-    }
-  });
-
-  it('halo-wrap band appears when measure carries halo anchor', async () => {
-    const { AirflowEffect } = await import('../effects.js');
-    const airflow = new AirflowEffect(makeScene());
-    const measure = { anchors: { halo: { x: 0, y: 0.66, z: -0.05 } } };
-    airflow.setCarType('F1', measure);
-    const halo = airflow._seeds.filter(s => s.group === 'halo');
-    expect(halo.length).toBe(4);
-    // 2 heights straddle halo.y
-    const ys = [...new Set(halo.map(s => s.y))].sort();
-    expect(ys.length).toBe(2);
-    expect(ys[0]).toBeCloseTo(0.61, 6);
-    expect(ys[1]).toBeCloseTo(0.76, 6);
-  });
-
-  it('rear-wing leading-edge band appears when measure carries rearWing anchor', async () => {
-    const { AirflowEffect } = await import('../effects.js');
-    const airflow = new AirflowEffect(makeScene());
-    const measure = { anchors: { rearWing: { x: 0, y: 0.85, z: 2.41 } } };
-    airflow.setCarType('F1', measure);
-    const rw = airflow._seeds.filter(s => s.group === 'rearWing');
-    expect(rw.length).toBe(4);
-    for (const s of rw) expect(s.y).toBeCloseTo(0.95, 6);
+    const etas = new Set(airflow._seeds.map(s => s.seedEta));
+    // With 40 seeds and deterministic jitter, at least half should be distinct.
+    expect(etas.size).toBeGreaterThanOrEqual(20);
   });
 
   it('F1 vortexMaxRadius stays small enough to avoid front-wheel overlap', async () => {
@@ -593,71 +579,106 @@ describe('AirflowEffect — Phase C modifiers from role-tagged anchors', () => {
   });
 });
 
-describe('AirflowEffect — smoke puff particles', () => {
-  it('1. _guideLines is undefined — tube system removed', async () => {
+describe('AirflowEffect — ribbon streamlines', () => {
+  it('1. _guideLines is undefined — legacy tube system removed', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
     expect(airflow._guideLines).toBeUndefined();
   });
 
-  it('2. _smokePoints exists and is a THREE.Points instance', async () => {
+  it('2. smoke particle state is gone (no _smokePoints / _smokeLife / _smokeJx)', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
-    expect(airflow._smokePoints).toBeDefined();
-    expect(airflow._smokePoints.constructor.name).toBe('Points');
+    expect(airflow._smokePoints).toBeUndefined();
+    expect(airflow._smokeLife).toBeUndefined();
+    expect(airflow._smokeJx).toBeUndefined();
   });
 
-  it('3. smoke PointsMaterial has map set and alphaTest >= 0', async () => {
+  it('3. each ribbon has line + inner halo + outer halo materials with additive blending', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
-    const mat = airflow._smokeMat;
-    expect(mat.map).toBeDefined();
-    expect(mat.alphaTest).toBeGreaterThanOrEqual(0);
+    for (const R of airflow._ribbonLines) {
+      expect(R.lineMat.vertexColors).toBe(true);
+      expect(R.lineMat.transparent).toBe(true);
+      expect(R.lineMat.blending).toBe(2);   // AdditiveBlending
+      expect(R.lineMat.depthWrite).toBe(false);
+      expect(R.haloMat.vertexColors).toBe(true);
+      expect(R.haloMat.transparent).toBe(true);
+      expect(R.haloMat.blending).toBe(2);
+      expect(R.haloMat.map).toBeDefined();
+      // Outer diffuse fog layer — bigger sprite, same texture, additive.
+      expect(R.outerHaloMat.vertexColors).toBe(true);
+      expect(R.outerHaloMat.transparent).toBe(true);
+      expect(R.outerHaloMat.blending).toBe(2);
+      expect(R.outerHaloMat.map).toBeDefined();
+      expect(R.outerHaloMat.size).toBeGreaterThan(R.haloMat.size);
+    }
   });
 
-  it('4. _smokeLife Float32Array exists with length = seeds * SMOKE_PTS', async () => {
+  it('4. each ribbon line has position+color buffers sized 3 × path.length', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
-    expect(airflow._smokeLife).toBeDefined();
-    expect(airflow._smokeLife).toBeInstanceOf(Float32Array);
-    expect(airflow._smokeLife.length).toBe(airflow._smokeJx.length);
+    for (let s = 0; s < airflow._seeds.length; s++) {
+      const R        = airflow._ribbonLines[s];
+      const pathLen  = airflow._paths[s].length;
+      expect(R.positions.length).toBe(pathLen * 3);
+      expect(R.colors.length).toBe(pathLen * 3);
+    }
   });
 
-  it('5. SMOKE_PTS >= 120 (denser trails)', async () => {
+  it('5. ribbon vertex count is always >= 2 (degenerate 1-point paths filtered)', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
-    const smokePts = airflow._smokeLife.length / airflow._seeds.length;
-    expect(smokePts).toBeGreaterThanOrEqual(120);
+    for (const R of airflow._ribbonLines) {
+      expect(R.positions.length / 3).toBeGreaterThanOrEqual(2);
+    }
   });
 
-  it('6. material size grows with speedFactor', async () => {
+  it('6. update writes position buffer and marks line + both halo layers needsUpdate', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
-    airflow.setSpeed(350);
     airflow.setVisible(true);
-    const sizeAt0 = airflow._smokeMat.size;
+    airflow.setSpeed(200);
     airflow.update(0.016, 0);
-    expect(airflow._smokeMat.size).toBeGreaterThan(sizeAt0 + 0.05);
+    const R = airflow._ribbonLines[0];
+    expect(R.linePos.needsUpdate).toBe(true);
+    expect(R.lineCol.needsUpdate).toBe(true);
+    expect(R.haloPos.needsUpdate).toBe(true);
+    expect(R.haloCol.needsUpdate).toBe(true);
+    expect(R.outerHaloPos.needsUpdate).toBe(true);
+    expect(R.outerHaloCol.needsUpdate).toBe(true);
+    // At least one vertex moved away from the zero-initialised state.
+    let nonZero = 0;
+    for (let i = 0; i < R.positions.length; i++) {
+      if (Math.abs(R.positions[i]) > 1e-9) nonZero++;
+    }
+    expect(nonZero).toBeGreaterThan(0);
   });
 
-  it('7. _smokePoints has sizeAttenuation: true', async () => {
+  it('7. puff phase advances with dt (flow animation is live)', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
-    expect(airflow._smokeMat.sizeAttenuation).toBe(true);
+    airflow.setVisible(true);
+    airflow.setSpeed(200);
+    const R0 = airflow._ribbonLines[0];
+    const before = R0.phase;
+    airflow.update(0.016, 0);
+    const after = R0.phase;
+    expect(after).not.toBe(before);
   });
 
-  it('8. smoke opacity rises with speed and is higher at 350 than at 0', async () => {
+  it('8. ribbon opacity rises with speed and is higher at 350 than at 0', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
     airflow.setVisible(true);
 
     airflow.setSpeed(0);
     airflow.update(0.016, 0);
-    const opacityAt0 = airflow._smokeMat.opacity;
+    const opacityAt0 = airflow._ribbonLines[0].lineMat.opacity;
 
     airflow.setSpeed(350);
     airflow.update(0.016, 0);
-    const opacityAt350 = airflow._smokeMat.opacity;
+    const opacityAt350 = airflow._ribbonLines[0].lineMat.opacity;
 
     expect(opacityAt350).toBeGreaterThan(opacityAt0);
     expect(opacityAt350).toBeGreaterThan(0.5);
