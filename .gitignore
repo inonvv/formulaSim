@@ -1,3 +1,9 @@
 node_modules/
 dist/
 .claude/
+
+# OS / shell crash artefacts
+*.stackdump
+
+# Debug screenshots — scratch pad, not project history
+images/
