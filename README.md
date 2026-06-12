@@ -2,6 +2,8 @@
 
 Interactive 3D wind-tunnel simulator for racing cars — a cinematic, educational frontend experience built with Three.js.
 
+**▶ Live simulator:** https://inonvv.github.io/formulaSim/
+
 **Repository:** https://github.com/inonvv/formulaSim
 
 ## Features
