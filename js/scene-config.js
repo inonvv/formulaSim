@@ -60,12 +60,6 @@ export const WEATHER = {
     sunIntensity:     1.2,
     exposure:         1.0,
   },
-  optimal: {
-    ambientColor:     0x99bbff,
-    ambientIntensity: 3.2,
-    sunIntensity:     5.5,
-    exposure:         1.6,
-  },
   default: {
     ambientColor:     AMBIENT_COLOR,
     ambientIntensity: AMBIENT_INTENSITY,

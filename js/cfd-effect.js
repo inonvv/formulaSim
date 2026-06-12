@@ -19,20 +19,55 @@ import { topViewVelocity, pressureCoeff, cpToColor, vortexVelocity, sumVelocity 
 function rnd(a, b) { return a + Math.random() * (b - a); }
 
 /**
- * Piecewise-linear Cp profile along the car body (car-frame z).
- * Interpolates between physics-calibrated control points — no hard discontinuities.
+ * Piecewise-linear Cp profiles along the car body (car-frame z), PER CAR and
+ * PER SURFACE. An open-wheel ground-effect F1 and a closed-body GT3 RS have
+ * fundamentally different longitudinal pressure signatures:
+ *   top   — centreline over the upper body (streamline colouring)
+ *   under — underbody slice (floor / diffuser patch sampling)
+ * F1 keeps its single calibrated table for both surfaces (legacy behaviour,
+ * regression-locked by cfd-floor-suction.test.js). GT gets distinct tables:
+ * blunt bumper stagnation → hood-lip suction → windshield-base compression →
+ * roof-header suction peak (top), and splitter suction → flat floor →
+ * diffuser pump (under).
  */
-const CP_TABLE = [
+const F1_CP_TABLE = [
   [-3.00,  0.15], [-2.80,  0.90], [-2.60, -2.20],
   [-2.00, -0.85], [-0.50, -0.40], [ 0.50, -0.22],
   [ 1.40, -0.18], [ 2.00, -1.10], [ 2.40,  0.15],
 ];
+const CP_TABLES = {
+  F1: { top: F1_CP_TABLE, under: F1_CP_TABLE },
+  GT: {
+    top: [
+      [-2.60,  0.10], [-2.35,  0.90],   // blunt-bumper stagnation
+      [-1.90, -0.85],                   // hood-lip acceleration
+      [-1.20, -0.25],                   // mid-hood recovery
+      [-0.70,  0.45],                   // windshield-base compression
+      [-0.10, -0.95],                   // roof-header suction peak
+      [ 0.60, -0.45],                   // roof flat
+      [ 1.30, -0.35],                   // rear glass (separated, recovering)
+      [ 1.95, -0.60],                   // decklid under the wing
+      [ 2.35,  0.08],                   // base region
+    ],
+    under: [
+      [-2.40,  0.65],                   // splitter leading-edge stagnation
+      [-2.05, -1.25],                   // splitter suction peak
+      [-1.00, -0.55],                   // forward flat floor
+      [ 0.60, -0.45],                   // mid floor
+      [ 1.40, -0.65],                   // diffuser inlet ramp
+      [ 2.00, -1.15],                   // diffuser suction peak
+      [ 2.35,  0.05],                   // exit recovery
+    ],
+  },
+};
 
-export function lerpCpProfile(z) {
-  if (z <= CP_TABLE[0][0]) return CP_TABLE[0][1];
-  if (z >= CP_TABLE[CP_TABLE.length - 1][0]) return CP_TABLE[CP_TABLE.length - 1][1];
-  for (let i = 0; i < CP_TABLE.length - 1; i++) {
-    const [z0, cp0] = CP_TABLE[i], [z1, cp1] = CP_TABLE[i + 1];
+export function lerpCpProfile(z, type = 'F1', surface = 'under') {
+  const tables = CP_TABLES[type] || CP_TABLES.F1;
+  const table  = tables[surface] || tables.under;
+  if (z <= table[0][0]) return table[0][1];
+  if (z >= table[table.length - 1][0]) return table[table.length - 1][1];
+  for (let i = 0; i < table.length - 1; i++) {
+    const [z0, cp0] = table[i], [z1, cp1] = table[i + 1];
     if (z >= z0 && z <= z1) {
       const t = (z - z0) / (z1 - z0);
       return cp0 + t * (cp1 - cp0);
@@ -41,33 +76,53 @@ export function lerpCpProfile(z) {
   return 0;
 }
 
-/* ── Per-role Cp bias (physics-correct baselines) ─────────────────── *
+/* ── Per-role Cp bias, PER CAR (physics-correct baselines) ────────── *
  * bias  = base Cp value for surface (positive = stagnation, negative = suction)
  * scale = amplitude of potential-flow variation on top of bias
+ *
+ * F1 (open-wheel, venturi ground effect): strong floor/diffuser suction,
+ * multi-element wing peaks. GT (closed body, flat floor): weaker floor
+ * suction, blunter stagnation, dedicated closed-body roles for the hood /
+ * windshield-roof / rear-deck pressure stations.
  * -------------------------------------------------------------------- */
 const ROLE_CP = {
-  frontWing:        { bias: -1.80, scale: 1.10 },
-  frontWingFlap:    { bias: -2.40, scale: 0.85 },
-  rearWing:         { bias: -1.50, scale: 0.95 },
-  rearWingFlap:     { bias: -2.00, scale: 0.80 },
-  diffuser:         { bias: -1.30, scale: 0.90 },
-  sidepodInlet:     { bias:  0.85, scale: 0.25 },
-  sidepodTop:       { bias: -0.55, scale: 0.55 },
-  sidepodSide:      { bias:  0.20, scale: 0.40 },
-  engineCover:      { bias: -0.25, scale: 0.40 },
-  floor:            { bias: -0.75, scale: 0.80 },
-  nose:             { bias:  0.55, scale: 0.50 },
-  monocoque:        { bias: -0.10, scale: 0.30 },
-  frontBumper:      { bias:  0.70, scale: 0.40 },
-  bodyTop:          { bias: -0.25, scale: 0.45 },
+  F1: {
+    frontWing:        { bias: -1.80, scale: 1.10 },
+    frontWingFlap:    { bias: -2.40, scale: 0.85 },
+    rearWing:         { bias: -1.50, scale: 0.95 },
+    rearWingFlap:     { bias: -2.00, scale: 0.80 },
+    diffuser:         { bias: -1.30, scale: 0.90 },
+    sidepodInlet:     { bias:  0.85, scale: 0.25 },
+    sidepodTop:       { bias: -0.55, scale: 0.55 },
+    sidepodSide:      { bias:  0.20, scale: 0.40 },
+    engineCover:      { bias: -0.25, scale: 0.40 },
+    floor:            { bias: -0.75, scale: 0.80 },
+    nose:             { bias:  0.55, scale: 0.50 },
+    monocoque:        { bias: -0.10, scale: 0.30 },
+  },
+  GT: {
+    frontBumper:      { bias:  0.78, scale: 0.35 },   // blunt-body stagnation
+    hood:             { bias: -0.35, scale: 0.45 },   // hood-lip acceleration
+    windshieldRoof:   { bias: -0.60, scale: 0.55 },   // base compression → header suction
+    rearDeck:         { bias: -0.30, scale: 0.40 },   // separated flow, recovering
+    floor:            { bias: -0.55, scale: 0.70 },   // flat floor — no venturi tunnels
+    diffuser:         { bias: -1.05, scale: 0.85 },
+    rearWing:         { bias: -1.40, scale: 0.90 },   // swan-neck GT wing
+  },
 };
+
+export function getRoleCp(type, role) {
+  const table = ROLE_CP[type] || ROLE_CP.F1;
+  return table[role] || ROLE_CP.F1[role] || { bias: 0, scale: 0.5 };
+}
 
 /* ── Per-car CFD patch definitions ─────────────────────────────────── *
  * { w, h, cx, cy, cz, rx, ry, rz, role }
  * (cx,cy,cz) world centre  (rx,ry,rz) patch plane Euler rotation
+ * Exported for unit tests — see cfd-floor-suction.test.js.
  * -------------------------------------------------------------------- */
 const π = Math.PI;
-const CFD_PATCHES = {
+export const CFD_PATCHES = {
   F1: [
     // Front wing — main element
     { w: 1.74, h: 0.34, cx:  0,      cy:  0.020, cz: -2.72, rx: -π/2, ry: 0,    rz: 0,    role: 'frontWing' },
@@ -99,38 +154,11 @@ const CFD_PATCHES = {
     // Rear wing DRS flap
     { w: 1.86, h: 0.26, cx:  0,      cy:  1.06,  cz:  1.91, rx: -π/2, ry: 0,    rz: 0.14, role: 'rearWingFlap' },
   ],
-  F2: [
-    { w: 1.60, h: 0.30, cx:  0,      cy:  0.022, cz: -2.48, rx: -π/2, ry: 0,    rz: 0,    role: 'frontWing' },
-    { w: 1.52, h: 0.20, cx:  0,      cy:  0.060, cz: -2.42, rx: -π/2, ry: 0,    rz: 0.10, role: 'frontWingFlap' },
-    { w: 0.30, h: 0.84, cx:  0,      cy:  0.12,  cz: -2.02, rx: 0,    ry: 0,    rz: 0,    role: 'nose' },
-    { w: 0.56, h: 1.10, cx:  0,      cy:  0.40,  cz: -0.08, rx: -π/2, ry: 0,    rz: 0,    role: 'monocoque' },
-    { w: 0.055,h: 0.27, cx: -0.449,  cy:  0.19,  cz: -0.55, rx: 0,    ry:  π/2, rz: 0,    role: 'sidepodInlet' },
-    { w: 0.055,h: 0.27, cx:  0.449,  cy:  0.19,  cz: -0.55, rx: 0,    ry: -π/2, rz: 0,    role: 'sidepodInlet' },
-    { w: 0.30, h: 1.62, cx: -0.480,  cy:  0.42,  cz:  0.22, rx: -π/2, ry: 0,    rz: 0,    role: 'sidepodTop' },
-    { w: 0.30, h: 1.62, cx:  0.480,  cy:  0.42,  cz:  0.22, rx: -π/2, ry: 0,    rz: 0,    role: 'sidepodTop' },
-    { w: 0.28, h: 1.62, cx: -0.635,  cy:  0.19,  cz:  0.22, rx: 0,    ry:  π/2, rz: 0,    role: 'sidepodSide' },
-    { w: 0.28, h: 1.62, cx:  0.635,  cy:  0.19,  cz:  0.22, rx: 0,    ry: -π/2, rz: 0,    role: 'sidepodSide' },
-    { w: 0.48, h: 1.00, cx:  0,      cy:  0.51,  cz:  1.30, rx: -π/2, ry: 0,    rz: 0,    role: 'engineCover' },
-    { w: 1.30, h: 3.40, cx:  0,      cy:  0.007, cz: -0.08, rx:  π/2, ry: 0,    rz: 0,    role: 'floor' },
-    { w: 1.00, h: 0.88, cx:  0,      cy: -0.04,  cz:  1.80, rx:  π/2, ry: 0,    rz: 0.24, role: 'diffuser' },
-    { w: 1.74, h: 0.30, cx:  0,      cy:  0.90,  cz:  1.80, rx: -π/2, ry: 0,    rz: 0,    role: 'rearWing' },
-    { w: 1.68, h: 0.22, cx:  0,      cy:  0.97,  cz:  1.77, rx: -π/2, ry: 0,    rz: 0.12, role: 'rearWingFlap' },
-  ],
-  F3: [
-    { w: 1.46, h: 0.24, cx:  0,      cy:  0.020, cz: -2.24, rx: -π/2, ry: 0,    rz: 0,    role: 'frontWing' },
-    { w: 1.38, h: 0.16, cx:  0,      cy:  0.055, cz: -2.18, rx: -π/2, ry: 0,    rz: 0.08, role: 'frontWingFlap' },
-    { w: 0.26, h: 0.76, cx:  0,      cy:  0.10,  cz: -1.84, rx: 0,    ry: 0,    rz: 0,    role: 'nose' },
-    { w: 0.50, h: 0.90, cx:  0,      cy:  0.36,  cz: -0.10, rx: -π/2, ry: 0,    rz: 0,    role: 'monocoque' },
-    { w: 1.16, h: 2.90, cx:  0,      cy:  0.007, cz: -0.08, rx:  π/2, ry: 0,    rz: 0,    role: 'floor' },
-    { w: 0.88, h: 0.76, cx:  0,      cy: -0.04,  cz:  1.68, rx:  π/2, ry: 0,    rz: 0.22, role: 'diffuser' },
-    { w: 1.56, h: 0.26, cx:  0,      cy:  0.82,  cz:  1.68, rx: -π/2, ry: 0,    rz: 0,    role: 'rearWing' },
-    { w: 1.48, h: 0.20, cx:  0,      cy:  0.88,  cz:  1.65, rx: -π/2, ry: 0,    rz: 0.12, role: 'rearWingFlap' },
-  ],
   GT: [
     { w: 1.84, h: 0.40, cx:  0,      cy:  0.00,  cz: -2.32, rx: -π/2, ry: 0,    rz: 0,    role: 'frontBumper' },
-    { w: 1.70, h: 0.50, cx:  0,      cy:  0.60,  cz: -2.10, rx: -π/2, ry: 0,    rz:-0.20, role: 'bodyTop' },
-    { w: 1.60, h: 1.20, cx:  0,      cy:  0.72,  cz:  0.10, rx: -π/2, ry: 0,    rz: 0,    role: 'bodyTop' },
-    { w: 1.60, h: 1.10, cx:  0,      cy:  0.72,  cz:  1.20, rx: -π/2, ry: 0,    rz: 0,    role: 'bodyTop' },
+    { w: 1.70, h: 0.50, cx:  0,      cy:  0.60,  cz: -2.10, rx: -π/2, ry: 0,    rz:-0.20, role: 'hood' },
+    { w: 1.60, h: 1.20, cx:  0,      cy:  0.72,  cz:  0.10, rx: -π/2, ry: 0,    rz: 0,    role: 'windshieldRoof' },
+    { w: 1.60, h: 1.10, cx:  0,      cy:  0.72,  cz:  1.20, rx: -π/2, ry: 0,    rz: 0,    role: 'rearDeck' },
     { w: 1.20, h: 2.80, cx:  0,      cy:  0.007, cz:  0.00, rx:  π/2, ry: 0,    rz: 0,    role: 'floor' },
     { w: 1.10, h: 0.78, cx:  0,      cy: -0.10,  cz:  2.14, rx:  π/2, ry: 0,    rz: 0.30, role: 'diffuser' },
     { w: 1.76, h: 0.42, cx:  0,      cy:  0.84,  cz:  1.92, rx: -π/2, ry: 0,    rz: 0,    role: 'rearWing' },
@@ -153,26 +181,6 @@ const ZONE_BLOBS = {
     { role: 'fwCenter',     color: 0x0044ff, r: 0.16, intensity: 0.50, phase: 0.7, pos: [ 0,      0.10, -2.72] },
     { role: 'cockpit',      color: 0xff6600, r: 0.20, intensity: 0.70, phase: 1.4, pos: [ 0,      0.52, -0.45] },
   ],
-  F2: [
-    { role: 'stagnation',   color: 0xff2200, r: 0.22, intensity: 0.82, phase: 0.0, pos: [ 0,      0.12, -2.64] },
-    { role: 'suction',      color: 0x0044ff, r: 0.36, intensity: 0.72, phase: 1.1, pos: [ 0,      0.02, -2.40] },
-    { role: 'fwTipL',       color: 0x2266ff, r: 0.15, intensity: 0.60, phase: 0.6, pos: [-0.84,   0.02, -2.48] },
-    { role: 'fwTipR',       color: 0x2266ff, r: 0.15, intensity: 0.60, phase: 0.6, pos: [ 0.84,   0.02, -2.48] },
-    { role: 'sidepodInlet', color: 0xff4400, r: 0.18, intensity: 0.60, phase: 0.5, pos: [-0.449,  0.19, -0.55] },
-    { role: 'sidepodInlet', color: 0xff4400, r: 0.18, intensity: 0.60, phase: 0.5, pos: [ 0.449,  0.19, -0.55] },
-    { role: 'diffuser',     color: 0x0066ff, r: 0.45, intensity: 0.72, phase: 2.2, pos: [ 0,     -0.04,  1.80] },
-    { role: 'rearWing',     color: 0xff2200, r: 0.26, intensity: 0.55, phase: 0.8, pos: [ 0,      0.90,  1.80] },
-    { role: 'fwCenter',     color: 0x0044ff, r: 0.14, intensity: 0.45, phase: 0.7, pos: [ 0,      0.10, -2.48] },
-    { role: 'cockpit',      color: 0xff6600, r: 0.20, intensity: 0.70, phase: 1.4, pos: [ 0,      0.46, -0.42] },
-  ],
-  F3: [
-    { role: 'stagnation',   color: 0xff2200, r: 0.18, intensity: 0.65, phase: 0.0, pos: [ 0,      0.10, -2.40] },
-    { role: 'suction',      color: 0x0044ff, r: 0.28, intensity: 0.55, phase: 1.1, pos: [ 0,      0.02, -2.18] },
-    { role: 'diffuser',     color: 0x0066ff, r: 0.38, intensity: 0.52, phase: 2.2, pos: [ 0,     -0.04,  1.68] },
-    { role: 'rearWing',     color: 0xff2200, r: 0.22, intensity: 0.50, phase: 0.8, pos: [ 0,      0.82,  1.68] },
-    { role: 'fwCenter',     color: 0x0044ff, r: 0.12, intensity: 0.40, phase: 0.7, pos: [ 0,      0.08, -2.24] },
-    { role: 'cockpit',      color: 0xff6600, r: 0.20, intensity: 0.70, phase: 1.4, pos: [ 0,      0.40, -0.38] },
-  ],
   GT: [
     { role: 'stagnation',   color: 0xff2200, r: 0.42, intensity: 0.80, phase: 0.0, pos: [ 0,      0.08, -2.48] },
     { role: 'diffuser',     color: 0x0066ff, r: 0.50, intensity: 0.62, phase: 2.2, pos: [ 0,     -0.10,  2.14] },
@@ -187,30 +195,40 @@ const ZONE_BLOBS = {
  * -------------------------------------------------------------------- */
 const VORTEX_CORES = {
   F1: [
-    { x: -0.93, y:  0.02, z: -2.72, sign:  1, radius: 0.14, length: 1.00 }, // FW tip L
-    { x:  0.93, y:  0.02, z: -2.72, sign: -1, radius: 0.14, length: 1.00 }, // FW tip R
-    { x: -0.61, y:  0.06, z:  0.10, sign:  1, radius: 0.18, length: 1.40 }, // sidepod undercut L
-    { x:  0.61, y:  0.06, z:  0.10, sign: -1, radius: 0.18, length: 1.40 }, // sidepod undercut R
-    { x: -0.48, y: -0.04, z:  2.10, sign:  1, radius: 0.26, length: 1.43 }, // diffuser L
-    { x:  0.48, y: -0.04, z:  2.10, sign: -1, radius: 0.26, length: 1.43 }, // diffuser R
-  ],
-  F2: [
-    { x: -0.84, y:  0.02, z: -2.48, sign:  1, radius: 0.12, length: 0.90 },
-    { x:  0.84, y:  0.02, z: -2.48, sign: -1, radius: 0.12, length: 0.90 },
-    { x: -0.40, y: -0.04, z:  1.97, sign:  1, radius: 0.22, length: 1.23 },
-    { x:  0.40, y: -0.04, z:  1.97, sign: -1, radius: 0.22, length: 1.23 },
-  ],
-  F3: [
-    { x: -0.70, y:  0.02, z: -2.24, sign:  1, radius: 0.10, length: 0.80 },
-    { x:  0.70, y:  0.02, z: -2.24, sign: -1, radius: 0.10, length: 0.80 },
-    { x: -0.32, y: -0.04, z:  1.85, sign:  1, radius: 0.18, length: 1.03 },
-    { x:  0.32, y: -0.04, z:  1.85, sign: -1, radius: 0.18, length: 1.03 },
+    { x: -0.93, y:  0.02, z: -2.72, sign:  1, radius: 0.14, length: 1.00, role: 'frontWing',  dz: 0    }, // FW tip L
+    { x:  0.93, y:  0.02, z: -2.72, sign: -1, radius: 0.14, length: 1.00, role: 'frontWing',  dz: 0    }, // FW tip R
+    { x: -0.61, y:  0.06, z:  0.10, sign:  1, radius: 0.18, length: 1.40, role: 'sidepodTop', dz: -0.18 }, // sidepod undercut L
+    { x:  0.61, y:  0.06, z:  0.10, sign: -1, radius: 0.18, length: 1.40, role: 'sidepodTop', dz: -0.18 }, // sidepod undercut R
+    { x: -0.48, y: -0.04, z:  2.10, sign:  1, radius: 0.26, length: 1.43, role: 'diffuser',   dz: 0.17 }, // diffuser L
+    { x:  0.48, y: -0.04, z:  2.10, sign: -1, radius: 0.26, length: 1.43, role: 'diffuser',   dz: 0.17 }, // diffuser R
   ],
   GT: [
-    { x: -0.44, y: -0.10, z:  2.31, sign:  1, radius: 0.24, length: 1.23 },
-    { x:  0.44, y: -0.10, z:  2.31, sign: -1, radius: 0.24, length: 1.23 },
+    // Splitter-edge vortices — the GT3 RS front splitter sheds a tip pair.
+    { x: -0.80, y:  0.02, z: -2.20, sign:  1, radius: 0.10, length: 0.85, role: 'frontWing', dz: 0    },
+    { x:  0.80, y:  0.02, z: -2.20, sign: -1, radius: 0.10, length: 0.85, role: 'frontWing', dz: 0    },
+    // Rear-wing endplate vortices — dominant on the swan-neck GT wing.
+    { x: -0.86, y:  0.80, z:  1.80, sign: -1, radius: 0.16, length: 1.10, role: 'rearWing',  dz: 0    },
+    { x:  0.86, y:  0.80, z:  1.80, sign:  1, radius: 0.16, length: 1.10, role: 'rearWing',  dz: 0    },
+    { x: -0.44, y: -0.10, z:  2.31, sign:  1, radius: 0.24, length: 1.23, role: 'diffuser',  dz: 0.10 },
+    { x:  0.44, y: -0.10, z:  2.31, sign: -1, radius: 0.24, length: 1.23, role: 'diffuser',  dz: 0.10 },
   ],
 };
+
+/**
+ * Resolve vortex-core positions against the measured anchor map: each core's
+ * z snaps to its role's anchor z (plus the authored dz offset — e.g. the
+ * diffuser vortex trails slightly AFT of the diffuser anchor). Cores whose
+ * role has no anchor — or with no anchors at all — keep authored positions.
+ * Pure; returns NEW objects (authored table never mutated).
+ */
+export function resolveVortexCores(type, anchors) {
+  const defs = VORTEX_CORES[type] || VORTEX_CORES.F1;
+  return defs.map(def => {
+    const a = anchors?.[def.role];
+    if (!a || typeof a.z !== 'number') return { ...def };
+    return { ...def, z: a.z + (def.dz ?? 0) };
+  });
+}
 
 /* ── Streamline lane definitions (animated nose→tail flow) ────────── *
  * Each lane is a line strip from zStart to zEnd at a fixed (x, y) lane.
@@ -227,20 +245,6 @@ const STREAMLINE_DEFS = {
     { x:  0.72, y: 0.22, zStart: -2.85, zEnd: 2.20, waveX:-0.010, waveY: 0.018 }, // sidepod outer R
     { x:  0.00, y: 0.00, zStart: -2.10, zEnd: 2.15, waveX: 0.000, waveY: 0.012 }, // floor / ground effect
   ],
-  F2: [
-    { x:  0.00, y: 0.46, zStart: -2.60, zEnd: 2.40, waveX: 0.000, waveY: 0.028 },
-    { x: -0.20, y: 0.35, zStart: -2.60, zEnd: 2.20, waveX: 0.010, waveY: 0.022 },
-    { x:  0.20, y: 0.35, zStart: -2.60, zEnd: 2.20, waveX:-0.010, waveY: 0.022 },
-    { x: -0.48, y: 0.42, zStart: -2.60, zEnd: 2.10, waveX: 0.007, waveY: 0.018 },
-    { x:  0.48, y: 0.42, zStart: -2.60, zEnd: 2.10, waveX:-0.007, waveY: 0.018 },
-    { x:  0.00, y: 0.00, zStart: -1.90, zEnd: 1.95, waveX: 0.000, waveY: 0.010 },
-  ],
-  F3: [
-    { x:  0.00, y: 0.40, zStart: -2.35, zEnd: 2.10, waveX: 0.000, waveY: 0.025 },
-    { x: -0.18, y: 0.30, zStart: -2.35, zEnd: 1.95, waveX: 0.008, waveY: 0.020 },
-    { x:  0.18, y: 0.30, zStart: -2.35, zEnd: 1.95, waveX:-0.008, waveY: 0.020 },
-    { x:  0.00, y: 0.00, zStart: -1.70, zEnd: 1.80, waveX: 0.000, waveY: 0.010 },
-  ],
   GT: [
     { x:  0.00, y: 0.68, zStart: -2.40, zEnd: 2.60, waveX: 0.000, waveY: 0.030 },
     { x: -0.40, y: 0.68, zStart: -2.40, zEnd: 2.40, waveX: 0.010, waveY: 0.025 },
@@ -252,6 +256,157 @@ const STREAMLINE_DEFS = {
 const VORTEX_PTS  = 70;
 const STREAM_PTS  = 90;
 const PATCH_SEG   = 14; // higher → smoother Cp gradients
+
+/* Under-body patch roles. For these we bypass the topViewVelocity sampler
+ * and read the longitudinal Cp profile directly, because the patch's
+ * normalised sample coordinates can land INSIDE the unit cylinder
+ * (r² ≤ 1) where topViewVelocity short-circuits to (0,0) — driving baseCp
+ * to 1 (stagnation) and washing out the floor's actual suction. The Cp
+ * profile in `CP_TABLE` is the physics-calibrated baseline used by the
+ * streamlines and is the correct thing to read for surfaces tucked under
+ * the car body. See cfd-floor-suction.test.js for the regression proof. */
+const UNDERBODY_ROLES = new Set(['floor', 'diffuser']);
+
+/**
+ * Compute Cp at one patch vertex. Pure — no THREE imports, no class state.
+ *
+ * @param {object} p           — patch def from CFD_PATCHES (has w, h, cx, cy, cz, role)
+ * @param {number} lx          — local x within the patch (PlaneGeometry frame)
+ * @param {number} ly          — local y within the patch
+ * @param {number} speedFactor — normalised speed in [0, 1]
+ * @param {Array}  modifiers   — analytical flow modifiers (sinks/sources/vortices)
+ * @param {Array}  vortexCores — VORTEX_CORES[type] entries for vortex perturbation
+ * @returns {number} pressure coefficient
+ */
+export function computePatchCp(p, lx, ly, speedFactor, modifiers = [], vortexCores = [], type = 'F1') {
+  const roleDef = getRoleCp(type, p.role);
+  const hw = p.w / 2;
+  const hh = p.h / 2;
+  const xi  = hw > 0 ? lx / hw : 0;
+  const eta = hh > 0 ? ly / hh : 0;
+
+  let baseCp;
+  if (UNDERBODY_ROLES.has(p.role)) {
+    // Read the longitudinal Cp table at this vertex's z-position. Spatial
+    // variation across the patch comes from `ly` mapping to world z (the
+    // floor/diffuser patches are rotated π/2 around X so ly aligns with z).
+    baseCp = lerpCpProfile(p.cz + ly, type, 'under');
+  } else {
+    const sampleXi  = xi  * 1.6 + 0.01;
+    const sampleEta = eta * 1.6 + 0.01;
+    const { vxi, veta } = (modifiers && modifiers.length > 0)
+      ? sumVelocity(sampleXi, sampleEta, topViewVelocity, modifiers)
+      : topViewVelocity(sampleXi, sampleEta);
+    baseCp = pressureCoeff(vxi, veta);
+  }
+
+  let groundScale = 1.0;
+  if (p.role === 'floor')    groundScale = 1 + speedFactor * speedFactor * 0.30;
+  if (p.role === 'diffuser') groundScale = 1 + speedFactor * speedFactor * 0.25;
+
+  let cp = (roleDef.bias + roleDef.scale * baseCp * speedFactor) * groundScale;
+
+  if (p.role === 'nose') {
+    cp += (1 - Math.abs(xi)) * 0.40 * speedFactor;
+  }
+  if (p.role === 'floor') {
+    cp -= (eta + 1) * 0.20 * speedFactor;
+  }
+  // Closed-body windshield/roof station: the patch spans windscreen base →
+  // roof header (rx = -π/2 ⇒ local +y faces the nose). The base half carries
+  // a compression ramp toward stagnation; the header half keeps the suction
+  // baseline — reproduces the classic saddle on a fastback roofline.
+  if (p.role === 'windshieldRoof') {
+    cp += Math.max(0, eta) * 1.2 * speedFactor;
+  }
+
+  if (p.role === 'sidepodTop' || p.role === 'floor' || p.role === 'diffuser') {
+    for (const vc of vortexCores) {
+      const dist = Math.sqrt(
+        (p.cx + lx - vc.x) ** 2 +
+        (p.cy + ly - vc.y) ** 2 +
+        (p.cz        - vc.z) ** 2
+      );
+      if (dist < 0.5) {
+        const vv = vortexVelocity(p.cx + lx, p.cz, vc.x, vc.z, vc.sign * 0.3, vc.radius);
+        cp += -pressureCoeff(vv.vxi, vv.veta) * 0.35;
+      }
+    }
+  }
+
+  return cp;
+}
+
+/**
+ * Cp at a point ON the real body surface — drives the per-vertex colouring
+ * of the body-surface overlay (the replacement for the floating rectangle
+ * patches on GLB cars). Pure and anchor-driven:
+ *
+ *   1. Underbody (downward-facing normal, or below the floor anchor) reads
+ *      the per-car UNDER profile — splitter suction, flat floor, diffuser
+ *      pump — with the ground-effect speed gain.
+ *   2. Topside reads the per-car TOP profile (stagnation → hood suction →
+ *      windshield compression → roof header …).
+ *   3. NEWTONIAN IMPACT — the precision term. Freestream travels +z in the
+ *      car frame (nose at −z); a surface "sees" the oncoming air when its
+ *      normal has a −z component. Cp is pulled toward the stagnation value
+ *      by facing² (the classic Cp = Cp_stag·sin²θ blunt-body model). This
+ *      is what paints the heat/compression points red wherever they really
+ *      are: mirror faces, the windshield base mid-car, bumper, intake lips,
+ *      A-pillar leading edges — independent of where they sit along z.
+ *      Rear-facing surfaces get base/wake suction instead.
+ *   4. The wing bands get their suction peaks at the measured anchors.
+ *
+ * Everything scales with speedFactor so the overlay fades at rest.
+ *
+ * @param {number} x, y, z      — vertex position, car-local
+ * @param {number} nx, ny, nz   — vertex normal (unit), car-local
+ * @param {string} type         — car type for the Cp tables
+ * @param {object} anchors      — measured anchor map (frontWing/rearWing/floor/noseTip…)
+ * @param {number} speedFactor  — [0, 1]
+ */
+export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor) {
+  if (!speedFactor) return 0;
+
+  const floorY  = Number.isFinite(anchors?.floor?.y) ? anchors.floor.y : 0.03;
+  const isUnder = ny < -0.35 || y < floorY + 0.05;
+
+  let cp = lerpCpProfile(z, type, isUnder ? 'under' : 'top');
+
+  if (!isUnder) {
+    // Newtonian impact: pull toward stagnation by how squarely the surface
+    // faces the flow. facing = −nz ∈ (0, 1]; impact = facing².
+    const facing = Math.max(0, -nz);
+    if (facing > 0) {
+      const t = Math.min(1, facing * facing * 1.4);
+      cp = cp + (0.95 - cp) * t;
+    }
+    // Leeward base/wake suction on rear-facing surfaces.
+    const lee = Math.max(0, nz);
+    if (lee > 0) cp -= lee * lee * 0.35;
+
+    // Mild residual nose blend — keeps the nose tip warm even where its
+    // skin is nearly flow-parallel (real stagnation lines wrap the tip).
+    const nose = anchors?.noseTip ?? anchors?.frontWing;
+    if (nose && z < nose.z + 0.45) {
+      const tN = Math.min(1, Math.max(0, 1 - (z - nose.z) / 0.45));
+      cp = cp * (1 - 0.35 * tN) + 0.90 * 0.35 * tN;
+    }
+  }
+
+  // Wing suction bands at the MEASURED anchor positions.
+  const rw = anchors?.rearWing;
+  if (rw && Math.abs(z - rw.z) < 0.35 && y > rw.y - 0.30) {
+    cp -= 0.95;
+  }
+  const fw = anchors?.frontWing;
+  if (type === 'F1' && fw && Math.abs(z - fw.z) < 0.30 && y < fw.y + 0.25) {
+    cp -= 1.10;
+  }
+
+  if (isUnder) cp *= 1 + speedFactor * speedFactor * 0.30;
+  return cp * speedFactor;
+}
 
 /* ════════════════════════════════════════════════════════════════════
    CfdEffect class
@@ -275,7 +430,12 @@ export class CfdEffect {
     this._patchMeshes    = [];
     this._blobMeshes     = [];
     this._vortexLines    = [];
+    this._vortexDefs     = [];
     this._streamlines    = [];
+    this._surfaceMeshes  = [];   // body-surface overlay (GLB cars)
+    this._bodyMeshes     = null; // source meshes for the overlay
+    this._bodyFrame      = null; // car group whose frame the overlay rebases into
+    this._surfaceDirty   = false;
 
     this._build('F1');
     this.group.visible = false;
@@ -294,6 +454,19 @@ export class CfdEffect {
     this.group.position.y = this._baseY;
   }
 
+  /**
+   * Provide the REAL body meshes (collectOccupancyMeshes output) plus the
+   * car group whose local frame the overlay is rebased into. When present,
+   * the next (re)build paints Cp directly on cloned body geometry and
+   * suppresses the floating rectangle patches. Pass (null, null) to clear
+   * (procedural fallback → rectangles return).
+   */
+  setBodySurface(meshes, carGroup) {
+    this._bodyMeshes = (Array.isArray(meshes) && meshes.length > 0) ? meshes : null;
+    this._bodyFrame  = this._bodyMeshes ? carGroup : null;
+    this._surfaceDirty = true;
+  }
+
   setCarType(type, measure) {
     // Anchors may be supplied alongside the type (preferred). Fall back to
     // the prior anchors if omitted so external callers that still use the
@@ -304,8 +477,10 @@ export class CfdEffect {
 
     // Rebuild when the type changes OR when the anchor set refreshes (so the
     // initial F1 spawn — same type, but anchors arriving for the first time —
-    // re-anchors blobs to the measured positions instead of authored ones).
-    if (this._type === type && !anchorsChanged) return;
+    // re-anchors blobs to the measured positions instead of authored ones)
+    // OR when a new body surface arrived via setBodySurface.
+    if (this._type === type && !anchorsChanged && !this._surfaceDirty) return;
+    this._surfaceDirty = false;
     this._type = type;
     this._disposeAll();
     this._build(type);
@@ -345,9 +520,10 @@ export class CfdEffect {
 
     const speedFactor = Math.min(this._speed / 350, 1);
 
-    // Refresh patch vertex colours when speed changes meaningfully
+    // Refresh patch / surface vertex colours when speed changes meaningfully
     if (this._speedDirty && Math.abs(this._speed - this._lastBuiltSpeed) > 5) {
       this._updatePatchColors(speedFactor);
+      this._updateSurfaceColors(speedFactor);
       this._lastBuiltSpeed = this._speed;
       this._speedDirty     = false;
     }
@@ -368,8 +544,8 @@ export class CfdEffect {
         speedFactor * eff_int * 0.58 * (0.72 + 0.28 * Math.sin(t * 2.2 + blob.phase));
     }
 
-    // ── Vortex core spirals ────────────────────────────────────────
-    const vDefs = VORTEX_CORES[this._type] || VORTEX_CORES.F1;
+    // ── Vortex core spirals — anchor-resolved defs from _build ────
+    const vDefs = this._vortexDefs;
     for (let vi = 0; vi < this._vortexLines.length; vi++) {
       const def = vDefs[vi];
       if (!def) continue;
@@ -409,8 +585,9 @@ export class CfdEffect {
         pos[pi * 3 + 1] = def.y + Math.cos(phase * 0.6)  * def.waveY * speedFactor;
         pos[pi * 3 + 2] = z;
 
-        // Cp-based color from longitudinal profile, modulated by speed
-        const cp = lerpCpProfile(z) * speedFactor;
+        // Cp-based color from the per-car TOP-surface profile (streamlines
+        // ride over the upper body), modulated by speed
+        const cp = lerpCpProfile(z, this._type, 'top') * speedFactor;
         const c  = cpToColor(cp);
         col[pi * 3]     = c.r;
         col[pi * 3 + 1] = c.g;
@@ -436,22 +613,145 @@ export class CfdEffect {
       else child.material?.dispose();
       this.group.remove(child);
     }
-    this._patchMeshes = [];
-    this._blobMeshes  = [];
-    this._vortexLines = [];
-    this._streamlines = [];
+    this._patchMeshes   = [];
+    this._blobMeshes    = [];
+    this._vortexLines   = [];
+    this._streamlines   = [];
+    this._surfaceMeshes = [];
   }
 
   _build(type) {
-    this._buildPatches(type);
+    // Resolve vortex cores once per build — patches, the per-vertex Cp
+    // perturbation, and the spiral lines all read the same resolved set.
+    this._vortexDefs = resolveVortexCores(type, this._anchors);
+    // GLB cars paint Cp on the real body surface; rectangle patches are the
+    // procedural fallback only — never both (the rectangles were the
+    // "weird shapes running through the car").
+    if (this._bodyMeshes) {
+      this._buildSurfaceOverlay();
+    } else {
+      this._buildPatches(type);
+    }
     this._buildBlobs(type);
     this._buildVortexCores(type);
     this._buildStreamlines(type);
   }
 
+  /* ── Body-surface Cp overlay ──────────────────────────────────── */
+  _buildSurfaceOverlay() {
+    const frame = this._bodyFrame;
+    const invFrame = new THREE.Matrix4();
+    if (frame?.matrixWorld) {
+      frame.updateMatrixWorld?.(true);
+      invFrame.copy(frame.matrixWorld).invert();
+    }
+
+    for (const src of this._bodyMeshes) {
+      if (!src?.geometry?.attributes?.position) continue;
+      src.updateMatrixWorld?.(true);
+
+      // Rebase into the car group's local frame: the CFD group's baseY lift
+      // then matches the on-track car exactly (same convention as patches).
+      const geo = src.geometry.clone();
+      const rel = new THREE.Matrix4().multiplyMatrices(invFrame, src.matrixWorld);
+      geo.applyMatrix4(rel);
+
+      // Inflate ~12 mm along the (re-based) normals so the additive overlay
+      // floats just off the paint instead of z-fighting with it.
+      const pos = geo.attributes.position;
+      const nrm = geo.attributes.normal;
+      if (nrm) {
+        for (let i = 0; i < pos.count; i++) {
+          pos.setXYZ(
+            i,
+            pos.getX(i) + nrm.getX(i) * 0.012,
+            pos.getY(i) + nrm.getY(i) * 0.012,
+            pos.getZ(i) + nrm.getZ(i) * 0.012,
+          );
+        }
+      }
+
+      const colors = new Float32Array(pos.count * 3);
+      const c0 = cpToColor(0);
+      for (let i = 0; i < pos.count; i++) {
+        colors[i * 3] = c0.r; colors[i * 3 + 1] = c0.g; colors[i * 3 + 2] = c0.b;
+      }
+      geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+      const mat = new THREE.MeshBasicMaterial({
+        vertexColors: true,
+        transparent:  true,
+        opacity:      0,
+        depthWrite:   false,
+        blending:     THREE.AdditiveBlending,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.name = `cfdSurface_${src.name}`;
+      this.group.add(mesh);
+      this._surfaceMeshes.push({ mesh });
+    }
+  }
+
+  /* ── Per-vertex Cp colouring of the body overlay ──────────────── */
+  _updateSurfaceColors(speedFactor) {
+    for (const { mesh } of this._surfaceMeshes) {
+      const pos = mesh.geometry.attributes.position;
+      const nrm = mesh.geometry.attributes.normal;
+      const col = mesh.geometry.attributes.color;
+      for (let i = 0; i < pos.count; i++) {
+        const cp = computeSurfaceCp(
+          pos.getX(i), pos.getY(i), pos.getZ(i),
+          nrm ? nrm.getX(i) : 0,
+          nrm ? nrm.getY(i) : 1,
+          nrm ? nrm.getZ(i) : 0,
+          this._type, this._anchors, speedFactor,
+        );
+        const c = cpToColor(cp);
+        col.setXYZ(i, c.r, c.g, c.b);
+      }
+      col.needsUpdate = true;
+      mesh.material.opacity = speedFactor * 0.85;
+    }
+  }
+
+  /**
+   * Build a z-axis remap function from the authored CFD_PATCHES[type] z
+   * envelope onto the actual measured bodyshell envelope (frontWing.z …
+   * rearWing.z). Returns null when the measure lacks the needed anchors —
+   * patches then keep their authored z verbatim.
+   *
+   * The GT GLB bodyshell (after bug 1's bodyshell-aware bbox fix) is
+   * shorter than the authored CFD_PATCHES.GT z span; without the remap the
+   * patches float past the nose and behind the rear bumper, which is the
+   * "CFD not calculated to size of the car" symptom the user reported.
+   */
+  _buildPatchZRemap(type) {
+    const a = this._anchors;
+    if (!a || !a.frontWing || !a.rearWing) return null;
+    const targetMin = a.frontWing.z;
+    const targetMax = a.rearWing.z;
+    if (!(targetMax > targetMin)) return null;
+
+    const patches = CFD_PATCHES[type] || CFD_PATCHES.F1;
+    if (patches.length < 2) return null;
+    let authMin =  Infinity, authMax = -Infinity;
+    for (const p of patches) {
+      if (p.cz < authMin) authMin = p.cz;
+      if (p.cz > authMax) authMax = p.cz;
+    }
+    if (!(authMax > authMin)) return null;
+
+    const k = (targetMax - targetMin) / (authMax - authMin);
+    return (z) => targetMin + (z - authMin) * k;
+  }
+
   /* ── Surface pressure patches ─────────────────────────────────── */
   _buildPatches(type) {
     const patches = CFD_PATCHES[type] || CFD_PATCHES.F1;
+    // Remap the authored patch envelope onto the MEASURED body for every
+    // car. Null (no anchors yet — procedural fallback / first build) keeps
+    // the authored envelope verbatim.
+    const remapZ = this._buildPatchZRemap(type);
 
     for (const p of patches) {
       const geo   = new THREE.PlaneGeometry(p.w, p.h, PATCH_SEG, PATCH_SEG);
@@ -476,10 +776,14 @@ export class CfdEffect {
         side:         THREE.DoubleSide,
       });
 
+      const cz = remapZ ? remapZ(p.cz) : p.cz;
       const m = new THREE.Mesh(geo, mat);
-      m.position.set(p.cx, p.cy, p.cz);
+      m.position.set(p.cx, p.cy, cz);
       m.rotation.set(p.rx, p.ry, p.rz);
-      m.userData.patchDef = p;
+      // Store the EFFECTIVE patch def (with remapped cz) so the Cp recompute
+      // and zone-blob/vortex distance checks operate against the actual
+      // rendered position, not the authored one.
+      m.userData.patchDef = (cz === p.cz) ? p : { ...p, cz };
       this.group.add(m);
       this._patchMeshes.push(m);
     }
@@ -487,71 +791,25 @@ export class CfdEffect {
 
   /* ── Role-specific per-vertex Cp colouring ────────────────────── */
   _updatePatchColors(speedFactor) {
-    const patches = CFD_PATCHES[this._type] || CFD_PATCHES.F1;
+    const vortexCores = this._vortexDefs;
 
     for (let pi = 0; pi < this._patchMeshes.length; pi++) {
       const m = this._patchMeshes[pi];
-      const p = patches[pi];
+      // Use the EFFECTIVE patch def stored at build time — for GT this
+      // carries the z-remapped cz so under-body Cp sampling reads the
+      // longitudinal profile at the actual rendered position.
+      const p = m?.userData?.patchDef;
       if (!m || !p) continue;
 
       const pos    = m.geometry.attributes.position.array;
       const colors = m.geometry.attributes.color.array;
       const count  = m.geometry.attributes.position.count;
-      const hw = p.w / 2;
-      const hh = p.h / 2;
-
-      const roleDef = ROLE_CP[p.role] || { bias: 0, scale: 0.5 };
 
       for (let vi = 0; vi < count; vi++) {
         const lx = pos[vi * 3];
         const ly = pos[vi * 3 + 1];
-
-        let cp;
-        {
-          // Potential-flow perturbation on top of role-specific bias.
-          // Phase C: when Phase-C modifiers are wired in, sample the
-          // superposed velocity field (sinks at inlets, sources at outlets,
-          // wing dipoles) so the Cp map reflects feature-aware flow.
-          // Empty modifier list ⇒ identical to the pre-Phase-C result.
-          const xi  = hw > 0 ? lx / hw : 0;
-          const eta = hh > 0 ? ly / hh : 0;
-          const sampleXi  = xi  * 1.6 + 0.01;
-          const sampleEta = eta * 1.6 + 0.01;
-          const { vxi, veta } = (this._modifiers && this._modifiers.length > 0)
-            ? sumVelocity(sampleXi, sampleEta, topViewVelocity, this._modifiers)
-            : topViewVelocity(sampleXi, sampleEta);
-          const baseCp = pressureCoeff(vxi, veta);
-
-          let groundScale = 1.0;
-          if (p.role === 'floor')    groundScale = 1 + speedFactor * speedFactor * 0.30;
-          if (p.role === 'diffuser') groundScale = 1 + speedFactor * speedFactor * 0.25;
-
-          cp = (roleDef.bias + roleDef.scale * baseCp * speedFactor) * groundScale;
-
-          if (p.role === 'nose') {
-            cp += (1 - Math.abs(xi)) * 0.40 * speedFactor;
-          }
-          if (p.role === 'floor') {
-            cp -= (eta + 1) * 0.20 * speedFactor;
-          }
-
-          if (['sidepodTop', 'floor', 'diffuser'].includes(p.role)) {
-            const vDefs = VORTEX_CORES[this._type] || VORTEX_CORES.F1;
-            for (const vc of vDefs) {
-              const dist = Math.sqrt(
-                (p.cx + lx - vc.x) ** 2 +
-                (p.cy + ly - vc.y) ** 2 +
-                (p.cz        - vc.z) ** 2
-              );
-              if (dist < 0.5) {
-                const vv = vortexVelocity(p.cx + lx, p.cz, vc.x, vc.z, vc.sign * 0.3, vc.radius);
-                cp += -pressureCoeff(vv.vxi, vv.veta) * 0.35;
-              }
-            }
-          }
-        }
-
-        const c = cpToColor(cp);
+        const cp = computePatchCp(p, lx, ly, speedFactor, this._modifiers, vortexCores, this._type);
+        const c  = cpToColor(cp);
         colors[vi * 3]     = c.r;
         colors[vi * 3 + 1] = c.g;
         colors[vi * 3 + 2] = c.b;
@@ -637,9 +895,8 @@ export class CfdEffect {
   }
 
   /* ── Vortex core spiral lines ─────────────────────────────────── */
-  _buildVortexCores(type) {
-    const vDefs = VORTEX_CORES[type] || VORTEX_CORES.F1;
-    for (const def of vDefs) {
+  _buildVortexCores(_type) {
+    for (let i = 0; i < this._vortexDefs.length; i++) {
       const positions = new Float32Array(VORTEX_PTS * 3);
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));

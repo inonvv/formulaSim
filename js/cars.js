@@ -20,12 +20,16 @@ import { loadCarFromManifest } from './car-loader.js';
 import { TRACK } from './scene-config.js';
 
 /* ── Feature flag — flip per-car once GLBs are aligned ──
- * GT: false — the gt.glb body mesh is monolithic with no separable wheel nodes,
- * so hybrid-import would bake in whatever proportions gltf-transform decided.
- * The procedural GT builder delivers the same UX (livery, wheel spin, brakes)
- * with measurements that are provably correct against the track frame.
+ * F1: GLB body + per-corner split wheels via buildF1Hybrid (see car-loader).
+ * GT: GLB body + GLB wheels via buildGTHybrid. gt.glb is monolithic (no
+ *     named wheel nodes) but the four wheels are connected-geometry islands
+ *     inside the mega-mesh; the loader's buildWheelsFromMonolith extracts
+ *     them into spinnable FL/FR/RL/RR corner groups (manifest.wheelBake)
+ *     and measures axles/radius from the tire islands. Any split failure
+ *     falls back to the fully procedural GT — never a partial mix.
+ * F2 / F3: removed for now — will return in a later phase.
  */
-export const USE_IMPORTED_MODELS = { F1: true, F2: false, F3: false, GT: false };
+export const USE_IMPORTED_MODELS = { F1: true, GT: true };
 
 /* ── Livery clone-and-tint helper ─────────────────────────────────── */
 function applyLivery(meshes, color) {
@@ -305,6 +309,74 @@ function wheel(radius, width, matHub, matTyre, wheelName = '') {
   return grp;
 }
 
+/* ── GT road-car wheel — multi-spoke alloy, flush centre-lock ─────
+ * Styled after the 992 GT3 RS magnesium centre-lock wheel. Key visual
+ * differences vs the formula-style `wheel()`:
+ *   • 10 thin spokes (not 5 wide) — multi-spoke alloy look
+ *   • No raised wheel nut — flush centre-lock cap
+ *   • Yellow brake caliper (PCCB option, identifies a GT3 RS)
+ *   • Taller-sidewall street tyre (no pronounced sidewall rings)
+ * Signature matches `wheel()` so call sites are interchangeable.
+ */
+function gtWheel(radius, width, matHub, matTyre, wheelName = '') {
+  const grp = new THREE.Group();
+
+  // Street tyre — plain sidewall, no racing rings.
+  const tyre = mesh(cyl(radius, radius, width, 52), matTyre);
+  tyre.rotation.z = Math.PI / 2;
+  grp.add(tyre);
+
+  // Rim lip rings (thin outer flange each side).
+  for (const ox of [-width * 0.46, width * 0.46]) {
+    const lip = mesh(cyl(radius * 0.72, radius * 0.72, width * 0.06, 32), matHub);
+    lip.rotation.z = Math.PI / 2;
+    lip.position.x = ox;
+    grp.add(lip);
+  }
+  // Deep-dish barrel — concave face characteristic of a GT3 RS wheel.
+  const barrel = mesh(cyl(radius * 0.66, radius * 0.66, width * 0.84, 24), matHub);
+  barrel.rotation.z = Math.PI / 2;
+  grp.add(barrel);
+
+  // 10 thin radial spokes.
+  for (let i = 0; i < 10; i++) {
+    const angle = (i / 10) * Math.PI * 2;
+    const spoke = mesh(box(radius * 0.96, radius * 0.06, width * 0.05), matHub);
+    spoke.rotation.z = angle;
+    grp.add(spoke);
+  }
+
+  // Flush centre-lock cap — no protruding nut.
+  const cap = mesh(cyl(radius * 0.22, radius * 0.22, width * 0.04, 24), matHub);
+  cap.rotation.z = Math.PI / 2;
+  cap.position.x = width * 0.46;
+  grp.add(cap);
+
+  // Brake disc.
+  const brakeMat = new THREE.MeshStandardMaterial({
+    color: 0x222222, roughness: 0.45, metalness: 0.80,
+  });
+  const disc = new THREE.Mesh(cyl(radius * 0.60, radius * 0.60, 0.032, 24), brakeMat);
+  disc.name = `brake_${wheelName}`;
+  disc.rotation.z = Math.PI / 2;
+  disc.position.x = 0.03;
+  grp.add(disc);
+
+  // Yellow caliper — PCCB identifier on a 992 GT3 RS.
+  const caliperMat = new THREE.MeshPhysicalMaterial({
+    color: 0xf0c000, roughness: 0.25, metalness: 0.55,
+    clearcoat: 0.7, clearcoatRoughness: 0.15,
+  });
+  const caliper = new THREE.Mesh(rBox(0.09, 0.20, width * 0.50, 0.012), caliperMat);
+  caliper.name = `brake_cal_${wheelName}`;
+  caliper.position.set(-0.02, 0, 0);
+  caliper.castShadow = true;
+  grp.add(caliper);
+
+  grp.castShadow = true;
+  return grp;
+}
+
 /* ── Suspension wishbone helper ───────────────────────────────── */
 function wishbone(len, matCarbon, x, y, z, rz) {
   return mesh(cyl(0.013, 0.013, len, 8), matCarbon, x, y, z, 0, 0, rz);
@@ -328,8 +400,6 @@ function rod(ax, ay, az, bx, by, bz, radius, mat) {
 
 const CAR_META = {
   F1: { label: 'Formula One',   color: 0xe8132a },
-  F2: { label: 'Formula Two',   color: 0x1166ff },
-  F3: { label: 'Formula Three', color: 0x00cc66 },
   GT: { label: 'GT Race Car',   color: 0xff8800 },
 };
 
@@ -348,22 +418,6 @@ function buildLivery(grp, color, type) {
     for (const s of [-1, 1])
       grp.add(mesh(rBox(0.20, T, 0.60, 0.003), matS, s * 0.535, 0.442, 0.28));
     grp.add(mesh(rBox(0.12, 0.09, T, 0.004), numMat, -0.33, 0.44, 0.44));
-
-  } else if (type === 'F2') {
-    const matS = makeBodyMat(0xcccccc);
-    const matW = makeBodyMat(0xffffff);
-    grp.add(mesh(rBox(0.06, T, 2.80, 0.003), matS, 0, 0.235, -0.02));
-    grp.add(mesh(rBox(T, 0.30, 0.22, 0.002), matW, -0.875, -0.05, 0));
-
-  } else if (type === 'F3') {
-    const matW = makeBodyMat(0xffffff);
-    const matD = makeBodyMat(0x222222);
-    grp.add(mesh(rBox(T, 0.14, 1.80, 0.003), matW, -0.285, 0.26, -0.08));
-    for (const s of [-1, 1]) {
-      const ch = mesh(rBox(0.09, T, 0.30, 0.003), matD, s * 0.06, 0.165, -1.52);
-      ch.rotation.y = s * 0.35;
-      grp.add(ch);
-    }
 
   } else if (type === 'GT') {
     const matB = makeBodyMat(0x111111);
@@ -433,13 +487,122 @@ export async function buildF1Hybrid({ color }) {
   return grp;
 }
 
+/* ── GT hybrid: monolithic GLB body + procedural wheels ───────────── */
+
+/**
+ * Union the bboxes of meshes whose name matches `includeRe`. The whole-scene
+ * Box3.setFromObject is too noisy on gt.glb — its bbox is dominated by the
+ * rear-wing strut (z extends 1.5m past the bumper) and a node-transformed
+ * hood (y peaks far above the roofline). Filtering to bodyshell-named meshes
+ * gives the true envelope we want for axle placement.
+ *
+ * Returns null when no mesh matches — callers should fall back to the full
+ * scene bbox so degraded GLBs still render.
+ */
+function measureBodyshellBbox(scene, includeRe) {
+  if (!scene || typeof scene.traverse !== 'function') return null;
+  const bbox = new THREE.Box3();
+  bbox.makeEmpty?.();
+  let matched = false;
+  scene.traverse(obj => {
+    if (!obj?.isMesh) return;
+    if (!includeRe.test(obj.name || '')) return;
+    obj.updateMatrixWorld?.(true);
+    const mb = new THREE.Box3().setFromObject(obj);
+    bbox.union(mb);
+    matched = true;
+  });
+  return matched ? bbox : null;
+}
+
+// Name regex for the GT bodyshell envelope. Includes the chassis, chrome
+// trim (bumper edges), front hood, and headlights — every mesh that defines
+// the *outer* car envelope. Excludes rear wing, sideskirts (sometimes wildly
+// extended in node-local frames), and all interior nodes (dash, seat,
+// steering, gauges) that shouldn't influence axle math.
+const GT_BODYSHELL_RE = /body_gt3rs|body_chrome|carbon_hood|headlight_L_led/i;
+
+export async function buildGTHybrid({ color }) {
+  const grp = new THREE.Group();
+  grp.name = 'car';
+
+  const loaded = await loadCarFromManifest(CAR_MANIFEST.gt);
+  if (!loaded) {
+    console.warn('[buildGTHybrid] GLB load failed — using procedural GT');
+    return buildGTProcedural({ color });
+  }
+
+  // Single-source guarantee: gt.glb's wheels are baked into the mega-mesh,
+  // so rendering the GLB without a successful wheel split would show static
+  // wheels (and any procedural overlay would double them). If the loader's
+  // connectivity split (buildWheelsFromMonolith via manifest.wheelBake)
+  // didn't deliver both the corner groups AND the measurement, use the
+  // fully procedural car instead.
+  const gm = loaded.glbMeasure;
+  if (!loaded.wheelsRoot || !gm) {
+    console.warn('[buildGTHybrid] GLB wheel split failed — using procedural GT');
+    return buildGTProcedural({ color });
+  }
+
+  grp.add(loaded.scene);
+  applyLivery(loaded.liveryMeshes, color);
+
+  grp.add(loaded.wheelsRoot);
+  grp.userData.wheels = loaded.wheelsRoot.children.reduce((o, g) => { o[g.name] = g; return o; }, {});
+
+  // Measurement is a passthrough of the loader's tire-island data — scene
+  // clutter (rear-wing strut, transformed hood) cannot perturb placement.
+  const wheelY = gm.groundContactY + gm.wheelRadius;
+  const wPos = {
+    wFL: [-gm.frontAxleX, wheelY, gm.frontAxleZ],
+    wFR: [ gm.frontAxleX, wheelY, gm.frontAxleZ],
+    wRL: [-gm.rearAxleX,  wheelY, gm.rearAxleZ],
+    wRR: [ gm.rearAxleX,  wheelY, gm.rearAxleZ],
+  };
+  const measure = measureFromWheels(wPos, gm.wheelRadius);
+
+  // Anchor merge: bbox-synthesised entries fill every key (frontWing,
+  // diffuser, noseTip, …), then MEASURED GLB anchors (roof, cockpit,
+  // bodyShell, role-tagged vents from manifest.anchorSources) override and
+  // extend them. Airflow/CFD/vents see measured geometry wherever the GLB
+  // can provide it.
+  const bbox = measureBodyshellBbox(loaded.scene, GT_BODYSHELL_RE)
+            || new THREE.Box3().setFromObject(loaded.scene);
+  measure.anchors = { ...synthesiseGTAnchors(bbox), ...(gm.anchors || {}) };
+
+  grp.userData.measure = measure;
+  grp.userData.baseY   = TRACK.SURFACE_Y - measure.groundContactY;
+  grp.position.y       = grp.userData.baseY;
+  return grp;
+}
+
+// gt.glb has no per-feature named meshes, so feature anchors are synthesised
+// from the scene bbox. Keys mirror PROCEDURAL_ANCHORS so airflow, vents, and
+// CFD all see the same anchor contract as F1.
+function synthesiseGTAnchors(bbox) {
+  const cx = (bbox.min.x + bbox.max.x) / 2;
+  const cy = (bbox.min.y + bbox.max.y) / 2;
+  const cz = (bbox.min.z + bbox.max.z) / 2;
+  return {
+    cockpit:    { x: cx, y: cy + 0.10,        z: cz - 0.20 },
+    halo:       { x: cx, y: bbox.max.y - 0.05, z: cz - 0.10 },
+    frontWing:  { x: cx, y: bbox.min.y + 0.10, z: bbox.min.z + 0.05 },
+    rearWing:   { x: cx, y: bbox.max.y - 0.10, z: bbox.max.z - 0.10 },
+    sidepodTop: { x: cx, y: cy,               z: cz },
+    floor:      { x: cx, y: bbox.min.y,       z: cz },
+    diffuser:   { x: cx, y: bbox.min.y,       z: bbox.max.z - 0.20 },
+    noseTip:    { x: cx, y: bbox.min.y + 0.25, z: bbox.min.z },
+  };
+}
+
 export async function buildCar(type) {
   const meta = CAR_META[type] || CAR_META.F1;
   const flag = USE_IMPORTED_MODELS;
   switch (type) {
-    case 'F2': return buildF2Procedural(meta);
-    case 'F3': return buildF3Procedural(meta);
-    case 'GT': return buildGTProcedural(meta);
+    case 'GT':
+      return (flag?.GT === true)
+        ? buildGTHybrid(meta)
+        : buildGTProcedural(meta);
     default:
       return (flag === true || flag?.F1 === true)
         ? buildF1Hybrid(meta)
@@ -489,26 +652,6 @@ const PROCEDURAL_ANCHORS = {
     diffuser:   { x: 0, y:-0.044,z:  1.93 },   // diffuser centre
     noseTip:    { x: 0, y: 0.08, z: -2.72 },   // ogiveNose apex
   },
-  F2: {
-    cockpit:    { x: 0, y: 0.50, z: 0.30 },
-    halo:       { x: 0, y: 0.92, z: 0.42 },
-    frontWing:  { x: 0, y: 0.04, z: -2.36 },
-    rearWing:   { x: 0, y: 0.90, z:  1.80 },
-    sidepodTop: { x: 0, y: 0.42, z:  0.22 },
-    floor:      { x: 0, y: 0.04, z:  0.00 },
-    diffuser:   { x: 0, y:-0.042,z:  1.80 },
-    noseTip:    { x: 0, y: 0.08, z: -2.48 },
-  },
-  F3: {
-    cockpit:    { x: 0, y: 0.46, z: 0.38 },
-    halo:       { x: 0, y: 0.92, z: 0.42 },
-    frontWing:  { x: 0, y: 0.04, z: -2.12 },
-    rearWing:   { x: 0, y: 0.82, z:  1.68 },
-    sidepodTop: { x: 0, y: 0.38, z:  0.24 },
-    floor:      { x: 0, y: 0.036,z:  0.00 },
-    diffuser:   { x: 0, y:-0.038,z:  1.68 },
-    noseTip:    { x: 0, y: 0.08, z: -2.24 },
-  },
   GT: {
     cockpit:    { x: 0, y: 0.60, z: 0.00 },    // roof interior / driver head
     halo:       { x: 0, y: 0.72, z: 0.12 },    // GT uses roof peak as "halo"
@@ -524,7 +667,7 @@ const PROCEDURAL_ANCHORS = {
 /**
  * Vent/duct anchor template — 10 entries mirroring the McLaren GLB manifest.
  * Each entry is synthesised from an existing PROCEDURAL_ANCHORS entry + an
- * offset tuned so the procedural variants (F1 proc / F2 / F3 / GT) read the
+ * offset tuned so the procedural variants (F1 proc / GT) read the
  * same as the GLB on screen. Offsets are authored in car-local space; the
  * reference halfW for offset scaling is the McLaren bodyShell (≈0.81 m
  * half-width), but for procedural cars we use the profile-authored body
@@ -841,372 +984,6 @@ function buildF1Procedural({ color }) {
 }
 
 /* ════════════════════════════════════════════════════════════════
-   F2  —  Dallara F2-2018 style
-   Wheelbase ~2.85 u  |  Track ~1.50 u  |  Wheel radius 0.328 u
-════════════════════════════════════════════════════════════════ */
-function buildF2Procedural({ color }) {
-  const grp = new THREE.Group();
-  grp.name = 'car';
-
-  const matBody   = makeBodyMat(color);
-  const matCarbon = makeCarbonMat(0x101010, 0.45, 0.58);
-  const matTyre   = makeMat(0x0d0d0d, 0.92, 0.04);
-  const matHub    = makeMat(0xd8d8d8, 0.10, 1.00);
-  const matCockpit= makeMat(0x050505, 0.05, 0.20, 0x001122, 0.45);
-  const matHalo   = makeMat(0xcccccc, 0.08, 1.00);
-  const matHelmet = makeBodyMat(0xeeeeee);
-
-  /* ── FLOOR ────────────────────────────────────────────────── */
-  grp.add(mesh(box(1.28, 0.060, 3.70), matCarbon, 0, 0.04, 0.00));
-  for (const s of [-1, 1]) {
-    grp.add(mesh(box(0.024, 0.085, 3.30), matCarbon, s * 0.63, 0.07, 0.10));
-  }
-
-  /* ── MONOCOQUE — 4 rounded-edge layers ───────────────────── */
-  grp.add(mesh(rBox(0.76, 0.11, 3.30, 0.040), matBody, 0, 0.12, 0.05));
-  grp.add(mesh(ovalPod(0.62, 0.22, 2.65), matBody, 0, 0.28, -0.06));
-  grp.add(mesh(ovalPod(0.48, 0.17, 1.70), matBody, 0, 0.44, -0.10));
-  // Layer 4: shoulder-level sill
-  grp.add(mesh(rBox(0.36, 0.10, 1.16, 0.108), matBody, 0, 0.54, -0.07));
-
-  /* ── SIDEPODS — 2022+ sharp-sidepod geometry (F2 ~85% scale) ─ */
-  for (const s of [-1, 1]) {
-    // Main pod volume — smooth tapering oval barrel
-    grp.add(mesh(ovalSweep(0.30, 0.28, 0.18, 0.15, 1.60), matBody, s * 0.465, 0.19, 0.26));
-    // Undercut angled panel
-    const ucPanel = mesh(box(0.11, 0.15, 1.48), matCarbon, s * 0.520, 0.085, 0.28);
-    ucPanel.rotation.z = s * 0.35;
-    grp.add(ucPanel);
-    // Inlet mouth — sharp rectangular
-    grp.add(mesh(rBox(0.055, 0.272, 0.051, 0.008), matCockpit, s * 0.449, 0.19, -0.55));
-    // Carbon fibre inlet surround lip
-    grp.add(mesh(rBox(0.068, 0.289, 0.014, 0.005), matCarbon, s * 0.449, 0.19, -0.55));
-    // Central divider vane
-    grp.add(mesh(box(0.009, 0.255, 0.041), matCarbon, s * 0.449, 0.19, -0.55));
-    // Leading edge wedge
-    const ledge = mesh(rBox(0.015, 0.289, 0.085, 0.006), matCarbon, s * 0.416, 0.19, -0.57);
-    ledge.rotation.y = s * 0.12;
-    grp.add(ledge);
-    // Louver mounting rail
-    grp.add(mesh(box(0.204, 0.010, 0.391), matCarbon, s * 0.416, 0.365, 0.58));
-    // Heat exchanger exit louvers — 5 slats
-    for (let li = 0; li < 5; li++) {
-      const louver = mesh(box(0.187, 0.024, 0.306), matCarbon, s * 0.416, 0.357 - li * 0.010, 0.595 + li * 0.221);
-      louver.rotation.x = -0.15;
-      grp.add(louver);
-    }
-    // Top winglet fin
-    const finGeo = wingGeo(0.153, 0.102, 0.015);
-    const fin = mesh(finGeo, matCarbon, s * 0.451, 0.391, 0.187);
-    fin.rotation.y = s * 0.22;
-    grp.add(fin);
-    // Bargeboard (3 vanes — F2 spec)
-    for (let bi = 0; bi < 3; bi++) {
-      const v = mesh(box(0.020, 0.19, 0.14), matCarbon, s * (0.36 + bi * 0.06), 0.07, -0.60 + bi * 0.04);
-      v.rotation.y = s * (0.10 + bi * 0.06);
-      grp.add(v);
-    }
-  }
-
-  /* ── ENGINE COVER — single tapering oval spine ─────────────── */
-  grp.add(mesh(ovalSweep(0.48, 0.27, 0.26, 0.14, 1.44), matBody, 0, 0.34, 1.44));
-  // Intake
-  grp.add(mesh(box(0.14, 0.28, 0.18), matCarbon, 0, 0.54, 0.90));
-  grp.add(mesh(cone(0.070, 0.18, 12), matCarbon, 0, 0.68, 0.80, -Math.PI / 2, 0, 0));
-
-  /* ── NOSE — sculpted transitions + oval tip ───────────────── */
-  grp.add(mesh(rBox(0.46, 0.17, 0.80, 0.06), matBody, 0, 0.15, -1.64));
-  grp.add(mesh(rBox(0.30, 0.14, 0.80, 0.05), matBody, 0, 0.11, -2.06));
-  grp.add(mesh(ogiveNose(0.28, 0.12, 0.47), matBody, 0, 0.09, -2.44));
-
-  /* ── COCKPIT ──────────────────────────────────────────────── */
-  grp.add(mesh(rBox(0.52, 0.35, 1.12, 0.06), matCockpit, 0, 0.42, 0.42));
-  grp.add(mesh(rBox(0.62, 0.044, 1.14, 0.015), matCarbon, 0, 0.60, 0.42));
-  grp.add(mesh(box(0.20, 0.12, 0.20), makeMat(0x1155cc, 0.65, 0.05), 0, 0.50, 0.72));
-
-  /* ── DRIVER HELMET ────────────────────────────────────────── */
-  grp.add(mesh(sph(0.155, 20, 16), matHelmet, 0, 0.67, 0.24));
-  grp.add(mesh(new THREE.SphereGeometry(0.158, 20, 16, 0.6, 2.0, 0.5, 1.2),
-    new THREE.MeshPhysicalMaterial({ color: 0x334455, transmission: 0.5, roughness: 0.04, metalness: 0.1, transparent: true, opacity: 0.78, depthWrite: false }),
-    0, 0.67, 0.24));
-
-  /* ── HALO — smooth CatmullRom arch (TubeGeometry) ─────────── */
-  const haloCurve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3( 0, 0.40, 0.10),
-    new THREE.Vector3( 0, 0.94, 0.10),
-    new THREE.Vector3( 0, 1.00, 0.28),
-    new THREE.Vector3( 0, 1.00, 0.46),
-    new THREE.Vector3( 0, 1.00, 0.64),
-    new THREE.Vector3( 0, 0.94, 0.82),
-    new THREE.Vector3( 0, 0.40, 0.82),
-  ]);
-  grp.add(mesh(new THREE.TubeGeometry(haloCurve, 38, 0.030, 12, false), matHalo));
-  for (const s of [-1, 1]) {
-    grp.add(mesh(cyl(0.020, 0.020, 0.44, 10), matHalo, s * 0.24, 0.60, 0.46, 0, 0, s * 0.58));
-  }
-  // Central forward keel
-  grp.add(rod(0, 0.40, 0.10,  0, 0.34, -0.25,  0.022, matHalo));
-
-  /* ── MIRRORS ─────────────────────────────────────────────── */
-  for (const s of [-1, 1]) {
-    grp.add(mesh(rBox(0.020, 0.058, 0.06, 0.006), matCarbon, s * 0.32, 0.66, -0.30));
-    grp.add(mesh(rBox(0.025, 0.064, 0.18, 0.006), matBody, s * 0.35, 0.66, -0.28));
-  }
-
-  /* ── FRONT WING — 3-element airfoil ──────────────────────── */
-  grp.add(mesh(wingGeo(1.60, 0.28, 0.065), matBody, 0, 0.022, -2.48));
-  grp.add(mesh(wingGeo(1.44, 0.20, 0.050), matBody, 0, 0.072, -2.40));
-  grp.add(mesh(wingGeo(1.20, 0.15, 0.040), matBody, 0, 0.114, -2.34));
-  for (const s of [-1, 1]) {
-    grp.add(mesh(box(0.038, 0.136, 0.30), matCarbon, s * 0.80, 0.036, -2.48));
-    const can = mesh(box(0.20, 0.020, 0.18), matBody, s * 0.66, 0.036, -2.44);
-    can.rotation.y = s * 0.22;
-    grp.add(can);
-    for (let fi = 0; fi < 3; fi++) {
-      grp.add(mesh(box(0.020, 0.090, 0.26), matCarbon, s * (0.26 + fi * 0.16), 0.050, -2.46));
-    }
-  }
-  for (const s of [-1, 1]) {
-    grp.add(mesh(cyl(0.016, 0.018, 0.20, 8), matCarbon, s * 0.20, -0.076, -2.40));
-  }
-
-  /* ── REAR WING ────────────────────────────────────────────── */
-  const rearWingGrp = new THREE.Group();
-  rearWingGrp.position.set(0, 0.90, 1.80);
-  rearWingGrp.add(mesh(wingGeo(1.74, 0.30, 0.090), matBody, 0, 0, 0));
-  rearWingGrp.add(mesh(wingGeo(1.74, 0.22, 0.070), matBody, 0, -0.10, -0.06));
-  for (const s of [-1, 1]) {
-    rearWingGrp.add(mesh(box(0.038, 0.48, 0.34), matCarbon, s * 0.87, -0.20, 0));
-  }
-  rearWingGrp.add(mesh(cyl(0.034, 0.050, 0.64, 10), matCarbon, 0, -0.30, 0));
-  rearWingGrp.add(mesh(wingGeo(0.82, 0.20, 0.055), matCarbon, 0, -0.38, -0.06));
-  grp.add(rearWingGrp);
-
-  /* ── DIFFUSER ─────────────────────────────────────────────── */
-  const diff = mesh(box(1.00, 0.054, 0.88), matCarbon, 0, -0.042, 1.80);
-  diff.rotation.x = -0.24;
-  grp.add(diff);
-  for (let di = -1; di <= 1; di++) {
-    grp.add(mesh(box(0.018, 0.066, 0.78), matCarbon, di * 0.28, -0.034, 1.78));
-  }
-
-  /* ── EXHAUST ──────────────────────────────────────────────── */
-  grp.add(mesh(cyl(0.036, 0.040, 0.16, 12), matCarbon, 0.10, 0.22, 2.00));
-
-  /* ── SUSPENSION ───────────────────────────────────────────── */
-  {
-    const fz = -1.38, rz = 1.48;
-    for (const s of [-1, 1]) {
-      // Front corner
-      grp.add(rod(s*0.62, -0.10, fz,  s*0.62,  0.22, fz,  0.018, matCarbon)); // upright
-      grp.add(rod(s*0.62,  0.20, fz,  s*0.30,  0.26, fz-0.18,  0.013, matCarbon)); // upper front arm
-      grp.add(rod(s*0.62,  0.20, fz,  s*0.30,  0.26, fz+0.18,  0.013, matCarbon)); // upper rear arm
-      grp.add(rod(s*0.62, -0.10, fz,  s*0.28,  0.00, fz-0.20,  0.013, matCarbon)); // lower front arm
-      grp.add(rod(s*0.62, -0.10, fz,  s*0.28,  0.00, fz+0.20,  0.013, matCarbon)); // lower rear arm
-      grp.add(rod(s*0.60,  0.00, fz,  s*0.22,  0.30, fz,        0.008, matCarbon)); // push rod
-      grp.add(rod(s*0.62, -0.10, fz,  s*0.13, -0.06, fz+0.02,  0.008, matCarbon)); // track rod
-      // Rear corner
-      grp.add(rod(s*0.60, -0.10, rz,  s*0.60,  0.22, rz,  0.018, matCarbon)); // upright
-      grp.add(rod(s*0.60,  0.20, rz,  s*0.26,  0.24, rz-0.18,  0.013, matCarbon)); // upper front arm
-      grp.add(rod(s*0.60,  0.20, rz,  s*0.26,  0.24, rz+0.18,  0.013, matCarbon)); // upper rear arm
-      grp.add(rod(s*0.60, -0.10, rz,  s*0.24,  0.00, rz-0.20,  0.013, matCarbon)); // lower front arm
-      grp.add(rod(s*0.60, -0.10, rz,  s*0.24,  0.00, rz+0.20,  0.013, matCarbon)); // lower rear arm
-      grp.add(rod(s*0.58,  0.00, rz,  s*0.20,  0.28, rz,        0.008, matCarbon)); // pull rod
-      grp.add(rod(s*0.60, -0.10, rz,  s*0.11, -0.06, rz+0.02,  0.008, matCarbon)); // toe link
-    }
-    // Anti-roll bars
-    grp.add(mesh(cyl(0.010, 0.010, 1.24, 8), matCarbon, 0, 0.14, fz, 0, 0, Math.PI / 2));
-    grp.add(mesh(cyl(0.010, 0.010, 1.20, 8), matCarbon, 0, 0.14, rz, 0, 0, Math.PI / 2));
-  }
-
-  /* ── WHEELS ───────────────────────────────────────────────── */
-  const wR = 0.328, wW = 0.318;
-  const wPos = {
-    wFL: [-0.76, -0.04, -1.38],
-    wFR: [ 0.76, -0.04, -1.38],
-    wRL: [-0.74, -0.04,  1.48],
-    wRR: [ 0.74, -0.04,  1.48],
-  };
-  Object.entries(wPos).forEach(([n, [x, y, z]]) => {
-    const w = wheel(wR, wW, matHub, matTyre, n);
-    w.name = n; w.position.set(x, y, z); grp.add(w);
-  });
-
-  buildLivery(grp, color, 'F2');
-  const measure = measureFromWheels(wPos, wR);
-  measure.anchors = proceduralAnchors('F2');
-  grp.userData.measure = measure;
-  grp.userData.baseY   = TRACK.SURFACE_Y - measure.groundContactY;
-  grp.position.y       = grp.userData.baseY;
-  return grp;
-}
-
-/* ════════════════════════════════════════════════════════════════
-   F3  —  Dallara F3-2019 style
-   Wheelbase ~2.60 u  |  Track ~1.36 u  |  Wheel radius 0.300 u
-════════════════════════════════════════════════════════════════ */
-function buildF3Procedural({ color }) {
-  const grp = new THREE.Group();
-  grp.name = 'car';
-
-  const matBody   = makeBodyMat(color);
-  const matCarbon = makeCarbonMat(0x141414, 0.52, 0.52);
-  const matTyre   = makeMat(0x0d0d0d, 0.92, 0.04);
-  const matHub    = makeMat(0xcccccc, 0.12, 0.95);
-  const matCockpit= makeMat(0x050505, 0.05, 0.20, 0x000d1a, 0.40);
-  const matHalo   = makeMat(0xcccccc, 0.10, 0.95);
-  const matHelmet = makeBodyMat(0xffd700);
-
-  /* ── FLOOR ────────────────────────────────────────────────── */
-  grp.add(mesh(box(1.14, 0.055, 3.35), matCarbon, 0, 0.036, 0.00));
-  for (const s of [-1, 1]) {
-    grp.add(mesh(box(0.020, 0.070, 2.90), matCarbon, s * 0.56, 0.060, 0.10));
-  }
-
-  /* ── MONOCOQUE — 4 rounded-edge layers ───────────────────── */
-  grp.add(mesh(rBox(0.70, 0.10, 2.95, 0.040), matBody, 0, 0.11, 0.04));
-  grp.add(mesh(ovalPod(0.56, 0.20, 2.35), matBody, 0, 0.26, -0.08));
-  grp.add(mesh(ovalPod(0.44, 0.15, 1.52), matBody, 0, 0.40, -0.10));
-  // Layer 4: shoulder taper
-  grp.add(mesh(rBox(0.33, 0.09, 1.06, 0.096), matBody, 0, 0.49, -0.08));
-
-  /* ── SIDEPODS ─────────────────────────────────────────────── */
-  for (const s of [-1, 1]) {
-    // Main pod volume — smooth tapering oval barrel
-    grp.add(mesh(ovalSweep(0.26, 0.25, 0.16, 0.14, 1.28), matBody, s * 0.450, 0.18, 0.24));
-    grp.add(mesh(box(0.09, 0.14, 1.18), matCarbon, s * 0.498, 0.10, 0.28));
-    grp.add(mesh(box(0.044, 0.22, 0.044), matCockpit, s * 0.440, 0.18, -0.50));
-  }
-
-  /* ── ENGINE COVER — single tapering oval spine ─────────────── */
-  grp.add(mesh(ovalSweep(0.42, 0.22, 0.24, 0.13, 1.24), matBody, 0, 0.30, 1.38));
-  grp.add(mesh(box(0.12, 0.24, 0.15), matCarbon, 0, 0.46, 0.84));
-  grp.add(mesh(cone(0.060, 0.15, 12), matCarbon, 0, 0.58, 0.76, -Math.PI / 2, 0, 0));
-
-  /* ── NOSE — sculpted transitions + oval tip ───────────────── */
-  grp.add(mesh(rBox(0.42, 0.15, 0.72, 0.05), matBody, 0, 0.13, -1.52));
-  grp.add(mesh(rBox(0.27, 0.12, 0.72, 0.04), matBody, 0, 0.10, -1.90));
-  grp.add(mesh(ogiveNose(0.24, 0.11, 0.43), matBody, 0, 0.08, -2.22));
-
-  /* ── COCKPIT ──────────────────────────────────────────────── */
-  grp.add(mesh(rBox(0.48, 0.30, 1.02, 0.06), matCockpit, 0, 0.38, 0.38));
-  grp.add(mesh(rBox(0.56, 0.040, 1.04, 0.015), matCarbon, 0, 0.55, 0.38));
-  grp.add(mesh(box(0.18, 0.10, 0.18), makeMat(0x003399, 0.65, 0.05), 0, 0.46, 0.66));
-
-  /* ── DRIVER HELMET ────────────────────────────────────────── */
-  grp.add(mesh(sph(0.145, 18, 14), matHelmet, 0, 0.61, 0.22));
-  grp.add(mesh(new THREE.SphereGeometry(0.148, 18, 14, 0.6, 2.0, 0.5, 1.2),
-    new THREE.MeshPhysicalMaterial({ color: 0x445522, transmission: 0.5, roughness: 0.04, metalness: 0.1, transparent: true, opacity: 0.75, depthWrite: false }),
-    0, 0.61, 0.22));
-
-  /* ── HALO — smooth CatmullRom arch (TubeGeometry) ─────────── */
-  const haloCurve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3( 0, 0.37, 0.08),
-    new THREE.Vector3( 0, 0.86, 0.08),
-    new THREE.Vector3( 0, 0.92, 0.24),
-    new THREE.Vector3( 0, 0.92, 0.42),
-    new THREE.Vector3( 0, 0.92, 0.60),
-    new THREE.Vector3( 0, 0.86, 0.76),
-    new THREE.Vector3( 0, 0.37, 0.76),
-  ]);
-  grp.add(mesh(new THREE.TubeGeometry(haloCurve, 36, 0.028, 12, false), matHalo));
-  for (const s of [-1, 1]) {
-    grp.add(mesh(cyl(0.018, 0.018, 0.38, 10), matHalo, s * 0.22, 0.54, 0.42, 0, 0, s * 0.56));
-  }
-  // Central forward keel
-  grp.add(rod(0, 0.37, 0.08,  0, 0.30, -0.22,  0.020, matHalo));
-
-  /* ── MIRRORS ─────────────────────────────────────────────── */
-  for (const s of [-1, 1]) {
-    grp.add(mesh(rBox(0.018, 0.052, 0.055, 0.006), matCarbon, s * 0.28, 0.60, -0.26));
-    grp.add(mesh(rBox(0.022, 0.058, 0.15, 0.006), matBody, s * 0.30, 0.60, -0.24));
-  }
-
-  /* ── FRONT WING — 2-element airfoil + small flap ─────────── */
-  grp.add(mesh(wingGeo(1.46, 0.24, 0.055), matBody, 0, 0.020, -2.24));
-  grp.add(mesh(wingGeo(1.30, 0.17, 0.042), matBody, 0, 0.068, -2.17));
-  grp.add(mesh(wingGeo(0.80, 0.12, 0.034), matBody, 0, 0.102, -2.12));
-  for (const s of [-1, 1]) {
-    grp.add(mesh(box(0.034, 0.110, 0.26), matCarbon, s * 0.73, 0.030, -2.24));
-    for (let fi = 0; fi < 2; fi++) {
-      grp.add(mesh(box(0.018, 0.078, 0.22), matCarbon, s * (0.24 + fi * 0.18), 0.044, -2.22));
-    }
-  }
-  for (const s of [-1, 1]) {
-    grp.add(mesh(cyl(0.014, 0.016, 0.17, 8), matCarbon, s * 0.18, -0.066, -2.17));
-  }
-
-  /* ── REAR WING ────────────────────────────────────────────── */
-  const rearWingGrp = new THREE.Group();
-  rearWingGrp.position.set(0, 0.82, 1.68);
-  rearWingGrp.add(mesh(wingGeo(1.56, 0.26, 0.080), matBody, 0, 0, 0));
-  rearWingGrp.add(mesh(wingGeo(1.56, 0.18, 0.062), matBody, 0, -0.09, -0.05));
-  for (const s of [-1, 1]) {
-    rearWingGrp.add(mesh(box(0.034, 0.42, 0.28), matCarbon, s * 0.78, -0.18, 0));
-  }
-  rearWingGrp.add(mesh(cyl(0.032, 0.046, 0.56, 10), matCarbon, 0, -0.28, 0));
-  grp.add(rearWingGrp);
-
-  /* ── DIFFUSER ─────────────────────────────────────────────── */
-  const diff = mesh(box(0.88, 0.048, 0.76), matCarbon, 0, -0.038, 1.68);
-  diff.rotation.x = -0.22;
-  grp.add(diff);
-  for (let di = -1; di <= 1; di++) {
-    grp.add(mesh(box(0.016, 0.058, 0.68), matCarbon, di * 0.24, -0.030, 1.66));
-  }
-
-  /* ── EXHAUST ──────────────────────────────────────────────── */
-  grp.add(mesh(cyl(0.032, 0.036, 0.14, 12), matCarbon, 0.09, 0.20, 1.90));
-
-  /* ── SUSPENSION ───────────────────────────────────────────── */
-  {
-    const fz = -1.25, rz = 1.35;
-    for (const s of [-1, 1]) {
-      // Front corner
-      grp.add(rod(s*0.54, -0.10, fz,  s*0.54,  0.22, fz,  0.018, matCarbon)); // upright
-      grp.add(rod(s*0.54,  0.20, fz,  s*0.28,  0.26, fz-0.18,  0.013, matCarbon)); // upper front arm
-      grp.add(rod(s*0.54,  0.20, fz,  s*0.28,  0.26, fz+0.18,  0.013, matCarbon)); // upper rear arm
-      grp.add(rod(s*0.54, -0.10, fz,  s*0.26,  0.00, fz-0.20,  0.013, matCarbon)); // lower front arm
-      grp.add(rod(s*0.54, -0.10, fz,  s*0.26,  0.00, fz+0.20,  0.013, matCarbon)); // lower rear arm
-      grp.add(rod(s*0.52,  0.00, fz,  s*0.20,  0.30, fz,        0.008, matCarbon)); // push rod
-      grp.add(rod(s*0.54, -0.10, fz,  s*0.12, -0.06, fz+0.02,  0.008, matCarbon)); // track rod
-      // Rear corner
-      grp.add(rod(s*0.52, -0.10, rz,  s*0.52,  0.22, rz,  0.018, matCarbon)); // upright
-      grp.add(rod(s*0.52,  0.20, rz,  s*0.24,  0.24, rz-0.18,  0.013, matCarbon)); // upper front arm
-      grp.add(rod(s*0.52,  0.20, rz,  s*0.24,  0.24, rz+0.18,  0.013, matCarbon)); // upper rear arm
-      grp.add(rod(s*0.52, -0.10, rz,  s*0.22,  0.00, rz-0.20,  0.013, matCarbon)); // lower front arm
-      grp.add(rod(s*0.52, -0.10, rz,  s*0.22,  0.00, rz+0.20,  0.013, matCarbon)); // lower rear arm
-      grp.add(rod(s*0.50,  0.00, rz,  s*0.18,  0.28, rz,        0.008, matCarbon)); // pull rod
-      grp.add(rod(s*0.52, -0.10, rz,  s*0.10, -0.06, rz+0.02,  0.008, matCarbon)); // toe link
-    }
-    // Anti-roll bars
-    grp.add(mesh(cyl(0.009, 0.009, 1.14, 8), matCarbon, 0, 0.14, fz, 0, 0, Math.PI / 2));
-    grp.add(mesh(cyl(0.009, 0.009, 1.10, 8), matCarbon, 0, 0.14, rz, 0, 0, Math.PI / 2));
-  }
-
-  /* ── WHEELS ───────────────────────────────────────────────── */
-  const wR = 0.300, wW = 0.290;
-  const wPos = {
-    wFL: [-0.68, -0.04, -1.25],
-    wFR: [ 0.68, -0.04, -1.25],
-    wRL: [-0.66, -0.04,  1.35],
-    wRR: [ 0.66, -0.04,  1.35],
-  };
-  Object.entries(wPos).forEach(([n, [x, y, z]]) => {
-    const w = wheel(wR, wW, matHub, matTyre, n);
-    w.name = n; w.position.set(x, y, z); grp.add(w);
-  });
-
-  buildLivery(grp, color, 'F3');
-  const measure = measureFromWheels(wPos, wR);
-  measure.anchors = proceduralAnchors('F3');
-  grp.userData.measure = measure;
-  grp.userData.baseY   = TRACK.SURFACE_Y - measure.groundContactY;
-  grp.position.y       = grp.userData.baseY;
-  return grp;
-}
-
-/* ════════════════════════════════════════════════════════════════
    GT  —  GT3 closed-cockpit sports car (Ferrari 296 / Porsche 992 GT3 R style)
    Wheelbase ~2.80 u  |  Track ~1.70 u  |  Wheel radius 0.338 u
 
@@ -1396,7 +1173,7 @@ function buildGTProcedural({ color }) {
     grp.add(mesh(box(0.026, 0.105, 0.22), matChrome, s * 0.90, 0.58, -0.50));
   }
 
-  /* ── WHEELS ───────────────────────────────────────────────── */
+  /* ── WHEELS — road-car gtWheel (10-spoke alloy, yellow PCCB caliper) ── */
   const wR = 0.338, wW = 0.260;
   const wPos = {
     wFL: [-0.86, -0.05, -1.38],
@@ -1405,7 +1182,7 @@ function buildGTProcedural({ color }) {
     wRR: [ 0.86, -0.05,  1.42],
   };
   Object.entries(wPos).forEach(([n, [x, y, z]]) => {
-    const w = wheel(wR, wW, matHub, matTyre, n);
+    const w = gtWheel(wR, wW, matHub, matTyre, n);
     w.name = n; w.position.set(x, y, z); grp.add(w);
   });
 

@@ -154,4 +154,31 @@ describe('sliceGeometryByPredicate', () => {
     // Source vertex count unchanged.
     expect(g.attributes.position.count).toBe(3);
   });
+
+  it('GS9. predicate receives the vertex index as 4th argument', () => {
+    // Two triangles on identical coordinates — only the vertex index can
+    // distinguish them. An index-mask predicate must keep exactly tri 2.
+    const g = makeGeo({
+      positions: [
+        0, 0, 0,  1, 0, 0,  0, 1, 0,   // verts 0..2 (tri 1)
+        0, 0, 0,  1, 0, 0,  0, 1, 0,   // verts 3..5 (tri 2, same coords)
+      ],
+      indices: [0, 1, 2,  3, 4, 5],
+    });
+    const out = sliceGeometryByPredicate(g, (_x, _y, _z, v) => v >= 3);
+    expect(out.index.count).toBe(3);
+    expect(out.attributes.position.count).toBe(3);
+  });
+
+  it('GS10. 3-arg predicates keep working unchanged (regression)', () => {
+    const g = makeGeo({
+      positions: [
+        -1, 0, 0,   1, 0, 0,   2, 0, 0,   3, 0, 0,
+      ],
+      indices: [0, 1, 2,  1, 2, 3],   // tri0 straddles; tri1 all x>0
+    });
+    const out = sliceGeometryByPredicate(g, (x) => x > 0);
+    expect(out.index.count).toBe(3);
+    expect(out.attributes.position.count).toBe(3);
+  });
 });

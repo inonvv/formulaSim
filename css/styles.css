@@ -183,7 +183,6 @@ body {
 }
 .chip-airflow  { border-color: #5599ff; color: #88bbff; background: rgba(85,153,255,0.12); }
 .chip-rain     { border-color: #44aaff; color: #aaddff; background: rgba(68,170,255,0.12); }
-.chip-optimal  { border-color: #ffd700; color: #ffe866; background: rgba(255,215,0,0.10); }
 .chip-cfd      { border-color: #ff4400; color: #ff8855; background: rgba(255,68,0,0.10); }
 
 @keyframes chipIn {
@@ -369,13 +368,6 @@ body {
   border-color: #44aaff;
   color: #bbddff;
   box-shadow: 0 0 14px rgba(68,170,255,0.2);
-}
-
-.env-btn.active[data-env="optimal"] {
-  background: rgba(255,215,0,0.12);
-  border-color: #ffd700;
-  color: #ffe866;
-  box-shadow: 0 0 14px rgba(255,215,0,0.2);
 }
 
 .env-icon { font-size: 1rem; }

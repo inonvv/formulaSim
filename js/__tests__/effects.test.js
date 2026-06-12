@@ -234,26 +234,16 @@ describe('RainEffect', () => {
   it('setCarType falls back to RAIN_POS when measure lacks axles', async () => {
     const { RainEffect } = await import('../effects.js');
     const rain = new RainEffect(makeScene());
-    rain.setCarType('F2', {});     // measure without rearAxleZ
-    // F2 authored: sprayZ = 1.38
-    expect(rain._rainPos.sprayZ).toBeCloseTo(1.38, 5);
+    rain.setCarType('GT', {});     // measure without rearAxleZ
+    // GT authored: sprayZ = 1.55
+    expect(rain._rainPos.sprayZ).toBeCloseTo(1.55, 5);
   });
 });
 
-describe('OptimalWeatherEffect', () => {
-  it('setCarType repositions heat haze to rearAxleZ + 0.5', async () => {
-    const { OptimalWeatherEffect } = await import('../effects.js');
-    const opt = new OptimalWeatherEffect(makeScene(), {});
-    opt.setCarType('F1', { rearAxleZ: 2.10 });
-    expect(opt.hazeBlob.position.z).toBeCloseTo(2.60, 5);
-  });
-
-  it('setCarType leaves haze untouched when measure has no axles', async () => {
-    const { OptimalWeatherEffect } = await import('../effects.js');
-    const opt = new OptimalWeatherEffect(makeScene(), {});
-    const zBefore = opt.hazeBlob.position.z;
-    opt.setCarType('F1', {});
-    expect(opt.hazeBlob.position.z).toBe(zBefore);
+describe('OptimalWeatherEffect (removed)', () => {
+  it('is no longer exported from effects.js', async () => {
+    const mod = await import('../effects.js');
+    expect(mod.OptimalWeatherEffect).toBeUndefined();
   });
 });
 
@@ -277,7 +267,7 @@ describe('AirflowEffect', () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
     airflow.setBaseY(0.42);
-    airflow.setCarType('F2');
+    airflow.setCarType('GT');
     expect(airflow.group.position.y).toBeCloseTo(0.42, 6);
   });
 
@@ -285,8 +275,35 @@ describe('AirflowEffect', () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
     const measure = { anchors: { halo: { x: 0, y: 0.373, z: -0.05 } } };
-    airflow.setCarType('F2', measure);
+    airflow.setCarType('GT', measure);
     expect(airflow._measure).toBe(measure);
+  });
+
+  it('AD1. flow-plane dims derive from MEASURED geometry when anchors carry it', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('GT', {
+      anchors: {
+        bodyShell: { x: 0, y: 0.66, z: 0.03,
+                     bbox: { minX: -1.01, maxX: 1.01, minY: 0.10, maxY: 1.32, minZ: -2.13, maxZ: 2.19 } },
+        frontWing: { x: 0, y: 0.0, z: -2.12 },
+        rearWing:  { x: 0, y: 0.84, z: 2.09 },
+        halo:      { x: 0, y: 1.29, z: 0.10 },
+        floor:     { x: 0, y: 0.10, z: 0.03 },
+      },
+    });
+    expect(airflow._halfW).toBeCloseTo(1.01, 3);            // measured body half-width
+    expect(airflow._halfL).toBeCloseTo(2.12, 3);            // max |wing z|
+    expect(airflow._halfH).toBeCloseTo(1.29 / 1.93, 3);     // halo height / standard ratio
+  });
+
+  it('AD2. without measure, profile dims are used (GT authored 1.05/2.40/0.65)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('GT');
+    expect(airflow._halfW).toBeCloseTo(1.05, 3);
+    expect(airflow._halfL).toBeCloseTo(2.40, 3);
+    expect(airflow._halfH).toBeCloseTo(0.65, 3);
   });
 
   it('ribbon model: every seed is group "ribbon" (no anchor-clustered groups)', async () => {
@@ -408,24 +425,14 @@ describe('AirflowEffect — vortexDefs role tagging', () => {
       .toBe(true);
   });
 
-  it('F2 vortexDefs tag roles frontWing / rearWing (no floor)', async () => {
+  it('removed car types fall back to the F1 aero profile', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
-    airflow.setCarType('F2');
+    airflow.setCarType('F2');   // removed — getProfile falls back to F1
     const defs = airflow._profile.vortexDefs;
     expect(defs.filter(d => d.role === 'frontWing').length).toBe(2);
     expect(defs.filter(d => d.role === 'rearWing').length).toBe(2);
-    expect(defs.filter(d => d.role === 'floor').length).toBe(0);
-    expect(defs.every(d => d.role)).toBe(true);
-  });
-
-  it('F3 vortexDefs tagged rearWing', async () => {
-    const { AirflowEffect } = await import('../effects.js');
-    const airflow = new AirflowEffect(makeScene());
-    airflow.setCarType('F3');
-    const defs = airflow._profile.vortexDefs;
-    expect(defs.length).toBe(2);
-    expect(defs.every(d => d.role === 'rearWing')).toBe(true);
+    expect(defs.filter(d => d.role === 'floor').length).toBe(2);
   });
 
   it('GT vortexDefs tagged rearWing', async () => {
@@ -478,16 +485,15 @@ describe('AirflowEffect — vortex wz resolved from measure anchors', () => {
     for (const d of authoredRw) expect(d.wz).toBeCloseTo( 1.85, 5);
   });
 
-  it('F2 without measure: authored wz preserved', async () => {
+  it('GT without measure: authored wz preserved', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
-    airflow.setCarType('F2');
+    airflow.setCarType('GT');
     const defs = airflow._vortexDefs;
-    const fw = defs.filter(d => d.role === 'frontWing');
     const rw = defs.filter(d => d.role === 'rearWing');
-    // Authored F2: frontWing wz = -2.36, rearWing wz = 1.70.
-    for (const d of fw) expect(d.wz).toBeCloseTo(-2.36, 5);
-    for (const d of rw) expect(d.wz).toBeCloseTo( 1.70, 5);
+    // Authored GT: rearWing wz = 1.80 (upper pair) / 1.60 (lower pair).
+    expect(rw.length).toBe(4);
+    for (const d of rw) expect([1.80, 1.60]).toContain(+d.wz.toFixed(2));
   });
 
   it('measure without frontWing/rearWing anchors: authored wz preserved', async () => {
@@ -561,6 +567,24 @@ describe('AirflowEffect — Phase C modifiers from role-tagged anchors', () => {
     const mods = airflow.getModifiers();
     expect(mods).toBe(airflow._modifiers);
     expect(mods.length).toBeGreaterThan(0);
+  });
+
+  it('GT vent anchors (992 layout) produce sinks/sources', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('GT', {
+      anchors: {
+        frontIntake:  { x: 0,     y: 0.30, z: -2.10, role: 'inlet'  },
+        engineIntake: { x: 0,     y: 1.05, z:  1.55, role: 'inlet'  },
+        exhaustPipe:  { x: 0,     y: 0.20, z:  2.18, role: 'outlet' },
+        fenderVentL:  { x: -0.78, y: 0.55, z: -1.10, role: 'outlet' },
+        fenderVentR:  { x:  0.78, y: 0.55, z: -1.10, role: 'outlet' },
+      },
+    });
+    const sinks   = airflow._modifiers.filter(m => m.type === 'sink');
+    const sources = airflow._modifiers.filter(m => m.type === 'source');
+    expect(sinks.length).toBe(2);     // frontIntake + engineIntake
+    expect(sources.length).toBe(3);   // exhaustPipe + both fender vents
   });
 
   it('modifier (xi, eta) coordinates divide anchor (x, z) by (halfW, halfL)', async () => {

@@ -306,16 +306,6 @@ describe('alignment — rain spray Z tolerance (±0.10 m)', () => {
   });
 });
 
-describe('alignment — heat haze Z tolerance (±0.10 m of rearAxleZ + 0.5)', () => {
-  it('heat haze Z = rearAxleZ + 0.5 m within 0.10 m', async () => {
-    const { OptimalWeatherEffect } = await import('../effects.js');
-    const opt = new OptimalWeatherEffect(makeScene(), {});
-    opt.setCarType('F1', MCLAREN_MEASURE);
-    const expected = MCLAREN_MEASURE.rearAxleZ + 0.5;
-    expect(Math.abs(opt.hazeBlob.position.z - expected)).toBeLessThanOrEqual(0.10);
-  });
-});
-
 describe('alignment — McLaren vortex cores anchor to wings (±0.05 m)', () => {
   it('front-wing vortex pair wz tracks MCLAREN_MEASURE.anchors.frontWing.z', async () => {
     const { AirflowEffect } = await import('../effects.js');

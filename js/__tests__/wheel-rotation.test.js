@@ -80,3 +80,36 @@ describe('wheel rotation tick — Phase 4', () => {
     expect(wheels.RL.rotation.x).toBeGreaterThan(0);
   });
 });
+
+/* ── Brake-glow loop guard (mirrors main.js animateCar) ────────────
+ * The brake-glow pass walks Object.values(state.brakes) and writes
+ * `b.material.emissiveIntensity`. If any entry lacks `.material` (a future
+ * GLB extraction wrapping discs in an empty parent, a test fixture, etc.),
+ * the loop must skip it rather than throw and kill the render frame. */
+function tickBrakeGlow(brakes, brakeGlow) {
+  Object.values(brakes).forEach(b => {
+    if (b?.material) b.material.emissiveIntensity = brakeGlow * brakeGlow * 1.2;
+  });
+}
+
+describe('brake glow loop — defensive guard', () => {
+  it('BG1. material entry writes emissiveIntensity', () => {
+    const brakes = { brake_FL: { material: { emissiveIntensity: 0 } } };
+    tickBrakeGlow(brakes, 0.5);
+    expect(brakes.brake_FL.material.emissiveIntensity).toBeCloseTo(0.5 * 0.5 * 1.2, 10);
+  });
+
+  it('BG2. entry without .material does not throw', () => {
+    const brakes = {
+      brake_FL: { material: { emissiveIntensity: 0 } },
+      brake_FR: {},   // ← no material — must skip
+      brake_RL: null, // ← null entry — must skip
+    };
+    expect(() => tickBrakeGlow(brakes, 0.5)).not.toThrow();
+    expect(brakes.brake_FL.material.emissiveIntensity).toBeGreaterThan(0);
+  });
+
+  it('BG3. completely empty brakes object is a no-op', () => {
+    expect(() => tickBrakeGlow({}, 1.0)).not.toThrow();
+  });
+});

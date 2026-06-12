@@ -103,7 +103,12 @@ vi.mock('three', () => {
   function Color(v) { this.r = 0; this.g = 0; this.b = 0; }
   Color.prototype.offsetHSL = function () { return this; };
 
-  function Box3() { this.min = { y: _mockBboxMinY }; this.max = {}; }
+  function Box3() {
+    // Default covers both the legacy `min.y`-only consumers and the
+    // GT-hybrid path which needs full min/max for synthesiseGTAnchors.
+    this.min = { x: -1.0, y: _mockBboxMinY, z: -2.0 };
+    this.max = { x:  1.0, y:  1.3,          z:  2.0 };
+  }
   Box3.prototype.setFromObject = function () { return this; };
 
   return {
@@ -139,14 +144,10 @@ describe('getCarMeta', () => {
     expect(getCarMeta('F1').label).toBe('Formula One');
   });
 
-  it('returns correct label for F2', async () => {
+  it('F2/F3 removed — fall back to F1 meta', async () => {
     const { getCarMeta } = await import('../cars.js');
-    expect(getCarMeta('F2').label).toBe('Formula Two');
-  });
-
-  it('returns correct label for F3', async () => {
-    const { getCarMeta } = await import('../cars.js');
-    expect(getCarMeta('F3').label).toBe('Formula Three');
+    expect(getCarMeta('F2').label).toBe('Formula One');
+    expect(getCarMeta('F3').label).toBe('Formula One');
   });
 
   it('returns correct label for GT', async () => {
@@ -187,13 +188,9 @@ describe('buildCar', () => {
     expect(car.name).toBe('car');
   });
 
-  it('buildCar("F2") resolves to group named "car"', async () => {
+  it('buildCar("F2")/("F3") removed types fall back to F1 build', async () => {
     const { buildCar } = await import('../cars.js');
     expect((await buildCar('F2')).name).toBe('car');
-  });
-
-  it('buildCar("F3") resolves to group named "car"', async () => {
-    const { buildCar } = await import('../cars.js');
     expect((await buildCar('F3')).name).toBe('car');
   });
 
@@ -267,24 +264,6 @@ describe('wheel ground contact (grp.position.y places wheels at Y = -0.34)', () 
     expect(car.position.y + wheel.position.y - wR).toBeCloseTo(GROUND_Y, 3);
   });
 
-  it('F2: wheel bottom touches ground (carY + wheelY - wR ≈ -0.34)', async () => {
-    const { buildCar } = await import('../cars.js');
-    const car = await buildCar('F2');
-    const wR = 0.328;
-    const wheel = findWheel(car, 'wFL');
-    expect(wheel).not.toBeNull();
-    expect(car.position.y + wheel.position.y - wR).toBeCloseTo(GROUND_Y, 3);
-  });
-
-  it('F3: wheel bottom touches ground (carY + wheelY - wR ≈ -0.34)', async () => {
-    const { buildCar } = await import('../cars.js');
-    const car = await buildCar('F3');
-    const wR = 0.300;
-    const wheel = findWheel(car, 'wFL');
-    expect(wheel).not.toBeNull();
-    expect(car.position.y + wheel.position.y - wR).toBeCloseTo(GROUND_Y, 3);
-  });
-
   it('GT: wheel bottom touches ground (carY + wheelY - wR ≈ -0.34)', async () => {
     const { buildCar } = await import('../cars.js');
     const car = await buildCar('GT');
@@ -308,23 +287,6 @@ describe('car measurement contract (grp.userData.measure)', () => {
     expect(m.trackWidth).toBeCloseTo(2 * 0.82, 3);
   });
 
-  it('F2 procedural exposes measure with expected fields', async () => {
-    const { buildCar } = await import('../cars.js');
-    const car = await buildCar('F2');
-    const m = car.userData.measure;
-    expect(m.wheelRadius).toBeCloseTo(0.328, 3);
-    expect(m.groundContactY).toBeCloseTo(-0.368, 3);   // -0.04 - 0.328
-    expect(m.wheelbase).toBeCloseTo(Math.abs(1.48 - (-1.38)), 3); // 2.86
-  });
-
-  it('F3 procedural exposes measure with expected fields', async () => {
-    const { buildCar } = await import('../cars.js');
-    const car = await buildCar('F3');
-    const m = car.userData.measure;
-    expect(m.wheelRadius).toBeCloseTo(0.300, 3);
-    expect(m.groundContactY).toBeCloseTo(-0.34, 3);    // -0.04 - 0.300
-  });
-
   it('GT procedural exposes measure with expected fields', async () => {
     const { buildCar } = await import('../cars.js');
     const car = await buildCar('GT');
@@ -343,7 +305,7 @@ describe('car measurement contract (grp.userData.measure)', () => {
 
   it('all variants expose measure.anchors with named feature points', async () => {
     const { buildCar } = await import('../cars.js');
-    for (const t of ['F1', 'F2', 'F3', 'GT']) {
+    for (const t of ['F1', 'GT']) {
       const car = await buildCar(t);
       const a = car.userData.measure.anchors;
       expect(a).toBeDefined();
@@ -372,16 +334,6 @@ describe('buildCar is async (Phase 3)', () => {
     expect(result).toBeInstanceOf(Promise);
     const grp = await result;
     expect(grp.name).toBe('car');
-  });
-
-  it('await buildCar("F2") resolves to group named "car"', async () => {
-    const { buildCar } = await import('../cars.js');
-    expect((await buildCar('F2')).name).toBe('car');
-  });
-
-  it('await buildCar("F3") resolves to group named "car"', async () => {
-    const { buildCar } = await import('../cars.js');
-    expect((await buildCar('F3')).name).toBe('car');
   });
 
   it('await buildCar("GT") resolves to group named "car"', async () => {
@@ -583,15 +535,180 @@ describe('buildF1Hybrid (Phase 4)', () => {
   });
 });
 
-/* ── Phase 5: GT is procedural-only (buildGTHybrid removed) ─────── */
-describe('GT procedural is wired through buildCar', () => {
-  it('GT. buildCar("GT") uses procedural path — wheels present and grounded', async () => {
+/* ── Phase 5 (updated): GT is hybrid when GLB loads, procedural fallback ─── */
+describe('GT hybrid + procedural fallback via buildCar', () => {
+  beforeEach(() => { _loaderManifestResult = null; });
+
+  it('GT. buildCar("GT") falls back to procedural when loader returns null', async () => {
     const { buildCar } = await import('../cars.js');
     const grp = await buildCar('GT');
     let wFL = null;
     grp.traverse(o => { if (o.name === 'wFL') wFL = o; });
     expect(wFL).not.toBeNull();
+    // Procedural GT radius (0.338) — the fallback path preserves the old contract.
     expect(grp.position.y + wFL.position.y - 0.338).toBeCloseTo(-0.34, 3);
+  });
+});
+
+/* ── T2.A: buildGTHybrid — GLB body + GLB wheels split from the mega-mesh ──
+ * gt.glb's wheels are connectivity islands inside the monolithic body mesh;
+ * the loader extracts them into wheelsRoot (buildWheelsFromMonolith) and
+ * measures the axles/radius from the tire islands. buildGTHybrid mirrors
+ * buildF1Hybrid: attach wheelsRoot, expose userData.wheels, passthrough
+ * measure. Empirical GLB values: tires (±0.77, 0.30, −1.17/+1.29), r 0.39.
+ */
+describe('buildGTHybrid (T2.A Porsche GT)', () => {
+  beforeEach(() => { _loaderManifestResult = null; _mockBboxMinY = -0.0836; });
+
+  const GT_GLB_MEASURE = () => ({
+    groundContactY: -0.09, frontAxleZ: -1.17, rearAxleZ: 1.29,
+    frontAxleX: 0.77, rearAxleX: 0.77, wheelRadius: 0.39, wheelWidth: 0.33,
+  });
+
+  const makeCorner = (name, x, y, z) => ({
+    name, position: { x, y, z },
+    children: [], traverse(fn) { fn(this); },
+  });
+  const fakeWheelsRoot = () => {
+    const FL = makeCorner('FL', -0.77, 0.30, -1.17);
+    const FR = makeCorner('FR',  0.77, 0.30, -1.17);
+    const RL = makeCorner('RL', -0.77, 0.30,  1.29);
+    const RR = makeCorner('RR',  0.77, 0.30,  1.29);
+    return {
+      name: 'wheelsRoot',
+      children: [FL, FR, RL, RR],
+      traverse(fn) { fn(this); this.children.forEach(c => c.traverse(fn)); },
+    };
+  };
+
+  it('T2.A.t1. GLB path — wheelsRoot attached, userData.wheels F1 parity, no overlay', async () => {
+    const scene = fakeScene([]);
+    const wheelsRoot = fakeWheelsRoot();
+    _loaderManifestResult = { scene, liveryMeshes: [], glbMeasure: GT_GLB_MEASURE(), wheelsRoot };
+    const { buildGTHybrid } = await import('../cars.js');
+    const grp = await buildGTHybrid({ color: 0xff0000 });
+    expect(grp.children).toContain(scene);
+    expect(grp.children).toContain(wheelsRoot);
+    expect(grp.userData.wheels.FL).toBe(wheelsRoot.children[0]);
+    expect(grp.userData.wheels.FR).toBe(wheelsRoot.children[1]);
+    expect(grp.userData.wheels.RL).toBe(wheelsRoot.children[2]);
+    expect(grp.userData.wheels.RR).toBe(wheelsRoot.children[3]);
+    // No procedural overlay wheels on the GLB path — single wheel source.
+    const names = new Set();
+    grp.traverse(o => { if (o.name) names.add(o.name); });
+    ['wFL','wFR','wRL','wRR'].forEach(n => expect(names.has(n)).toBe(false));
+  });
+
+  it('T2.A.t2. measure is MEASURED passthrough (wheelbase 2.46, r 0.39), baseY derived', async () => {
+    _loaderManifestResult = {
+      scene: fakeScene([]), liveryMeshes: [],
+      glbMeasure: GT_GLB_MEASURE(), wheelsRoot: fakeWheelsRoot(),
+    };
+    const { buildGTHybrid } = await import('../cars.js');
+    const grp = await buildGTHybrid({ color: 0xff0000 });
+    const m = grp.userData.measure;
+    expect(m.frontAxleZ).toBeCloseTo(-1.17, 3);
+    expect(m.rearAxleZ).toBeCloseTo( 1.29, 3);
+    expect(m.wheelbase).toBeCloseTo( 2.46, 2);     // measured, not the 2.457 spec constant
+    expect(m.wheelRadius).toBeCloseTo(0.39, 3);    // measured, not the 0.35 spec constant
+    expect(m.trackWidth).toBeCloseTo(1.54, 2);     // 2 × measured 0.77
+    expect(m.groundContactY).toBeCloseTo(-0.09, 3);
+    // baseY = TRACK.SURFACE_Y − groundContactY = −0.34 − (−0.09) = −0.25.
+    expect(grp.userData.baseY).toBeCloseTo(-0.25, 3);
+    expect(grp.position.y).toBeCloseTo(-0.25, 3);
+  });
+
+  it('T2.A.t3. synthesised anchors include all 8 standard keys', async () => {
+    _loaderManifestResult = {
+      scene: fakeScene([]), liveryMeshes: [],
+      glbMeasure: GT_GLB_MEASURE(), wheelsRoot: fakeWheelsRoot(),
+    };
+    const { buildGTHybrid } = await import('../cars.js');
+    const grp = await buildGTHybrid({ color: 0xff0000 });
+    const a = grp.userData.measure.anchors;
+    ['cockpit','halo','frontWing','rearWing','sidepodTop','floor','diffuser','noseTip']
+      .forEach(k => expect(a[k]).toBeDefined());
+    // Sanity: frontWing sits at the nose (−Z side of the bbox), rearWing at +Z.
+    expect(a.frontWing.z).toBeLessThan(a.rearWing.z);
+  });
+
+  it('T2.A.t8. measured GLB anchors override synthesised ones; synthesised fill gaps', async () => {
+    const gm = GT_GLB_MEASURE();
+    gm.anchors = {
+      halo:         { x: 0, y: 0.99, z: 0.10 },               // measured roof peak
+      engineIntake: { x: 0, y: 1.05, z: 1.55, role: 'inlet' }, // measured vent
+    };
+    _loaderManifestResult = {
+      scene: fakeScene([]), liveryMeshes: [],
+      glbMeasure: gm, wheelsRoot: fakeWheelsRoot(),
+    };
+    const { buildGTHybrid } = await import('../cars.js');
+    const grp = await buildGTHybrid({ color: 0xff0000 });
+    const a = grp.userData.measure.anchors;
+    expect(a.halo.y).toBeCloseTo(0.99, 5);            // measured wins
+    expect(a.engineIntake.role).toBe('inlet');        // vents flow through
+    expect(a.frontWing).toBeDefined();                // synthesised fills the rest
+    expect(a.diffuser).toBeDefined();
+  });
+
+  it('T2.A.t4. null loader → fallback procedural (no regression)', async () => {
+    _loaderManifestResult = null;
+    const { buildGTHybrid } = await import('../cars.js');
+    const grp = await buildGTHybrid({ color: 0xff0000 });
+    // Procedural GT has many more children than the hybrid (GLB scene + wheelsRoot ≈ 2).
+    expect(grp.children.length).toBeGreaterThanOrEqual(80);
+  });
+
+  it('T2.A.t7. GLB loaded but wheel split failed → procedural fallback (no half-strip)', async () => {
+    const scene = fakeScene([]);
+    _loaderManifestResult = { scene, liveryMeshes: [] };   // no wheelsRoot, no glbMeasure
+    const { buildGTHybrid } = await import('../cars.js');
+    const grp = await buildGTHybrid({ color: 0xff0000 });
+    // Single-source guarantee: never render the GLB with baked static wheels
+    // plus a procedural overlay — fall back to the fully procedural car.
+    expect(grp.children).not.toContain(scene);
+    const names = new Set();
+    grp.traverse(o => { if (o.name) names.add(o.name); });
+    ['wFL','wFR','wRL','wRR'].forEach(n => expect(names.has(n)).toBe(true));
+    expect(grp.children.length).toBeGreaterThanOrEqual(80);
+  });
+
+  it('T2.A.t6. procedural GT uses road-car wheel (yellow caliper, no formula wheel-nut)', async () => {
+    _loaderManifestResult = null;   // procedural path owns the gtWheel look now
+    const { buildGTHybrid } = await import('../cars.js');
+    const grp = await buildGTHybrid({ color: 0xff0000 });
+    // Collect every Mesh under any of the 4 wheel groups.
+    const wheelMeshes = [];
+    grp.traverse(o => {
+      if (!['wFL','wFR','wRL','wRR'].includes(o.name)) return;
+      o.traverse?.(c => { if (c !== o) wheelMeshes.push(c); });
+    });
+    const hasYellowCaliper = wheelMeshes.some(m =>
+      m.name?.startsWith?.('brake_cal_') && m.material?.color
+    );
+    expect(hasYellowCaliper).toBe(true);
+    // F1-style wheels have 6-segment hex wheel-nuts (radialSegments=6 in CylinderGeometry).
+    // Road-car wheels shouldn't — verify no 6-seg cylinders inside the wheel groups.
+    const hasHexNut = wheelMeshes.some(m =>
+      m.geometry?.parameters?.radialSegments === 6
+    );
+    expect(hasHexNut).toBe(false);
+  });
+
+  it('T2.A.t5. livery mesh gets a cloned material with color set', async () => {
+    const livMesh = fakeMesh('twixer_body_shell');
+    const originalMat = livMesh.material;
+    let colorCopied = false;
+    const cloned = { ...originalMat, color: { copy: () => { colorCopied = true; } } };
+    originalMat.clone = () => cloned;
+    _loaderManifestResult = {
+      scene: fakeScene([livMesh]), liveryMeshes: [livMesh],
+      glbMeasure: GT_GLB_MEASURE(), wheelsRoot: fakeWheelsRoot(),
+    };
+    const { buildGTHybrid } = await import('../cars.js');
+    await buildGTHybrid({ color: 0xff0000 });
+    expect(livMesh.material).toBe(cloned);
+    expect(colorCopied).toBe(true);
   });
 });
 

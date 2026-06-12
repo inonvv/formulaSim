@@ -1,7 +1,11 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
-import { sliceGeometryByPredicate } from './geometry-split.js';
+import {
+  sliceGeometryByPredicate,
+  computeConnectedComponents,
+  summarizeComponents,
+} from './geometry-split.js';
 
 const _loader = new GLTFLoader();
 const _draco  = new DRACOLoader();
@@ -38,10 +42,24 @@ export async function loadCarModel(url) {
   }
 }
 
+/* Mirror THREE.PropertyBinding.sanitizeNodeName — GLTFLoader applies it to
+ * every node name, stripping [ ] . : / and replacing whitespace with _.
+ * Manifests keep the AUTHORED glTF names (matching gltf-transform inspect
+ * output), so every name comparison must bridge the sanitization:
+ * 'plastic_mgl_060606FF.001_0' (authored) === 'plastic_mgl_060606FF001_0'
+ * (what the loaded Object3D is actually called). */
+function sanitizeGlbName(name) {
+  return String(name).replace(/\s/g, '_').replace(/[\[\]\.:\/]/g, '');
+}
+
+function glbNameMatches(a, b) {
+  return a === b || sanitizeGlbName(a) === sanitizeGlbName(b);
+}
+
 /* Name-based lookup that works on both real Object3D and test fakes. */
 function findByName(root, name) {
   let found = null;
-  root.traverse(node => { if (node.name === name && !found) found = node; });
+  root.traverse(node => { if (!found && glbNameMatches(node.name ?? '', name)) found = node; });
   return found;
 }
 
@@ -114,7 +132,11 @@ function measureAnchors(scene, anchorSources) {
       x: c.x,
       y: src.use === 'peak' ? bb.max.y : c.y,
       z: c.z,
-      bbox: { minY: bb.min.y, maxY: bb.max.y, minZ: bb.min.z, maxZ: bb.max.z },
+      bbox: {
+        minX: bb.min.x, maxX: bb.max.x,
+        minY: bb.min.y, maxY: bb.max.y,
+        minZ: bb.min.z, maxZ: bb.max.z,
+      },
     };
   }
 
@@ -331,6 +353,305 @@ export function buildWheelsFromGLB(scene, measure) {
   return { wheelsRoot, wheels, debug };
 }
 
+/* ── Monolith wheel split (GT path) ──────────────────────────────────────
+ * gt.glb has no named wheel meshes — the four wheels are connected-geometry
+ * islands baked into one 224k-vert mega-mesh. The split therefore keys on
+ * CONNECTIVITY (union-find over the index buffer), not on mesh names.
+ */
+
+const MONOLITH_CORNERS = ['FL', 'FR', 'RL', 'RR'];
+
+/**
+ * Classify component summaries (from summarizeComponents) into per-corner
+ * wheel parts. Pure — operates on plain summary objects, in car-local space.
+ *
+ * Tires: compact components (every bbox dim < cfg.maxComponentDim) whose
+ *   bbox floor reaches below sceneMinY + cfg.groundEpsilon. The tires are the
+ *   only ground-reaching compact islands in gt.glb (verified empirically).
+ * Wheel parts: any component whose centroid lies within cfg.axisTolerance of
+ *   a wheel axis center in the (y,z) plane, on the same side of the car
+ *   (|centroid.x| > cfg.minOutboardX, matching x sign). Axis-centered parts
+ *   (rims, hubs, discs) spin correctly by construction; off-axis arch liners
+ *   and flaps fail the (y,z) distance test and stay with the body.
+ *
+ * Returns null (→ caller falls back to procedural) when the GLB doesn't
+ * match expectations: ≠ cfg.expectedTires tires, a corner missing/duplicated,
+ * or measured wheelbase outside cfg.wheelbaseSpec ± cfg.wheelbaseTol.
+ */
+export function classifyWheelComponents(summaries, cfg) {
+  if (!Array.isArray(summaries) || summaries.length === 0) return null;
+
+  let sceneMinY = Infinity;
+  for (const s of summaries) if (s.min[1] < sceneMinY) sceneMinY = s.min[1];
+
+  const tires = [];
+  for (const s of summaries) {
+    const dx = s.max[0] - s.min[0];
+    const dy = s.max[1] - s.min[1];
+    const dz = s.max[2] - s.min[2];
+    const compact = dx < cfg.maxComponentDim && dy < cfg.maxComponentDim && dz < cfg.maxComponentDim;
+    if (compact && s.min[1] < sceneMinY + cfg.groundEpsilon) tires.push(s);
+  }
+  if (tires.length !== cfg.expectedTires) {
+    console.warn(`[car-loader] wheelBake: found ${tires.length} tire islands, expected ${cfg.expectedTires}`);
+    return null;
+  }
+
+  // Corner assignment: front = z below the mean tire z; left = x < 0.
+  let zSum = 0;
+  for (const t of tires) zSum += (t.min[2] + t.max[2]) / 2;
+  const zMid = zSum / tires.length;
+
+  const corners = {};
+  for (const t of tires) {
+    const cx = (t.min[0] + t.max[0]) / 2;
+    const cy = (t.min[1] + t.max[1]) / 2;
+    const cz = (t.min[2] + t.max[2]) / 2;
+    const corner = `${cz < zMid ? 'F' : 'R'}${cx < 0 ? 'L' : 'R'}`;
+    if (corners[corner]) {
+      console.warn(`[car-loader] wheelBake: duplicate tire island for corner ${corner}`);
+      return null;
+    }
+    corners[corner] = {
+      center: { x: cx, y: cy, z: cz },
+      radius: (t.max[1] - t.min[1]) / 2,
+      width:  t.max[0] - t.min[0],
+      componentIds: new Set([t.id]),
+      tireMinY: t.min[1],
+    };
+  }
+  if (MONOLITH_CORNERS.some(c => !corners[c])) return null;
+
+  const wheelbase = Math.abs(
+    (corners.RL.center.z + corners.RR.center.z) / 2 -
+    (corners.FL.center.z + corners.FR.center.z) / 2
+  );
+  if (Math.abs(wheelbase - cfg.wheelbaseSpec) > cfg.wheelbaseTol) {
+    console.warn(`[car-loader] wheelBake: wheelbase ${wheelbase.toFixed(3)} outside spec ${cfg.wheelbaseSpec} ± ${cfg.wheelbaseTol}`);
+    return null;
+  }
+
+  // Adopt axis-centered components (rims, hubs, brake discs) into corners.
+  const wheelComponentToCorner = new Map();
+  for (const s of summaries) {
+    const [sx, sy, sz] = s.centroid;
+    if (Math.abs(sx) < cfg.minOutboardX) continue;
+    for (const corner of MONOLITH_CORNERS) {
+      const c = corners[corner].center;
+      if (Math.sign(sx) !== Math.sign(c.x)) continue;
+      const dy = sy - c.y;
+      const dz = sz - c.z;
+      if (dy * dy + dz * dz < cfg.axisTolerance * cfg.axisTolerance) {
+        corners[corner].componentIds.add(s.id);
+        wheelComponentToCorner.set(s.id, corner);
+        break;
+      }
+    }
+  }
+
+  // Second pass — SPOKES. Each spoke is its own island whose centroid sits
+  // mid-radius (≈0.20 m off-axis in gt.glb — fails axisTolerance), so the
+  // first pass leaves them in the body and the visible wheel face doesn't
+  // spin. Spokes are distinguished from the (equally off-axis) caliper by
+  // the OUTBOARD RIM-FACE PLANE: spokes live at the face (|x| within
+  // spokeFaceDepth of the furthest adopted component), calipers hang
+  // inboard. Radial containment inside the rim rejects arch lips that touch
+  // the face plane.
+  const spokeFaceDepth = cfg.spokeFaceDepth ?? 0.06;
+  const spokeMaxR      = cfg.spokeMaxRadiusRatio ?? 0.92;
+  const faceX = {};
+  for (const corner of MONOLITH_CORNERS) faceX[corner] = Math.abs(corners[corner].center.x);
+  for (const [id, corner] of wheelComponentToCorner) {
+    const ax = Math.abs(summaries[id].centroid[0]);
+    if (ax > faceX[corner]) faceX[corner] = ax;
+  }
+  for (const s of summaries) {
+    if (wheelComponentToCorner.has(s.id)) continue;
+    const sx = s.centroid[0];
+    if (Math.abs(sx) < cfg.minOutboardX) continue;
+    if (s.max[0] - s.min[0] > 0.15) continue;        // no long axial parts
+    for (const corner of MONOLITH_CORNERS) {
+      const c = corners[corner];
+      if (Math.sign(sx) !== Math.sign(c.center.x)) continue;
+      if (Math.abs(sx) < faceX[corner] - spokeFaceDepth) continue;
+      // Whole bbox must sit radially inside the rim around this axle.
+      const rMax = Math.max(
+        Math.hypot(s.min[1] - c.center.y, s.min[2] - c.center.z),
+        Math.hypot(s.min[1] - c.center.y, s.max[2] - c.center.z),
+        Math.hypot(s.max[1] - c.center.y, s.min[2] - c.center.z),
+        Math.hypot(s.max[1] - c.center.y, s.max[2] - c.center.z),
+      );
+      if (rMax > c.radius * spokeMaxR) continue;
+      c.componentIds.add(s.id);
+      wheelComponentToCorner.set(s.id, corner);
+      break;
+    }
+  }
+
+  const measure = {
+    groundContactY: Math.min(...MONOLITH_CORNERS.map(c => corners[c].tireMinY)),
+    frontAxleZ: (corners.FL.center.z + corners.FR.center.z) / 2,
+    rearAxleZ:  (corners.RL.center.z + corners.RR.center.z) / 2,
+    frontAxleX: (Math.abs(corners.FL.center.x) + Math.abs(corners.FR.center.x)) / 2,
+    rearAxleX:  (Math.abs(corners.RL.center.x) + Math.abs(corners.RR.center.x)) / 2,
+    wheelRadius: MONOLITH_CORNERS.reduce((a, c) => a + corners[c].radius, 0) / 4,
+    wheelWidth:  MONOLITH_CORNERS.reduce((a, c) => a + corners[c].width, 0) / 4,
+  };
+
+  return { corners, measure, wheelComponentToCorner };
+}
+
+/**
+ * Split baked wheels out of a monolithic GLB mesh into 4 spinnable corner
+ * groups — the F1 buildWheelsFromGLB contract, driven by connectivity.
+ *
+ *   1. Clone the source geometry, bake matrixWorld → car-local coords.
+ *   2. ONE union-find pass shares component labels between classification
+ *      and slicing (index-mask predicates via sliceGeometryByPredicate's
+ *      4th argument).
+ *   3. Wheel fragments are recentered on the MEASURED wheel center so
+ *      group.rotation.x spins in place; fragments share the source material
+ *      (built pre-livery, so they keep the untinted palette material).
+ *   4. The body remainder is sliced from the ORIGINAL local-space geometry
+ *      with the same index mask (clone preserves vertex order) and assigned
+ *      in place — the mesh keeps its name/transform/material so livery
+ *      traversal still finds it.
+ *
+ * Connectivity masks cannot produce straddling triangles (a triangle's three
+ * vertices always share one component), so triangle conservation is asserted
+ * and any drop above cfg.maxStraddleDropRatio aborts to the fallback.
+ *
+ * Returns null on any guard failure — caller falls back to procedural.
+ */
+export function buildWheelsFromMonolith(scene, wheelBake) {
+  if (!scene || typeof scene.traverse !== 'function' || !wheelBake?.mesh) return null;
+  const srcMesh = findByName(scene, wheelBake.mesh);
+  if (!srcMesh?.isMesh || !srcMesh.geometry?.attributes?.position) return null;
+
+  const t0 = performance.now();
+  scene.updateMatrixWorld?.(true);
+  srcMesh.updateMatrixWorld?.(true);
+
+  const srcGeo = srcMesh.geometry;
+  if (srcGeo.groups?.length > 1) {
+    console.warn('[car-loader] wheelBake source mesh has multiple geometry groups — slicer drops groups');
+  }
+
+  const worldGeo = srcGeo.clone();
+  if (srcMesh.matrixWorld && worldGeo.applyMatrix4) {
+    worldGeo.applyMatrix4(srcMesh.matrixWorld);
+  }
+
+  const vertexCount = worldGeo.attributes.position.count;
+  // The index mask is reused across worldGeo and srcGeo — requires clone()
+  // to preserve vertex order/count (true for BufferGeometry, assert anyway).
+  if (vertexCount !== srcGeo.attributes.position.count) {
+    worldGeo.dispose?.();
+    return null;
+  }
+
+  let indexArr;
+  if (worldGeo.index) {
+    indexArr = worldGeo.index.array;
+  } else {
+    indexArr = new Uint32Array(vertexCount);
+    for (let i = 0; i < vertexCount; i++) indexArr[i] = i;
+  }
+
+  const { labels, count } = computeConnectedComponents(indexArr, vertexCount);
+  const summaries = summarizeComponents(worldGeo.attributes.position.array, labels, count);
+  const cls = classifyWheelComponents(summaries, wheelBake);
+  if (!cls) {
+    worldGeo.dispose?.();
+    return null;
+  }
+
+  // Per-vertex corner mask: -1 = body, 0..3 = FL/FR/RL/RR.
+  const compCorner = new Int8Array(count).fill(-1);
+  for (const [id, corner] of cls.wheelComponentToCorner) {
+    compCorner[id] = MONOLITH_CORNERS.indexOf(corner);
+  }
+  const cornerOf = new Int8Array(vertexCount);
+  for (let v = 0; v < vertexCount; v++) cornerOf[v] = compCorner[labels[v]];
+
+  const wheels = {};
+  const wheelsRoot = new THREE.Group();
+  wheelsRoot.name = 'wheelsRoot';
+  const debug = { counts: {}, droppedTris: 0, splitMs: 0 };
+
+  let wheelTris = 0;
+  for (let ci = 0; ci < MONOLITH_CORNERS.length; ci++) {
+    const corner = MONOLITH_CORNERS[ci];
+    const group = new THREE.Group();
+    group.name = corner;
+
+    const fragGeo = sliceGeometryByPredicate(worldGeo, (_x, _y, _z, v) => cornerOf[v] === ci);
+    const c = cls.corners[corner].center;
+    fragGeo.translate?.(-c.x, -c.y, -c.z);
+
+    const mesh = new THREE.Mesh(fragGeo, srcMesh.material);
+    mesh.name = `${srcMesh.name}_${corner}`;
+    mesh.castShadow    = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+    group.position.set(c.x, c.y, c.z);
+
+    wheelTris += (fragGeo.index?.count ?? 0) / 3;
+    debug.counts[corner] = {
+      fragmentVertCount: fragGeo.attributes.position?.count ?? 0,
+      sourceVertCount: vertexCount,
+    };
+    wheels[corner] = group;
+    wheelsRoot.add(group);
+  }
+
+  // Body remainder from the ORIGINAL local-space geometry, same index mask.
+  const remainderGeo = sliceGeometryByPredicate(srcGeo, (_x, _y, _z, v) => cornerOf[v] === -1);
+  const srcTris = indexArr.length / 3;
+  const remTris = (remainderGeo.index?.count ?? 0) / 3;
+  debug.droppedTris = srcTris - wheelTris - remTris;
+  if (debug.droppedTris / srcTris > wheelBake.maxStraddleDropRatio) {
+    console.warn(`[car-loader] wheelBake: ${debug.droppedTris}/${srcTris} triangles dropped — exceeds cap, falling back`);
+    worldGeo.dispose?.();
+    remainderGeo.dispose?.();
+    return null;
+  }
+
+  srcGeo.dispose?.();
+  srcMesh.geometry = remainderGeo;
+  worldGeo.dispose?.();
+
+  debug.splitMs = performance.now() - t0;
+  return { wheelsRoot, wheels, measure: { ...cls.measure }, debug };
+}
+
+/**
+ * Collect the meshes that define a car's collision envelope for the
+ * body-occupancy SDF: the anchorSources body roles (bodyShell, halo,
+ * frontWing, rearWing, cockpit) plus the manifest's `occupancyMeshes`
+ * extras. Name matching bridges GLTFLoader sanitization.
+ * Returns [] when the manifest has no anchorSources (procedural cars).
+ */
+const OCCUPANCY_ANCHOR_ROLES = ['bodyShell', 'halo', 'frontWing', 'rearWing', 'cockpit'];
+
+export function collectOccupancyMeshes(root, manifest) {
+  if (!root || typeof root.traverse !== 'function') return [];
+  if (!manifest?.anchorSources) return [];
+
+  const wanted = [];
+  for (const role of OCCUPANCY_ANCHOR_ROLES) {
+    const src = manifest.anchorSources[role];
+    if (src?.mesh) wanted.push(src.mesh);
+  }
+  wanted.push(...(manifest.occupancyMeshes || []));
+
+  const meshes = [];
+  root.traverse(obj => {
+    if (obj.isMesh && wanted.some(n => glbNameMatches(n, obj.name || ''))) meshes.push(obj);
+  });
+  return meshes;
+}
+
 /**
  * Manifest-aware GLB loader.
  * @param {object} manifest  — entry from CAR_MANIFEST (not a type string).
@@ -350,19 +671,40 @@ export async function loadCarFromManifest(manifest) {
   scene.position.set(...transform.position);
 
   // Measure BEFORE stripping — wheel source meshes must still be in the scene graph.
-  const glbMeasure = wheelSources ? measureTires(scene, wheelSources) : null;
-  const anchors    = measureAnchors(scene, manifest.anchorSources);
+  let glbMeasure = wheelSources ? measureTires(scene, wheelSources) : null;
+  const anchors  = measureAnchors(scene, manifest.anchorSources);
   if (glbMeasure && anchors) glbMeasure.anchors = anchors;
 
   // Split the merged GLB wheel meshes into 4 per-corner groups BEFORE the
   // strip pass runs — buildWheelsFromGLB removes the originals from the
   // scene itself, so the remaining strip list only handles orphans like
   // Object_28 (rear-wheel cape) that aren't wheels at all.
+  //
+  // Monolith path (manifest.wheelBake): the GLB has no named wheel meshes;
+  // wheels are connectivity islands inside one mega-mesh. The split also
+  // produces the measurement (there are no name-addressable tires to
+  // measure first), so glbMeasure is assigned from its result. Runs before
+  // the strip/livery traversal so the geometry-replaced body mesh is still
+  // collected as a livery mesh.
   let wheelsRoot = null;
   if (glbMeasure && manifest.buildWheels !== false) {
     const built = buildWheelsFromGLB(scene, glbMeasure);
     wheelsRoot = built?.wheelsRoot ?? null;
     if (built) glbMeasure.wheelDebug = built.debug;
+  } else if (manifest.wheelBake && manifest.buildWheels !== false) {
+    const built = buildWheelsFromMonolith(scene, manifest.wheelBake);
+    if (built) {
+      wheelsRoot = built.wheelsRoot;
+      glbMeasure = built.measure;
+      glbMeasure.wheelDebug = built.debug;
+      // Re-measure anchors AFTER the wheel split: the monolith's geometry is
+      // now the wheel-less body remainder, so bodyShell-derived anchors
+      // (floor, sidepodTop, vent offsets) read the body underside instead of
+      // the tire contact patch. Falls back to the pre-split pass when the
+      // post-split measurement comes up empty.
+      const postAnchors = measureAnchors(scene, manifest.anchorSources);
+      glbMeasure.anchors = postAnchors || anchors || undefined;
+    }
   }
 
   const toStrip      = [];
@@ -371,8 +713,8 @@ export async function loadCarFromManifest(manifest) {
   scene.traverse((child) => {
     if (!child.isMesh) return;
     const name = child.name || '';
-    if (stripMeshes.includes(name)) toStrip.push(child);
-    if (livSubs.includes(name))     liveryMeshes.push(child);
+    if (stripMeshes.some(s => glbNameMatches(s, name))) toStrip.push(child);
+    if (livSubs.some(s => glbNameMatches(s, name)))     liveryMeshes.push(child);
   });
 
   toStrip.forEach(m => m.parent?.remove(m));

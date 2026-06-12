@@ -7,3 +7,5 @@ dist/
 
 # Debug screenshots — scratch pad, not project history
 images/
+test-output.txt
+scripts/_shots/

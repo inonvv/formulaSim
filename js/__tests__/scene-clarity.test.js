@@ -102,7 +102,7 @@ describe('Bloom — selective (not scene-wide)', () => {
 });
 
 /* ════════════════════════════════════════════════════════════════
-   WEATHER overrides — rain dims, optimal brightens, default is sunny
+   WEATHER overrides — rain dims, default is sunny
 ════════════════════════════════════════════════════════════════ */
 describe('Weather lighting overrides', () => {
   it('default weather exposure >= 1.3', () => {
@@ -111,8 +111,8 @@ describe('Weather lighting overrides', () => {
   it('default weather sun intensity > 3', () => {
     expect(WEATHER.default.sunIntensity).toBeGreaterThan(3);
   });
-  it('optimal weather sun intensity > default', () => {
-    expect(WEATHER.optimal.sunIntensity).toBeGreaterThan(WEATHER.default.sunIntensity);
+  it('optimal weather preset removed', () => {
+    expect(WEATHER.optimal).toBeUndefined();
   });
   it('rain weather dims compared to default', () => {
     expect(WEATHER.rain.sunIntensity).toBeLessThan(WEATHER.default.sunIntensity);

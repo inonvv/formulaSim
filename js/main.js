@@ -15,10 +15,12 @@ import { buildCar, getCarMeta, WHEEL_NAMES } from './cars.js';
 import { CAR_MANIFEST } from './car-manifest.js';
 import { createDebugOverlay } from './debug-overlay.js';
 import { buildTrack }      from './track.js';
-import { AirflowEffect, RainEffect, OptimalWeatherEffect } from './effects.js';
+import { AirflowEffect, RainEffect } from './effects.js';
 import { CfdEffect } from './cfd-effect.js';
 import { VentEmitterSystem } from './vent-emitters.js';
 import { buildOccupancy } from './body-sdf.js';
+import { collectOccupancyMeshes } from './car-loader.js';
+import { createSwapGuard } from './swap-guard.js';
 import { gearFromSpeed, wheelRotationRate, aeroSquishFactor, rpmRatio, lerpSpeed } from './physics.js';
 import {
   BACKGROUND_COLOR, AMBIENT_COLOR, AMBIENT_INTENSITY,
@@ -134,7 +136,7 @@ const state = {
   targetSpeed: 0,
   paused:     false,
   camMode:    'orbit',    // orbit | trackside | cockpit | drone
-  activeEnvs: new Set(),  // 'airflow' | 'rain' | 'optimal' | 'cfd'
+  activeEnvs: new Set(),  // 'airflow' | 'rain' | 'cfd'
   time:       0,
   carGroup:   null,
   carMeasure: null,       // group.userData.measure snapshot — consumed by effects / overlay
@@ -150,59 +152,56 @@ const state = {
 
 /**
  * Phase B — Build a binary body-occupancy field from the GLB body meshes
- * of the given car group. Returns null for procedural cars (which don't
- * carry named collision meshes) so AirflowEffect treats them as before.
+ * of the given car group, for EVERY GLB car (F1 McLaren and GT 992 GT3 RS).
+ * Returns null for procedural fallbacks (no manifest collision meshes
+ * found) so AirflowEffect treats them as before.
  *
- * Resolves mesh names via the manifest's anchorSources where possible
- * (bodyShell, halo, frontWing, rearWing, cockpit/headrest). Mirror and
- * suspensions have no anchorSource entry today, so we fall back to the
- * canonical Object_20 / Object_6 node names documented in
- * docs/f1-bboxes.json — if those are ever renamed in a new GLB the loop
- * just drops them without throwing.
+ * Mesh selection is manifest-driven (collectOccupancyMeshes: anchorSources
+ * body roles + occupancyMeshes extras, GLTFLoader-sanitization aware).
+ * Bounds are MEASURED from the collected meshes' world bbox + margin, so
+ * the voxel grid hugs each car's real envelope instead of a hardcoded box —
+ * the GT roof (y ≈ 1.32) was clipped by the old fixed y-max of 1.1.
  */
 function buildBodyOccupancyFor(grp, carKey) {
-  // Only the F1 hybrid loads a GLB with named body meshes we want to collide
-  // against. Everything else (F2/F3/GT procedurals, or F1 fallback) skips.
-  if (carKey !== 'f1') return null;
   const manifest = CAR_MANIFEST[carKey];
-  if (!manifest?.anchorSources) return null;
+  if (!manifest) return null;
 
-  // Resolve the mesh names we know by semantic role via anchorSources.
-  const wantedNames = new Set();
-  const anchorRoles = ['bodyShell', 'halo', 'frontWing', 'rearWing', 'cockpit'];
-  for (const role of anchorRoles) {
-    const src = manifest.anchorSources[role];
-    if (src?.mesh) wantedNames.add(src.mesh);
-  }
-  // Known body meshes without an anchorSource entry — fallback by node name.
-  // Matches docs/f1-bboxes.json: Object_20 = mirror, Object_6 = suspensions.
-  for (const n of ['Object_20', 'Object_6']) wantedNames.add(n);
-
-  const meshes = [];
-  grp.traverse(obj => {
-    if (obj.isMesh && wantedNames.has(obj.name)) meshes.push(obj);
-  });
+  const meshes = collectOccupancyMeshes(grp, manifest);
   if (meshes.length === 0) return null;  // GLB didn't load (procedural fallback)
 
   // Ensure world matrices are up-to-date so extracted triangles are in
   // world space — the car group was just added to the scene.
   grp.updateMatrixWorld(true);
 
+  const bbox = new THREE.Box3();
+  for (const m of meshes) bbox.union(new THREE.Box3().setFromObject(m));
+  const M = 0.15;   // margin so gradients have room to push streamlines out
+  const bounds = {
+    min: [bbox.min.x - M, bbox.min.y - M, bbox.min.z - M],
+    max: [bbox.max.x + M, bbox.max.y + M, bbox.max.z + M],
+  };
+
   const resolution = { x: 96, y: 40, z: 56 };
-  const bounds     = { min: [-1.2, -0.7, -3.0], max: [+1.2, +1.1, +3.0] };
   const t0 = performance.now();
   const occ = buildOccupancy(meshes, { resolution, bounds });
   const ms = Math.round(performance.now() - t0);
-  console.log(`[body-sdf] built ${resolution.x}x${resolution.y}x${resolution.z} voxels in ${ms}ms (${meshes.length} meshes)`);
+  console.log(`[body-sdf] ${carKey}: ${resolution.x}x${resolution.y}x${resolution.z} voxels in ${ms}ms (${meshes.length} meshes, y ${bounds.min[1].toFixed(2)}..${bounds.max[1].toFixed(2)})`);
   return occ;
 }
 
+const carSpawnGuard = createSwapGuard();
+
 async function spawnCar(type) {
+  const myToken = carSpawnGuard.begin();
   if (state.carGroup) {
     debugOverlay.detach();
     scene.remove(state.carGroup);
   }
   const grp = await buildCar(type);
+  // If another spawnCar started after us, drop this load — it's already stale.
+  // Without this guard a slow initial F1 finishing after a user-clicked GT
+  // would clobber state.carGroup and leave both bodies in the scene.
+  if (!carSpawnGuard.isCurrent(myToken)) return;
   state.carGroup   = grp;
   state.carMeasure = grp.userData.measure ?? null;
   state.wheels   = {};
@@ -224,20 +223,31 @@ async function spawnCar(type) {
   const carKey = String(type).toLowerCase();
   debugOverlay.attach(grp, CAR_MANIFEST[carKey] ?? null, state.carMeasure);
 
-  // Phase B: binary body-occupancy SDF for streamline / smoke collision.
-  // Only the McLaren F1 GLB has the named body meshes we can collide against;
-  // procedural cars skip SDF and pass `undefined` so AirflowEffect behaves
-  // exactly as before.
-  state.bodyOccupancy = buildBodyOccupancyFor(grp, carKey);
+  // Phase B: binary body-occupancy SDF for streamline / smoke collision —
+  // built for every GLB car (F1 + GT) from manifest-listed collision meshes;
+  // procedural fallbacks return null so AirflowEffect behaves as before.
+  // Deferred one frame: voxelizing the GT mega-mesh costs seconds of CPU,
+  // so the car paints immediately and the ribbons gain body collision as
+  // soon as the field lands (airflow.setCarType rebuilds on occ change).
+  state.bodyOccupancy = null;
+  requestAnimationFrame(() => {
+    if (!carSpawnGuard.isCurrent(myToken)) return;
+    state.bodyOccupancy = buildBodyOccupancyFor(grp, carKey);
+    if (state.bodyOccupancy) airflow.setCarType(type, state.carMeasure, state.bodyOccupancy);
+  });
 
   airflow.setCarType(type, state.carMeasure, state.bodyOccupancy);
+  // CFD body-surface overlay: pressure is painted on the REAL body meshes
+  // (collectOccupancyMeshes — same manifest-driven list as the SDF); the
+  // rectangle patches only render for procedural fallbacks.
+  grp.updateMatrixWorld(true);
+  cfd.setBodySurface(collectOccupancyMeshes(grp, CAR_MANIFEST[carKey] ?? null), grp);
   cfd.setCarType(type, state.carMeasure);
   // Phase C: pipe the same feature-aware modifier list into CFD so the
   // pressure map sinks under inlets / low-pressure under the rear wing
   // match the airflow streamlines.
   cfd.setModifiers(airflow.getModifiers());
   rain.setCarType(type, state.carMeasure);
-  optimal.setCarType(type, state.carMeasure);
   vents.setCarType(type, state.carMeasure);
 
   // Propagate ground-lift: all effect groups author coords in car-local
@@ -266,39 +276,36 @@ class EffectStub {
   setSpeed() {} setVisible() {} setCarType(_t, _m) {} setBaseY() {} update() {} dispose() {}
 }
 
-let airflow, rain, optimal, cfd, vents;
+let airflow, rain, cfd, vents;
 try { airflow = new AirflowEffect(scene); }
 catch (e) { console.error('[AirflowEffect] constructor failed:', e); airflow = new EffectStub(); }
 try { rain = new RainEffect(scene); }
 catch (e) { console.error('[RainEffect] constructor failed:', e); rain = new EffectStub(); }
-try { optimal = new OptimalWeatherEffect(scene, renderer); }
-catch (e) { console.error('[OptimalWeatherEffect] constructor failed:', e); optimal = new EffectStub(); }
 try { cfd = new CfdEffect(scene); }
 catch (e) { console.error('[CfdEffect] constructor failed:', e); cfd = new EffectStub(); }
 try { vents = new VentEmitterSystem(scene); }
 catch (e) { console.error('[VentEmitterSystem] constructor failed:', e); vents = new EffectStub(); }
 
-spawnCar('F1');   // returns Promise — fire-and-forget; scene renders placeholder until resolved
+// Initial F1 spawn — surface the error to the console if it fails so a blank
+// scene doesn't go unexplained. The swap-token guard inside spawnCar keeps
+// this safe against an early user click on a different car-btn.
+spawnCar('F1').catch(e => console.error('[init] spawnCar failed:', e));
 
 function syncEffects() {
   const sp = state.speed;
   airflow.setSpeed(sp);
   rain.setSpeed(sp);
-  optimal.setSpeed(sp);
   cfd.setSpeed(sp);
   vents.setSpeed(sp);
   airflow.setVisible(state.activeEnvs.has('airflow'));
   rain.setVisible(state.activeEnvs.has('rain'));
-  optimal.setVisible(state.activeEnvs.has('optimal'));
   cfd.setVisible(state.activeEnvs.has('cfd'));
   // Vents are visible whenever the user is viewing the airflow or CFD picture —
   // the vent stream is part of the flow visualisation, not a standalone env.
   vents.setVisible(state.activeEnvs.has('airflow') || state.activeEnvs.has('cfd'));
 
   // Lighting per weather mode — values from scene-config.js
-  const w = state.activeEnvs.has('rain')    ? WEATHER.rain
-          : state.activeEnvs.has('optimal') ? WEATHER.optimal
-          : WEATHER.default;
+  const w = state.activeEnvs.has('rain') ? WEATHER.rain : WEATHER.default;
   ambientLight.color.set(w.ambientColor);
   ambientLight.intensity           = w.ambientIntensity;
   sunLight.intensity               = w.sunIntensity;
@@ -434,7 +441,7 @@ function updateHUD(speed) {
 function updateChips() {
   const container = document.getElementById('effects-chips');
   container.innerHTML = '';
-  const labels = { airflow: '🌬 AIRFLOW', rain: '🌧 RAIN', optimal: '☀ OPTIMAL', cfd: '🔬 CFD' };
+  const labels = { airflow: '🌬 AIRFLOW', rain: '🌧 RAIN', cfd: '🔬 CFD' };
   state.activeEnvs.forEach(env => {
     const chip = document.createElement('div');
     chip.className = `chip chip-${env}`;
@@ -469,7 +476,9 @@ function animateCar(dt) {
   const speedFactor = speed / 350;
   const brakeGlow   = Math.max(0, (speedFactor - 0.28) / 0.72);
   Object.values(state.brakes).forEach(b => {
-    b.material.emissiveIntensity = brakeGlow * brakeGlow * 1.2;
+    // Guard: a future GLB extraction could surface a brake_* parent Group
+    // without an immediate .material. Skip it rather than throw every frame.
+    if (b?.material) b.material.emissiveIntensity = brakeGlow * brakeGlow * 1.2;
   });
 
   // ─ Idle vibration — OFFSET from userData.baseY so we preserve ground contact.
@@ -544,7 +553,6 @@ function animate() {
   if (!state.paused) {
     try { airflow.update(dt, state.time); } catch (e) { console.error('[airflow.update]', e); }
     try { rain.update(dt, state.time); }    catch (e) { console.error('[rain.update]', e); }
-    try { optimal.update(dt, state.time); } catch (e) { console.error('[optimal.update]', e); }
     try { cfd.update(dt, state.time); }     catch (e) { console.error('[cfd.update]', e); }
     try { vents.update(dt); }               catch (e) { console.error('[vents.update]', e); }
   }

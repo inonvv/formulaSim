@@ -123,47 +123,6 @@ const CAR_AERO = {
     wakeHeightRange:[-0.10,1.20], wakeCount:220,
     strouhal: 0.21,  // Strouhal number for vortex shedding frequency
   },
-  F2: {
-    halfW: 0.82, halfL: 2.20, halfH: 0.50,
-    pressureBlobs: [
-      { color:0xff2200, r:0.38, intensity:0.85, pos:[0, 0.12,-2.35] },
-      { color:0x2266ff, r:0.45, intensity:0.72, pos:[0, 0.02,-2.36] },
-      { color:0xff2200, r:0.32, intensity:0.58, pos:[0, 0.79, 1.70] },
-      { color:0x2266ff, r:0.48, intensity:0.76, pos:[0, 0.68, 1.70] },
-      { color:0x00ddff, r:0.65, intensity:0.65, pos:[0,-0.04, 0.00] },
-      { color:0xff4400, r:0.26, intensity:0.55, pos:[ 0.76, 0.04,-1.45] },
-      { color:0xff4400, r:0.26, intensity:0.55, pos:[-0.76, 0.04,-1.45] },
-      { color:0x0066ff, r:0.16, intensity:0.40, phase:1.6, pos:[0, 0.10,-2.48] },
-      { color:0xff6600, r:0.28, intensity:0.75, phase:0.9, pos:[0, 0.46,-0.42] },
-    ],
-    vortexDefs: [
-      {role:'frontWing', wx:-0.77,wy:0.02,wz:-2.36,sign: 1, gamma:0.5, rc:0.10},
-      {role:'frontWing', wx: 0.77,wy:0.02,wz:-2.36,sign:-1, gamma:0.5, rc:0.10},
-      {role:'rearWing',  wx:-0.86,wy:0.76,wz: 1.70,sign:-1, gamma:0.8, rc:0.16},
-      {role:'rearWing',  wx: 0.86,wy:0.76,wz: 1.70,sign: 1, gamma:0.8, rc:0.16},
-    ],
-    vortexMaxRadius:0.30, wakeWidthX:1.0,
-    wakeHeightRange:[-0.10,1.00], wakeCount:190,
-    strouhal: 0.20,
-  },
-  F3: {
-    halfW: 0.72, halfL: 1.90, halfH: 0.44,
-    pressureBlobs: [
-      { color:0xff2200, r:0.32, intensity:0.68, pos:[0, 0.11,-2.10] },
-      { color:0x2266ff, r:0.35, intensity:0.48, pos:[0, 0.02,-2.12] },
-      { color:0x2266ff, r:0.42, intensity:0.55, pos:[0, 0.65, 1.55] },
-      { color:0x00ddff, r:0.45, intensity:0.35, pos:[0,-0.03, 0.00] },
-      { color:0x0066ff, r:0.14, intensity:0.35, phase:1.7, pos:[0, 0.08,-2.24] },
-      { color:0xff6600, r:0.28, intensity:0.75, phase:1.0, pos:[0, 0.40,-0.38] },
-    ],
-    vortexDefs: [
-      {role:'rearWing', wx:-0.75,wy:0.65,wz: 1.55,sign:-1, gamma:0.5, rc:0.10},
-      {role:'rearWing', wx: 0.75,wy:0.65,wz: 1.55,sign: 1, gamma:0.5, rc:0.10},
-    ],
-    vortexMaxRadius:0.20, wakeWidthX:0.80,
-    wakeHeightRange:[-0.10,0.90], wakeCount:150,
-    strouhal: 0.19,
-  },
   GT: {
     halfW: 1.05, halfL: 2.40, halfH: 0.65,
     pressureBlobs: [
@@ -338,9 +297,21 @@ export class AirflowEffect {
   _build(profile, measure) {
     this._profile         = profile;
     this._measure         = measure || this._measure || null;
-    this._halfW           = profile.halfW;
-    this._halfL           = profile.halfL;
-    this._halfH           = profile.halfH;
+    // Flow-plane dimensions: MEASURED geometry wins over the authored
+    // profile so ξ/η normalization (seeds, modifiers, vortex coupling, and
+    // the occupancy toWorld lookup) hugs the real GLB body, not a template.
+    //   halfW — bodyShell bbox half-width (measureAnchors carries X extents)
+    //   halfL — furthest measured wing |z| (full car envelope)
+    //   halfH — halo/roof peak over the standard 1.93 height ratio
+    const a = this._measure?.anchors;
+    const bs = a?.bodyShell?.bbox;
+    this._halfW = (bs && Number.isFinite(bs.minX) && Number.isFinite(bs.maxX))
+      ? (bs.maxX - bs.minX) / 2
+      : profile.halfW;
+    this._halfL = (Number.isFinite(a?.frontWing?.z) && Number.isFinite(a?.rearWing?.z))
+      ? Math.max(Math.abs(a.frontWing.z), Math.abs(a.rearWing.z))
+      : profile.halfL;
+    this._halfH = Number.isFinite(a?.halo?.y) ? a.halo.y / 1.93 : profile.halfH;
     this._vortexMaxRadius = profile.vortexMaxRadius;
     this._wakeWidthX      = profile.wakeWidthX;
     this._wakeHeightRange = profile.wakeHeightRange;
@@ -414,8 +385,12 @@ export class AirflowEffect {
   _buildModifiers(profile, measure) {
     const out = [];
     if (!measure?.anchors) return out;
-    const halfL = profile.halfL || DEFAULT_HALF_L;
-    const halfW = profile.halfW || DEFAULT_HALF_W;
+    // Normalize by the SAME flow-plane dims the renderer uses (_build sets
+    // this._halfW/_halfL from measured geometry when available) — modifiers
+    // and ribbons must agree on the ξ/η mapping or sinks drift off their
+    // vents.
+    const halfL = this._halfL || profile.halfL || DEFAULT_HALF_L;
+    const halfW = this._halfW || profile.halfW || DEFAULT_HALF_W;
     const anchors = measure.anchors;
 
     const add = (anchor, type, cfg) => {
@@ -444,6 +419,11 @@ export class AirflowEffect {
       ['frontBrakeDuctR', 'sink',   MOD_STR.BRAKE_DUCT,      'inlet'  ],
       ['rearBrakeDuctL',  'sink',   MOD_STR.BRAKE_DUCT,      'inlet'  ],
       ['rearBrakeDuctR',  'sink',   MOD_STR.BRAKE_DUCT,      'inlet'  ],
+      // GT (992 GT3 RS) vent layout — measured via manifest anchorSources.
+      ['frontIntake',     'sink',   MOD_STR.SIDEPOD_INLET,   'inlet'  ],
+      ['engineIntake',    'sink',   MOD_STR.AIRBOX_INTAKE,   'inlet'  ],
+      ['fenderVentL',     'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet' ],
+      ['fenderVentR',     'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet' ],
     ];
     for (const [key, type, cfg, expectedRole] of ventTable) {
       const a = anchors[key];
@@ -829,8 +809,6 @@ export class AirflowEffect {
 /* Per-car wheel/spray spawn positions */
 const RAIN_POS = {
   F1: { sprayX: 0.73, sprayZ: 1.52, roosterX: 0.80, roosterZ: 1.65 },
-  F2: { sprayX: 0.65, sprayZ: 1.38, roosterX: 0.73, roosterZ: 1.52 },
-  F3: { sprayX: 0.56, sprayZ: 1.22, roosterX: 0.63, roosterZ: 1.38 },
   GT: { sprayX: 0.85, sprayZ: 1.55, roosterX: 0.93, roosterZ: 1.72 },
 };
 
@@ -1107,103 +1085,3 @@ export class RainEffect {
   }
 }
 
-/* ════════════════════════════════════════════════════════════════ */
-/*  OPTIMAL WEATHER EFFECT                                          */
-/* ════════════════════════════════════════════════════════════════ */
-export class OptimalWeatherEffect {
-  constructor(scene, renderer) {
-    this.scene    = scene;
-    this.renderer = renderer;
-    this.group    = new THREE.Group();
-    this.group.name = 'optimalWeather';
-    scene.add(this.group);
-
-    this._visible = false;
-    this._speed   = 0;
-
-    this._buildTrackShimmer();
-    this._buildHeatHaze();
-    this.group.visible = false;
-  }
-
-  _buildTrackShimmer() {
-    const COUNT = 500;
-    const positions = new Float32Array(COUNT * 3);
-    for (let i = 0; i < COUNT; i++) {
-      positions[i * 3]     = rnd(-3.5, 3.5);
-      positions[i * 3 + 1] = -0.34;
-      positions[i * 3 + 2] = rnd(-6, 6);
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const mat = new THREE.PointsMaterial({
-      color: 0xffeeaa,
-      size: 0.03,
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
-    this.shimmerPoints = new THREE.Points(geo, mat);
-    this.group.add(this.shimmerPoints);
-    this._shimMat   = mat;
-    this._shimPos   = positions;
-    this._shimCount = COUNT;
-    this._shimPhase = new Float32Array(COUNT).fill(0).map(() => rnd(0, Math.PI * 2));
-  }
-
-  _buildHeatHaze() {
-    const geo = new THREE.SphereGeometry(0.55, 14, 12);
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0xffddaa,
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      side: THREE.BackSide,
-    });
-    this.hazeBlob = new THREE.Mesh(geo, mat);
-    this.hazeBlob.position.set(0, 0.18, 2.1);
-    this.group.add(this.hazeBlob);
-    this._hazeMat = mat;
-  }
-
-  /**
-   * Reposition the heat-haze blob behind the rear axle when measure is
-   * supplied. Heat sits ~0.5 m aft of the contact patch — same nudge used
-   * for the rain rooster tails.
-   */
-  setCarType(_type, measure) {
-    if (!this.hazeBlob) return;
-    if (measure && typeof measure.rearAxleZ === 'number') {
-      this.hazeBlob.position.z = measure.rearAxleZ + 0.5;
-    }
-  }
-
-  setSpeed(speed)  { this._speed = speed; }
-
-  setVisible(v) {
-    this._visible = v;
-    this.group.visible = v;
-  }
-
-  update(_dt, t) {
-    if (!this._visible) return;
-
-    const speedFactor = Math.min(this._speed / 350, 1);
-
-    const p = this._shimPos;
-    for (let i = 0; i < this._shimCount; i++) {
-      const bright = Math.max(0, Math.sin(t * 3.5 + this._shimPhase[i]));
-      p[i * 3 + 1] = -0.34 + bright * 0.003;
-    }
-    this.shimmerPoints.geometry.attributes.position.needsUpdate = true;
-    this._shimMat.opacity = (0.05 + speedFactor * 0.30) * (0.60 + 0.40 * Math.abs(Math.sin(t * 0.5)));
-
-    this._hazeMat.opacity = speedFactor * 0.06 * (0.7 + 0.3 * Math.sin(t * 4));
-  }
-
-  dispose() {
-    this.scene.remove(this.group);
-  }
-}
