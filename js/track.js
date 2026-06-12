@@ -1,15 +1,27 @@
 /**
- * track.js — Procedural track environment for FormulaSim
- * Builds asphalt surface, markings, barriers, and tyre stacks.
+ * track.js — Procedural track environment for FormulaSim.
+ *
+ * Curved-track rework: all furniture (asphalt ribbon, dashes, rumbles,
+ * barriers, tyre stacks, S/F band) is laid out along the TrackPath in
+ * track space and recycled through a sliding window [s−35, s+41] as the
+ * car advances. The car never moves — main.js applies the inverse car
+ * pose to the whole group, so local coordinates here are track-space.
+ *
+ * Layout math (rowPose / rowWindow / pools) lives in track-path.js and is
+ * unit-tested there; this file is the thin THREE wrapper.
  */
 
 import * as THREE from 'three';
+import {
+  rowPose, rowWindow, poolSize, poolIndex,
+  WINDOW_BEHIND, WINDOW_AHEAD,
+} from './track-path.js';
 
-export function buildTrack() {
-  const grp = new THREE.Group();
-  grp.name = 'track';
+const ROAD_W      = 30;     // full ground width (m)
+const RIBBON_DS   = 2;      // ground ribbon row spacing (m)
+const SURFACE_Y   = -0.34;
 
-  /* ── Asphalt ground ─────────────────────────────────────────── */
+function makeAsphaltTexture() {
   const canvas = document.createElement('canvas');
   canvas.width  = 512;
   canvas.height = 512;
@@ -41,98 +53,191 @@ export function buildTrack() {
   ctx.fillStyle = grad;
   ctx.fillRect(170, 0, 172, 512);
 
-  const groundTex = new THREE.CanvasTexture(canvas);
-  groundTex.wrapS = groundTex.wrapT = THREE.RepeatWrapping;
-  groundTex.repeat.set(18, 36);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
 
-  const groundMat = new THREE.MeshStandardMaterial({
+/* ── Ground ribbon — path-following asphalt strip ─────────────────── */
+function buildGroundRibbon(groundTex) {
+  const rows = poolSize(RIBBON_DS);            // fixed vertex count
+  const positions = new Float32Array(rows * 2 * 3);
+  const uvs       = new Float32Array(rows * 2 * 2);
+  const indices   = [];
+  for (let r = 0; r < rows - 1; r++) {
+    const a = r * 2;
+    indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('uv',       new THREE.BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+
+  const mat = new THREE.MeshStandardMaterial({
     map: groundTex,
     roughness: 0.88,
     metalness: 0.04,
+    side: THREE.DoubleSide,
   });
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(30, 70), groundMat);
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -0.34;
-  ground.receiveShadow = true;
-  grp.add(ground);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = true;
+  mesh.frustumCulled = false;   // verts move in track space every frame
 
-  /* ── Start / finish band ────────────────────────────────────── */
-  const sfBand = new THREE.Mesh(
-    new THREE.PlaneGeometry(12, 0.45),
-    new THREE.MeshBasicMaterial({ color: 0xffffff })
-  );
-  sfBand.rotation.x = -Math.PI / 2;
-  sfBand.position.set(0, -0.333, 0);
-  grp.add(sfBand);
-
-  /* ── Centre-line dashes ─────────────────────────────────────── */
-  const dashMat   = new THREE.MeshBasicMaterial({ color: 0xffffff });
-  const dashMeshes = [];
-  for (let z = -28; z <= 28; z += 4) {
-    const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 2.2), dashMat);
-    dash.rotation.x = -Math.PI / 2;
-    dash.position.set(0, -0.332, z);
-    dashMeshes.push(dash);
-    grp.add(dash);
+  function update(path) {
+    const { kMin, kMax } = rowWindow(path.pose.s, RIBBON_DS);
+    for (let r = 0; r < rows; r++) {
+      const k = Math.min(kMin + r, kMax);     // tail rows degenerate on kMax
+      const s = k * RIBBON_DS;
+      const L = rowPose(path, s, -ROAD_W / 2);
+      const R = rowPose(path, s,  ROAD_W / 2);
+      const i = r * 2 * 3;
+      positions[i]     = L.x; positions[i + 1] = SURFACE_Y; positions[i + 2] = L.z;
+      positions[i + 3] = R.x; positions[i + 4] = SURFACE_Y; positions[i + 5] = R.z;
+      const j = r * 2 * 2;
+      // matches the old PlaneGeometry(30,70) + repeat(18,36): one tile ≈ 1.67×1.94 m
+      const v = s / (70 / 36);
+      uvs[j] = 0;  uvs[j + 1] = v;
+      uvs[j + 2] = 18; uvs[j + 3] = v;
+    }
+    geo.attributes.position.needsUpdate = true;
+    geo.attributes.uv.needsUpdate = true;
+    geo.computeVertexNormals();
   }
 
-  /* ── Red/white rumble strips ────────────────────────────────── */
-  const rumbleRed   = new THREE.MeshBasicMaterial({ color: 0xcc1111 });
-  const rumbleWhite = new THREE.MeshBasicMaterial({ color: 0xeeeeee });
-  const rumbleGroup = new THREE.Group();
-  for (const side of [-1, 1]) {
-    const xPos = side * 5.55;
-    for (let z = -28; z <= 28; z += 0.6) {
-      const idx = Math.round((z + 28) / 0.6);
-      const mat = idx % 2 === 0 ? rumbleRed : rumbleWhite;
-      const seg = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.58), mat);
-      seg.rotation.x = -Math.PI / 2;
-      seg.position.set(xPos, -0.331, z);
-      rumbleGroup.add(seg);
+  return { mesh, update };
+}
+
+/* ── Generic row pool — one Object3D per grid line, recycled ──────── */
+function makeRowPool({ spacing, build, place }) {
+  const n = poolSize(spacing);
+  const items = [];
+  for (let i = 0; i < n; i++) {
+    const obj = build(i);
+    obj.userData.k = null;
+    obj.userData.epoch = -1;
+    items.push(obj);
+  }
+
+  function update(path) {
+    const { kMin, kMax } = rowWindow(path.pose.s, spacing);
+    for (let k = kMin; k <= kMax; k++) {
+      const obj = items[poolIndex(k, n)];
+      if (obj.userData.k === k && obj.userData.epoch === path.epoch) continue;
+      place(obj, k, path);
+      obj.userData.k = k;
+      obj.userData.epoch = path.epoch;
     }
   }
-  grp.add(rumbleGroup);
 
-  /* ── Armco barriers ─────────────────────────────────────────── */
+  return { items, update };
+}
+
+/* Position a row object at grid line k with lateral offset and yaw. */
+function placeRow(obj, k, spacing, lateralX, y, path) {
+  const rp = rowPose(path, k * spacing, lateralX);
+  obj.position.set(rp.x, y, rp.z);
+  obj.rotation.y = rp.rotY;
+}
+
+export function buildTrack() {
+  const grp = new THREE.Group();
+  grp.name = 'track';
+
+  const groundTex = makeAsphaltTexture();
+  const ribbon = buildGroundRibbon(groundTex);
+  grp.add(ribbon.mesh);
+
+  const pools = [];
+
+  /* ── Start / finish band — one per 70 m ─────────────────────────── */
+  const sfGeo = new THREE.PlaneGeometry(12, 0.45);
+  sfGeo.rotateX(-Math.PI / 2);
+  const sfMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  pools.push(makeRowPool({
+    spacing: 70,
+    build: () => { const m = new THREE.Mesh(sfGeo, sfMat); grp.add(m); return m; },
+    place: (m, k, path) => placeRow(m, k, 70, 0, SURFACE_Y + 0.007, path),
+  }));
+
+  /* ── Centre-line dashes — every 4 m ─────────────────────────────── */
+  const dashGeo = new THREE.PlaneGeometry(0.12, 2.2);
+  dashGeo.rotateX(-Math.PI / 2);
+  const dashMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  pools.push(makeRowPool({
+    spacing: 4,
+    build: () => { const m = new THREE.Mesh(dashGeo, dashMat); grp.add(m); return m; },
+    place: (m, k, path) => placeRow(m, k, 4, 0, SURFACE_Y + 0.008, path),
+  }));
+
+  /* ── Red/white rumble strips — every 0.6 m, both sides ──────────── */
+  const rumbleGeo   = new THREE.PlaneGeometry(0.9, 0.58);
+  rumbleGeo.rotateX(-Math.PI / 2);
+  const rumbleRed   = new THREE.MeshBasicMaterial({ color: 0xcc1111 });
+  const rumbleWhite = new THREE.MeshBasicMaterial({ color: 0xeeeeee });
+  for (const side of [-1, 1]) {
+    pools.push(makeRowPool({
+      spacing: 0.6,
+      build: () => { const m = new THREE.Mesh(rumbleGeo, rumbleRed); grp.add(m); return m; },
+      place: (m, k, path) => {
+        m.material = k % 2 === 0 ? rumbleRed : rumbleWhite;
+        placeRow(m, k, 0.6, side * 5.55, SURFACE_Y + 0.009, path);
+      },
+    }));
+  }
+
+  /* ── Armco barriers — 4 m segments, both sides ──────────────────── */
+  const armcoGeo = new THREE.BoxGeometry(0.12, 0.38, 4.05);
   const armcoMat = new THREE.MeshStandardMaterial({
     color: 0xbbbbbb,
     roughness: 0.35,
     metalness: 0.75,
   });
   for (const side of [-1, 1]) {
-    const barrier = new THREE.Mesh(
-      new THREE.BoxGeometry(0.12, 0.38, 68),
-      armcoMat
-    );
-    barrier.position.set(side * 6.4, -0.15, 0);
-    barrier.castShadow  = true;
-    barrier.receiveShadow = true;
-    grp.add(barrier);
+    pools.push(makeRowPool({
+      spacing: 4,
+      build: () => {
+        const m = new THREE.Mesh(armcoGeo, armcoMat);
+        m.castShadow = m.receiveShadow = true;
+        grp.add(m);
+        return m;
+      },
+      place: (m, k, path) => placeRow(m, k, 4, side * 6.4, -0.15, path),
+    }));
   }
 
-  /* ── Tyre stacks ────────────────────────────────────────────── */
-  const tyreColors = [0x222222, 0xdd1111];
+  /* ── Tyre stacks — every 1.2 m, two high, both sides ────────────── */
+  const tyreGeo  = new THREE.CylinderGeometry(0.22, 0.22, 0.2, 16);
+  const tyreMats = [0x222222, 0xdd1111].map(c => new THREE.MeshStandardMaterial({
+    color: c, roughness: 0.82, metalness: 0.05,
+  }));
   for (const side of [-1, 1]) {
-    const xPos = side * 7.2;
-    for (let z = -28; z <= 28; z += 1.2) {
-      for (let row = 0; row < 2; row++) {
-        const colorIdx = (Math.round((z + 28) / 1.2) + row) % 2;
-        const tyreMat  = new THREE.MeshStandardMaterial({
-          color:     tyreColors[colorIdx],
-          roughness: 0.82,
-          metalness: 0.05,
+    pools.push(makeRowPool({
+      spacing: 1.2,
+      build: () => {
+        const stack = new THREE.Group();
+        for (let row = 0; row < 2; row++) {
+          const tyre = new THREE.Mesh(tyreGeo, tyreMats[0]);
+          tyre.position.y = row * 0.44;
+          tyre.castShadow = tyre.receiveShadow = true;
+          stack.add(tyre);
+        }
+        grp.add(stack);
+        return stack;
+      },
+      place: (stack, k, path) => {
+        stack.children.forEach((tyre, row) => {
+          tyre.material = tyreMats[(((k + row) % 2) + 2) % 2]; // positive mod — k can be negative
         });
-        const tyre = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.22, 0.22, 0.2, 16),
-          tyreMat
-        );
-        tyre.position.set(xPos, -0.34 + 0.22 + row * 0.44, z);
-        tyre.castShadow    = true;
-        tyre.receiveShadow = true;
-        grp.add(tyre);
-      }
-    }
+        placeRow(stack, k, 1.2, side * 7.2, SURFACE_Y + 0.22, path);
+      },
+    }));
   }
 
-  return { group: grp, groundTex, dashMeshes, rumbleGroup, sfBand };
+  /* Re-place every out-of-date row + rebuild the ground ribbon. */
+  function update(path) {
+    ribbon.update(path);
+    for (const p of pools) p.update(path);
+  }
+
+  return { group: grp, groundTex, update, WINDOW_BEHIND, WINDOW_AHEAD };
 }

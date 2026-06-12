@@ -8,6 +8,7 @@ import {
   traceStreamlinePath, topViewVelocity,
   vortexVelocity, sideViewVelocity,
 } from './airflow-core.js';
+import { ribbonDrift, rainLateralAccel } from './track-path.js';
 
 /* ── Phase C modifier strengths (VISUAL approximations, not CFD-calibrated) ── *
  * Each vent/wing in AirflowEffect._buildModifiers emits an entry into the
@@ -251,6 +252,7 @@ export class AirflowEffect {
     this._time         = 0;
     this._baseY        = 0;
     this._measure      = null;
+    this._turnOmega    = 0;   // car yaw rate (rad/s) while turning
 
     this._build(getProfile('F1'), null);
     this.group.visible = false;
@@ -622,6 +624,10 @@ export class AirflowEffect {
 
   setSpeed(speed) { this._speed = speed; }
 
+  /* Turn coupling — ribbons sweep with the apparent rotation of the air mass
+   * around the turning car frame (see ribbonDrift; ×6 legibility exaggeration). */
+  setTurnState(omega, _v) { this._turnOmega = omega; }
+
   setVisible(v) {
     this._visible = v;
     this.group.visible = v;
@@ -699,6 +705,12 @@ export class AirflowEffect {
           wx += (g.x / mag) * lift;
           wy += (g.y / mag) * lift;
           wz += (g.z / mag) * lift;
+        }
+
+        // Turn coupling — lateral sweep from the apparent rotation of the
+        // air mass around the car frame (~0.4 s response time scale).
+        if (this._turnOmega !== 0) {
+          wx += ribbonDrift(this._turnOmega, wz) * 0.4;
         }
 
         positions[i * 3]     = wx;
@@ -822,6 +834,7 @@ export class RainEffect {
     this._speed    = 0;
     this._visible  = false;
     this._rainPos  = RAIN_POS.F1;
+    this._turnALat = 0;   // centrifugal accel v·ω while turning (m/s²)
 
     this._buildDroplets();
     this._buildSpray();
@@ -958,6 +971,10 @@ export class RainEffect {
 
   setSpeed(speed) { this._speed = speed; }
 
+  /* Turn coupling — store the REAL centrifugal pseudo-accel a_lat = v·ω.
+   * Free water (spray, rooster tails) accumulates it; falling streaks lean. */
+  setTurnState(omega, v) { this._turnALat = rainLateralAccel(v, omega); }
+
   setCarType(type, measure) {
     // Prefer measured rear-axle position when the car builder exposed it.
     // Falls back to the per-type RAIN_POS table for procedural cars that
@@ -1013,7 +1030,13 @@ export class RainEffect {
     // Change 5: streak rendering — update tail position then compute head
     const dp = this._dPos;
     const streakLen = 0.04 + speedFactor * 0.10;
+    // Turn coupling: falling drops pick up lateral speed ≈ a_lat × mean fall
+    // time (~0.4 s); the streak head leans outward by the accel ratio.
+    const aLat = this._turnALat;
+    const turnDrift = aLat * 0.4;
+    const turnLean  = (aLat / 9.8) * streakLen;
     for (let i = 0; i < this._dCount; i++) {
+      dp[i * 6]     += dt * turnDrift;
       dp[i * 6 + 1] -= dt * this._dVels[i];
       dp[i * 6 + 2] += dt * windTilt;
       if (dp[i * 6 + 1] < -0.35) {
@@ -1022,7 +1045,7 @@ export class RainEffect {
         dp[i * 6 + 2] = rnd(-6, 6);
       }
       // Head = tail + streak offset
-      dp[i * 6 + 3] = dp[i * 6];
+      dp[i * 6 + 3] = dp[i * 6] + turnLean;
       dp[i * 6 + 4] = dp[i * 6 + 1] + streakLen;
       dp[i * 6 + 5] = dp[i * 6 + 2] + windTilt * 0.15;
     }
@@ -1032,6 +1055,7 @@ export class RainEffect {
     const sp = this._sPos, sv = this._sVels;
     for (let i = 0; i < this._sCount; i++) {
       this._sprayLife[i] += dt * 2.0;
+      sv[i * 3]     += aLat * dt;           // centrifugal drift while turning
       sv[i * 3 + 1] -= 9.8 * dt;            // accumulate gravity into vy
       sp[i * 3]     += sv[i * 3]     * dt;
       sp[i * 3 + 1] += sv[i * 3 + 1] * dt;
@@ -1060,7 +1084,8 @@ export class RainEffect {
     const rv = this._roosterVels;
 
     for (let i = 0; i < this._roosterCount; i++) {
-      rv[i * 3 + 1] -= 9.8 * dt;         // gravity
+      rv[i * 3]     += this._turnALat * dt;  // centrifugal drift while turning
+      rv[i * 3 + 1] -= 9.8 * dt;             // gravity
       rp[i * 3]     += rv[i * 3]     * dt;
       rp[i * 3 + 1] += rv[i * 3 + 1] * dt;
       rp[i * 3 + 2] += rv[i * 3 + 2] * dt;

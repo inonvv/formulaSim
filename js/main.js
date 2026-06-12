@@ -15,6 +15,7 @@ import { buildCar, getCarMeta, WHEEL_NAMES } from './cars.js';
 import { CAR_MANIFEST } from './car-manifest.js';
 import { createDebugOverlay } from './debug-overlay.js';
 import { buildTrack }      from './track.js';
+import { TrackPath, TURN_CFG, steerAngleRad, rollAngleRad } from './track-path.js';
 import { AirflowEffect, RainEffect } from './effects.js';
 import { CfdEffect } from './cfd-effect.js';
 import { VentEmitterSystem } from './vent-emitters.js';
@@ -86,8 +87,13 @@ rimLight.position.set(0, 2, -8);
 scene.add(rimLight);
 
 /* ── Track ────────────────────────────────────────────────────── */
-const { group: trackGroup, groundTex, dashMeshes, rumbleGroup, sfBand } = buildTrack();
+const track = buildTrack();
+const trackGroup = track.group;
 scene.add(trackGroup);
+
+/* Virtual driving path — the car is fixed, the track gets the inverse pose. */
+const trackPath = new TrackPath();
+track.update(trackPath); // initial furniture placement
 
 /* ── Sky — clear bright midday ────────────────────────────────── */
 function buildSky() {
@@ -495,36 +501,40 @@ function animateCar(dt) {
 
   // ─ Slight forward lean at speed
   state.carGroup.rotation.x = -rpmRatio(speed) * 0.025;
+
+  // ─ Turn pose — driven by the path curvature under the car.
+  //   Steer the front wheels (YXZ so the spin axle tilts with the steer),
+  //   roll the body outward (real lateral g, capped 4°), nose-in yaw ≤2°.
+  const mps   = speed / 3.6;
+  const kappa = trackPath.curvatureAt(trackPath.pose.s);
+  const omega = mps * kappa;
+  const steer = steerAngleRad(kappa, state.carMeasure?.wheelbase ?? 3.6);
+  for (const key of ['FL', 'FR', 'wFL', 'wFR']) {
+    const w = state.wheels[key];
+    if (w) { w.rotation.order = 'YXZ'; w.rotation.y = steer; }
+  }
+  state.carGroup.rotation.z = rollAngleRad(mps, omega);
+  state.carGroup.rotation.y = (omega / TURN_CFG.MAX_YAW_RATE) * 0.035;
 }
 
 /* ══════════════════════════════════════════════════════════════════
    TRACK MOTION
 ══════════════════════════════════════════════════════════════════ */
-const DASH_CYCLE   = 60;     // 15 dashes × 4 m
-const RUMBLE_CYCLE = 0.6;    // one rumble tile
-const TRACK_LEN    = 70;     // full track length
-
 function updateTrack(dt) {
   if (state.paused) return;
   const mps = state.speed / 3.6;
-  if (mps < 0.001) return;
 
-  // Ground texture UV scroll
-  groundTex.offset.y += mps * dt / (TRACK_LEN / 36);
+  // Advance the virtual car along the path (schedules random turns) and
+  // apply the INVERSE car pose to the whole track group — the car stays
+  // at the origin while the world curves around it.
+  trackPath.update(dt, mps);
+  trackPath.rebaseIfNeeded();          // floating origin every 1 km
+  const w = trackPath.worldTransform();
+  trackGroup.rotation.y = w.rotY;
+  trackGroup.position.set(w.x, 0, w.z);
 
-  // Centre-line dashes
-  for (const d of dashMeshes) {
-    d.position.z += mps * dt;
-    if (d.position.z > 32) d.position.z -= DASH_CYCLE;
-  }
-
-  // Rumble strips (both sides, one group)
-  rumbleGroup.position.z += mps * dt;
-  if (rumbleGroup.position.z >= RUMBLE_CYCLE) rumbleGroup.position.z -= RUMBLE_CYCLE;
-
-  // Start/finish band
-  sfBand.position.z += mps * dt;
-  if (sfBand.position.z > 35) sfBand.position.z -= TRACK_LEN;
+  // Recycle furniture rows through the sliding window.
+  track.update(trackPath);
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -551,6 +561,10 @@ function animate() {
 
   // Effects
   if (!state.paused) {
+    // Turn coupling: rain/spray get real centrifugal accel, ribbons drift.
+    const turnOmega = trackPath.yawRate(state.speed / 3.6);
+    airflow.setTurnState?.(turnOmega, state.speed / 3.6);
+    rain.setTurnState?.(turnOmega, state.speed / 3.6);
     try { airflow.update(dt, state.time); } catch (e) { console.error('[airflow.update]', e); }
     try { rain.update(dt, state.time); }    catch (e) { console.error('[rain.update]', e); }
     try { cfd.update(dt, state.time); }     catch (e) { console.error('[cfd.update]', e); }
