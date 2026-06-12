@@ -4,8 +4,6 @@ Interactive 3D wind-tunnel simulator for racing cars — a cinematic, educationa
 
 **▶ Live simulator:** https://inonvv.github.io/formulaSim/
 
-**Repository:** https://github.com/inonvv/formulaSim
-
 ## Features
 
 - **High-fidelity 3D cars** — GLB McLaren F1 and Porsche 992 GT3 RS GT, each with split spinning wheels and a fully procedural fallback
