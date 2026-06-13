@@ -135,6 +135,32 @@ beforeEach(() => {
 });
 
 /* ── Tests ────────────────────────────────────────────────────────── */
+describe('dracoDecoderPath — must respect the vite base path', () => {
+  // Regression: the Draco wasm decoder was hardcoded to '/draco/', which 404s
+  // under a non-root base (GitHub Pages serves at /formulaSim/). Both GLBs are
+  // draco-compressed, so a wrong path silently dropped BOTH cars to procedural.
+  it('joins base + "draco/" for the GitHub Pages base', async () => {
+    const { dracoDecoderPath } = await import('../car-loader.js');
+    expect(dracoDecoderPath('/formulaSim/')).toBe('/formulaSim/draco/');
+  });
+
+  it('works at the dev root base', async () => {
+    const { dracoDecoderPath } = await import('../car-loader.js');
+    expect(dracoDecoderPath('/')).toBe('/draco/');
+  });
+
+  it('tolerates a base with no trailing slash', async () => {
+    const { dracoDecoderPath } = await import('../car-loader.js');
+    expect(dracoDecoderPath('/formulaSim')).toBe('/formulaSim/draco/');
+  });
+
+  it('falls back to root-relative when base is empty/undefined', async () => {
+    const { dracoDecoderPath } = await import('../car-loader.js');
+    expect(dracoDecoderPath('')).toBe('/draco/');
+    expect(dracoDecoderPath(undefined)).toBe('/draco/');
+  });
+});
+
 describe('loadCarModel', () => {
   it('1. resolves with { scene, wheels, liveryMeshes } shape on success', async () => {
     const { loadCarModel } = await import('../car-loader.js');

@@ -7,9 +7,20 @@ import {
   summarizeComponents,
 } from './geometry-split.js';
 
+/**
+ * Resolve the Draco wasm decoder directory against the app's base path.
+ * Hardcoding '/draco/' 404s on GitHub Pages (served at '/formulaSim/'),
+ * which silently drops BOTH GLB cars to their procedural fallback. Derive
+ * it from the vite base so dev ('/') and Pages ('/formulaSim/') both work.
+ */
+export function dracoDecoderPath(base) {
+  if (!base) return '/draco/';
+  return base.endsWith('/') ? base + 'draco/' : base + '/draco/';
+}
+
 const _loader = new GLTFLoader();
 const _draco  = new DRACOLoader();
-_draco.setDecoderPath('/draco/');
+_draco.setDecoderPath(dracoDecoderPath(import.meta.env?.BASE_URL));
 _loader.setDRACOLoader(_draco);
 
 /**
