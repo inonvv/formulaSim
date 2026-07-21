@@ -216,6 +216,8 @@ vi.mock('../airflow-core.js', () => ({
   cpToColor:           () => ({ r: 0.5, g: 0.5, b: 0.5 }),
   vortexVelocity:      () => ({ vxi: 0, veta: 0 }),
   sideViewVelocity:    () => ({ veta: 1, vy: 0 }),
+  sumVelocity:         (xi, eta, baseFn) => baseFn(xi, eta),
+  venturiSpeedRatio:   cp => Math.sqrt(Math.max(0, 1 - cp)),
   traceStreamlinePath: () => [{ xi: 0, eta: -8, vxi: 0, veta: 1 }],
 }));
 

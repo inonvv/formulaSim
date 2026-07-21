@@ -8,6 +8,7 @@ import {
   sinkVelocity,
   sourceVelocity,
   sumVelocity,
+  venturiSpeedRatio,
 } from '../airflow-core.js';
 
 /* ── helpers ── */
@@ -421,5 +422,34 @@ describe('vortexVelocity', () => {
     const v = vortexVelocity(5, 3, 1, 1, 2.0, 0.3);
     expect(isFinite(v.vxi)).toBe(true);
     expect(isFinite(v.veta)).toBe(true);
+  });
+});
+
+describe('venturiSpeedRatio', () => {
+  // Bernoulli: Cp = 1 − (V/V∞)²  ⟹  V/V∞ = √(1 − Cp)
+  it('freestream (Cp = 0) → ratio 1', () => {
+    expect(venturiSpeedRatio(0)).toBeCloseTo(1, 10);
+  });
+
+  it('stagnation (Cp = +1) → ratio 0', () => {
+    expect(venturiSpeedRatio(1)).toBeCloseTo(0, 10);
+  });
+
+  it('F1 diffuser-inlet suction (Cp = −1.10) → ratio √2.10 ≈ 1.4491', () => {
+    expect(venturiSpeedRatio(-1.10)).toBeCloseTo(Math.sqrt(2.10), 6);
+  });
+
+  it('GT splitter peak (Cp = −1.25) → ratio 1.5', () => {
+    expect(venturiSpeedRatio(-1.25)).toBeCloseTo(1.5, 10);
+  });
+
+  it('clamps super-stagnation Cp > 1 to 0 (no NaN)', () => {
+    expect(venturiSpeedRatio(2.5)).toBe(0);
+    expect(Number.isFinite(venturiSpeedRatio(2.5))).toBe(true);
+  });
+
+  it('monotonic: more suction ⇒ faster flow', () => {
+    expect(venturiSpeedRatio(-2.0)).toBeGreaterThan(venturiSpeedRatio(-1.0));
+    expect(venturiSpeedRatio(-1.0)).toBeGreaterThan(venturiSpeedRatio(-0.3));
   });
 });

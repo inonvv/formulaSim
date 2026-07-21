@@ -63,6 +63,10 @@ orbit.minDistance   = 2.5;
 orbit.maxDistance   = 18;
 orbit.maxPolarAngle = Math.PI * 0.52;
 
+// Debug hook for headless verify scripts (scripts/verify-*.mjs): lets
+// Playwright place the camera deterministically instead of faking drags.
+window.__fsim = { camera, orbit };
+
 /* ── Lights ───────────────────────────────────────────────────── */
 const ambientLight = new THREE.AmbientLight(AMBIENT_COLOR, AMBIENT_INTENSITY);
 scene.add(ambientLight);
