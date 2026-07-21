@@ -18,7 +18,9 @@ export const TURN_CFG = {
   GAP_MAX_S:    35,
   DUR_MIN_S:    3,     // s sweep duration at emit speed (uniform)
   DUR_MAX_S:    4,
-  MAX_YAW_RATE: 0.14,  // rad/s peak (≈8°/s) — total sweep 12–16°
+  MAX_YAW_RATE: 0.30,  // rad/s peak (≈17°/s) — total sweep 50–70°; at 280 km/h
+                       // R ≈ 259 m → ~7.7° visible bend over the 35 m road
+                       // horizon (0.14 gave 3.6° — turns read as "nothing")
   MIN_RADIUS:   20,    // m — curvature clamp so low speeds can't hairpin
   LOOKAHEAD:    40,    // m — turn starts beyond the visible road horizon (~35 m)
   REBASE_DIST:  1000,  // m — floating-origin rebase cadence (float32 health)
@@ -225,7 +227,7 @@ export function poolIndex(k, n) {
 
 const STEER_EXAG = 3;                       // legibility ×3 (real δ < 0.5°)
 const STEER_CAP  = (8 * Math.PI) / 180;
-const ROLL_GAIN  = (4 * Math.PI) / 180;     // 4° at 1 g lateral
+const ROLL_GAIN  = (7 * Math.PI) / 180;     // 7° at 1 g lateral
 const G = 9.81;
 
 /* Front-wheel steer angle from path curvature (Ackermann δ = atan(wb·κ)). */
@@ -234,10 +236,22 @@ export function steerAngleRad(curvature, wheelbase) {
   return Math.max(-STEER_CAP, Math.min(STEER_CAP, d));
 }
 
-/* Body roll: outward lean, capped 4°. Left turn (ω>0) ⇒ right side down (−rot.z). */
+/* Body roll: outward lean, capped 7°. Left turn (ω>0) ⇒ right side down (−rot.z). */
 export function rollAngleRad(v, omega) {
   const latG = (v * omega) / G;
   return -Math.max(-1, Math.min(1, latG)) * ROLL_GAIN + 0; // +0 normalises −0
+}
+
+/* Cinematic camera bank: roll the camera about its view axis into the
+   turn, racing-game style. Linear in yaw rate, clamped at ±6° at the
+   scheduler's peak ω. Applied AFTER lookAt/orbit each frame (lookAt
+   resets orientation, so the roll must be re-applied per frame). */
+const BANK_MAX = (6 * Math.PI) / 180;
+export function cameraBankRad(omega) {
+  const n = Math.max(-1, Math.min(1, omega / TURN_CFG.MAX_YAW_RATE));
+  // +rotateZ tips the camera top toward frame-left (+y → −x), which is the
+  // lean-into pose for a LEFT turn (ω>0): horizon's left end rises in frame.
+  return n * BANK_MAX + 0;
 }
 
 /* ── Effect coupling helpers ─────────────────────────────────────── */

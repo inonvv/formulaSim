@@ -50,10 +50,38 @@ describe('TURN_CFG contract', () => {
     expect(TURN_CFG.DUR_MAX_S).toBe(4);
   });
 
-  it('turns are gentle: ω_max ≈ 8°/s, min radius 20 m, lookahead ≥ road horizon', () => {
-    expect(TURN_CFG.MAX_YAW_RATE).toBeCloseTo(0.14, 5);
+  it('turns are cinematic: ω_max ≈ 17°/s, min radius 20 m, lookahead ≥ road horizon', () => {
+    // 0.30 rad/s: at 280 km/h → R ≈ 259 m → ~7.7° of visible bend across the
+    // 35 m road horizon. The old 0.14 gave 3.6° — imperceptible on screen.
+    expect(TURN_CFG.MAX_YAW_RATE).toBeCloseTo(0.30, 5);
     expect(TURN_CFG.MIN_RADIUS).toBeGreaterThanOrEqual(20);
     expect(TURN_CFG.LOOKAHEAD).toBeGreaterThanOrEqual(36); // visible road ends ~35 m ahead
+  });
+});
+
+describe('cameraBankRad — cinematic camera roll into turns', () => {
+  it('zero at zero yaw rate; antisymmetric in ω', async () => {
+    const { cameraBankRad } = await import('../track-path.js');
+    expect(cameraBankRad(0)).toBe(0);
+    expect(cameraBankRad(0.15)).toBeCloseTo(-cameraBankRad(-0.15), 9);
+  });
+
+  it('peaks at ±6° at max yaw rate and clamps beyond it', async () => {
+    const { cameraBankRad } = await import('../track-path.js');
+    const six = (6 * Math.PI) / 180;
+    expect(Math.abs(cameraBankRad(TURN_CFG.MAX_YAW_RATE))).toBeCloseTo(six, 9);
+    expect(Math.abs(cameraBankRad(TURN_CFG.MAX_YAW_RATE * 3))).toBeCloseTo(six, 9);
+  });
+
+  it('left turn (ω>0) banks positive rotateZ (lean into the turn, chase view)', async () => {
+    const { cameraBankRad } = await import('../track-path.js');
+    expect(cameraBankRad(0.15)).toBeGreaterThan(0);
+  });
+
+  it('scales linearly inside the clamp', async () => {
+    const { cameraBankRad } = await import('../track-path.js');
+    expect(cameraBankRad(TURN_CFG.MAX_YAW_RATE / 2))
+      .toBeCloseTo(cameraBankRad(TURN_CFG.MAX_YAW_RATE) / 2, 9);
   });
 });
 
@@ -337,10 +365,11 @@ describe('Car visual helpers', () => {
     expect(steerAngleRad(-0.002, 3.6)).toBeCloseTo(-small, 9);
   });
 
-  it('rollAngleRad: left turn (ω>0) rolls right side down (negative rot.z), capped 4°', () => {
+  it('rollAngleRad: left turn (ω>0) rolls right side down (negative rot.z), capped 7°', () => {
     const roll = rollAngleRad(50, 0.14); // a_lat = 7 m/s² ≈ 0.71 g
     expect(roll).toBeLessThan(0);
-    expect(Math.abs(roll)).toBeLessThanOrEqual((4 * Math.PI) / 180 + 1e-9);
+    expect(Math.abs(roll)).toBeCloseTo(0.7136 * (7 * Math.PI) / 180, 3); // linear below 1 g
+    expect(Math.abs(rollAngleRad(80, 0.30))).toBeLessThanOrEqual((7 * Math.PI) / 180 + 1e-9); // 2.4 g clamps
     expect(rollAngleRad(50, -0.14)).toBeCloseTo(-roll, 9);
     expect(rollAngleRad(50, 0)).toBe(0);
   });

@@ -15,7 +15,7 @@ import { buildCar, getCarMeta, WHEEL_NAMES } from './cars.js';
 import { CAR_MANIFEST } from './car-manifest.js';
 import { createDebugOverlay } from './debug-overlay.js';
 import { buildTrack }      from './track.js';
-import { TrackPath, TURN_CFG, steerAngleRad, rollAngleRad } from './track-path.js';
+import { TrackPath, TURN_CFG, steerAngleRad, rollAngleRad, cameraBankRad } from './track-path.js';
 import { AirflowEffect, RainEffect } from './effects.js';
 import { CfdEffect } from './cfd-effect.js';
 import { VentEmitterSystem } from './vent-emitters.js';
@@ -65,6 +65,7 @@ orbit.maxPolarAngle = Math.PI * 0.52;
 
 // Debug hook for headless verify scripts (scripts/verify-*.mjs): lets
 // Playwright place the camera deterministically instead of faking drags.
+// trackPath is attached after construction (declared further down).
 window.__fsim = { camera, orbit };
 
 /* ── Lights ───────────────────────────────────────────────────── */
@@ -97,6 +98,7 @@ scene.add(trackGroup);
 
 /* Virtual driving path — the car is fixed, the track gets the inverse pose. */
 const trackPath = new TrackPath();
+window.__fsim.trackPath = trackPath;
 track.update(trackPath); // initial furniture placement
 
 /* ── Sky — clear bright midday ────────────────────────────────── */
@@ -154,6 +156,7 @@ const state = {
   wheels:     {},
   brakes:     {},
   camT:       0,          // camera path parameter for trackside/drone
+  camBank:    0,          // smoothed cinematic camera roll (rad)
 };
 
 /* ══════════════════════════════════════════════════════════════════
@@ -518,7 +521,7 @@ function animateCar(dt) {
     if (w) { w.rotation.order = 'YXZ'; w.rotation.y = steer; }
   }
   state.carGroup.rotation.z = rollAngleRad(mps, omega);
-  state.carGroup.rotation.y = (omega / TURN_CFG.MAX_YAW_RATE) * 0.035;
+  state.carGroup.rotation.y = (omega / TURN_CFG.MAX_YAW_RATE) * 0.07;   // nose-in yaw ≤4°
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -558,6 +561,13 @@ function animate() {
   // Camera
   CAM_CONFIGS[state.camMode].update(dt);
   if (state.camMode === 'orbit') orbit.update();
+
+  // Cinematic bank — roll into the turn AFTER lookAt/orbit set the
+  // orientation (they reset roll every frame). Smoothed ~0.35 s so the
+  // horizon eases over rather than snapping with the curvature profile.
+  const bankTarget = state.paused ? 0 : cameraBankRad(trackPath.yawRate(state.speed / 3.6));
+  state.camBank += (bankTarget - state.camBank) * Math.min(1, dt / 0.35);
+  if (state.camBank !== 0) camera.rotateZ(state.camBank);
 
   // Car animation + track motion
   if (!state.paused) animateCar(dt);
