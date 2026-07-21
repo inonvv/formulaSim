@@ -45,6 +45,19 @@ export function pressureCoeff(vxi, veta) {
 }
 
 /**
+ * Local flow speed as a fraction of freestream, from the pressure
+ * coefficient (inverse Bernoulli): Cp = 1 − (V/V∞)²  ⟹  V/V∞ = √(1 − Cp).
+ * Suction (Cp < 0) means faster-than-freestream flow — the venturi effect.
+ * Cp ≥ 1 (super-stagnation from numeric overshoot) clamps to 0.
+ *
+ * @param {number} cp
+ * @returns {number} V/V∞ ≥ 0
+ */
+export function venturiSpeedRatio(cp) {
+  return Math.sqrt(Math.max(0, 1 - cp));
+}
+
+/**
  * Map a pressure coefficient in [−3, +1] to an RGB colour.
  * +1 (stagnation) → red
  *  0 (freestream)  → green

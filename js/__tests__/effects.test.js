@@ -170,6 +170,8 @@ vi.mock('../airflow-core.js', () => ({
   cpToColor:           () => ({ r: 0.5, g: 0.5, b: 0.5 }),
   vortexVelocity:      () => ({ vxi: 0.1, veta: 0.2 }),
   sideViewVelocity:    () => ({ veta: 1, vy: 0 }),
+  sumVelocity:         (xi, eta, baseFn) => baseFn(xi, eta),
+  venturiSpeedRatio:   cp => Math.sqrt(Math.max(0, 1 - cp)),
   // Return a multi-vertex path so ribbon-line rendering (needs ≥2 vertices)
   // can exercise the update loop in tests.
   traceStreamlinePath: (seedXi, seedEta) => {
@@ -306,7 +308,7 @@ describe('AirflowEffect', () => {
     expect(airflow._halfH).toBeCloseTo(0.65, 3);
   });
 
-  it('ribbon model: every seed is group "ribbon" (no anchor-clustered groups)', async () => {
+  it('ribbon model: every seed is group "ribbon" or "underfloor" (no anchor-clustered groups)', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
     airflow.setCarType('F1', { anchors: {
@@ -316,10 +318,10 @@ describe('AirflowEffect', () => {
       sidepodTop: { x: 0, y: 0.28,  z:  0.0 },
       floor:      { x: 0, y: 0.014, z:  0.129 },
     } });
-    for (const s of airflow._seeds) expect(s.group).toBe('ribbon');
+    for (const s of airflow._seeds) expect(['ribbon', 'underfloor']).toContain(s.group);
   });
 
-  it('ribbon model: 10 heights × 7 xiLanes = 70 seeds on F1 + McLaren measure', async () => {
+  it('ribbon model: 9 heights × 7 xiLanes + 5 underfloor lanes = 68 seeds on F1 + McLaren measure', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
     airflow.setCarType('F1', { anchors: {
@@ -329,7 +331,9 @@ describe('AirflowEffect', () => {
       sidepodTop: { x: 0, y: 0.28,  z:  0.0 },
       floor:      { x: 0, y: 0.014, z:  0.129 },
     } });
-    expect(airflow._seeds.length).toBe(70);
+    expect(airflow._seeds.length).toBe(68);
+    expect(airflow._seeds.filter(s => s.group === 'ribbon').length).toBe(63);
+    expect(airflow._seeds.filter(s => s.group === 'underfloor').length).toBe(5);
   });
 
   it('ribbon model: no seed belongs to a banned generic or anchor-clustered group', async () => {
@@ -353,7 +357,7 @@ describe('AirflowEffect', () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
     airflow.setCarType('F1');
-    const xis = [...new Set(airflow._seeds.map(s => s.seedXi))].sort((a, b) => a - b);
+    const xis = [...new Set(airflow._seeds.filter(s => s.group === 'ribbon').map(s => s.seedXi))].sort((a, b) => a - b);
     expect(xis.length).toBe(7);
     expect(xis[0]).toBeCloseTo(-1.40, 6);
     expect(xis[1]).toBeCloseTo(-0.90, 6);
@@ -380,12 +384,13 @@ describe('AirflowEffect', () => {
     expect(maxY).toBeGreaterThan(haloY + 0.30);  // above halo
   });
 
-  it('ribbon model: every seedEta is within ±0.1 of -8 (parallel upstream seeding)', async () => {
+  it('ribbon model: fog seeds at -8; underfloor seeds at -2.2 (short venturi lead-in)', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
     airflow.setCarType('F1');
     for (const s of airflow._seeds) {
-      expect(Math.abs(s.seedEta + 8)).toBeLessThanOrEqual(0.1);
+      const expected = s.group === 'underfloor' ? -2.2 : -8;
+      expect(Math.abs(s.seedEta - expected)).toBeLessThanOrEqual(0.1);
     }
   });
 
@@ -618,10 +623,12 @@ describe('AirflowEffect — ribbon streamlines', () => {
     expect(airflow._smokeJx).toBeUndefined();
   });
 
-  it('3. each ribbon has line + inner halo + outer halo materials with additive blending', async () => {
+  it('3. each fog ribbon has line + inner halo + outer halo materials with additive blending', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
     for (const R of airflow._ribbonLines) {
+      // Underfloor venturi streaks are deliberately crisp — no fog halos.
+      if (airflow._seeds[R.seedIdx].group === 'underfloor') continue;
       expect(R.lineMat.vertexColors).toBe(true);
       expect(R.lineMat.transparent).toBe(true);
       expect(R.lineMat.blending).toBe(2);   // AdditiveBlending
@@ -679,6 +686,21 @@ describe('AirflowEffect — ribbon streamlines', () => {
     expect(nonZero).toBeGreaterThan(0);
   });
 
+  it('6b. halo opacity stays under the side-view stacking budget at max speed', async () => {
+    // From a low side angle all 7 xi-lanes project onto the same pixels —
+    // additive halos multiply ×7. Caps keep the stack from washing to white.
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setVisible(true);
+    airflow.setSpeed(350);   // speedFactor 1 — worst case
+    airflow.update(0.016, 0);
+    for (const R of airflow._ribbonLines) {
+      if (airflow._seeds[R.seedIdx].group === 'underfloor') continue;
+      expect(R.haloMat.opacity).toBeLessThanOrEqual(0.30);
+      expect(R.outerHaloMat.opacity).toBeLessThanOrEqual(0.12 + 1e-9);
+    }
+  });
+
   it('7. puff phase advances with dt (flow animation is live)', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
@@ -709,3 +731,46 @@ describe('AirflowEffect — ribbon streamlines', () => {
   });
 });
 
+
+describe('fog envelope — crisp entry, fog develops over the body', () => {
+  it('fogEnvelope: ≈0.05 far upstream, 1.0 from the cockpit rearward, monotonic', async () => {
+    const { fogEnvelope } = await import('../effects.js');
+    expect(fogEnvelope(-8)).toBeCloseTo(0.05, 6);
+    expect(fogEnvelope(-1.1)).toBeCloseTo(0.05, 6);
+    expect(fogEnvelope(-0.5)).toBeCloseTo(0.525, 6);  // smoothstep midpoint
+    expect(fogEnvelope(0.1)).toBeCloseTo(1.0, 6);
+    expect(fogEnvelope(2)).toBeCloseTo(1.0, 6);
+    let prev = -Infinity;
+    for (let eta = -3; eta <= 1; eta += 0.1) {
+      const v = fogEnvelope(eta);
+      expect(v).toBeGreaterThanOrEqual(prev - 1e-9);
+      prev = v;
+    }
+  });
+
+  it('fog ribbons carry a separate halo color buffer scaled by fogEnvelope(eta)', async () => {
+    const { AirflowEffect, fogEnvelope } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1');
+    airflow.setVisible(true);
+    airflow.setSpeed(280);
+    airflow.update(0.016, 0);
+    const R = airflow._ribbonLines.find(r => airflow._seeds[r.seedIdx].group === 'ribbon');
+    const path = airflow._paths[R.seedIdx];
+    expect(R.haloColors).not.toBe(R.colors);
+    // Mocked paths run eta −8 → −0.5: upstream vertex ≈ 0.12, last ≈ 0.56.
+    const vLast = path.length - 1;
+    expect(R.haloColors[1] / R.colors[1]).toBeCloseTo(fogEnvelope(path[0].eta), 4);
+    expect(R.haloColors[vLast * 3 + 1] / R.colors[vLast * 3 + 1])
+      .toBeCloseTo(fogEnvelope(path[vLast].eta), 4);
+    expect(R.haloColors[1] / R.colors[1]).toBeLessThan(0.2);
+  });
+
+  it('underfloor ribbons (no halos) have no halo color buffer', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1');
+    const R = airflow._ribbonLines.find(r => airflow._seeds[r.seedIdx].group === 'underfloor');
+    expect(R.haloColors).toBeNull();
+  });
+});
