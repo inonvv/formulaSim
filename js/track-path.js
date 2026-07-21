@@ -28,6 +28,18 @@ export const TURN_CFG = {
 
 const KNOT_DS = 0.5;   // m — pose integration grid
 
+/* Signature corner — a real F1 medium-speed sweeper with FIXED geometry
+ * (real corners don't scale with your speed; yaw rate follows from v·κ):
+ * R 85 m, 180 m constant-radius hold (Δψ = 180/85 rad = 121.3°), 12 m
+ * linear clothoid ramps in/out. At 180 km/h: ω = 0.588 rad/s = 33.7°/s,
+ * 3.0 g flat. Emitted every EVERY_NTH scheduled turn. */
+export const REAL_CORNER = {
+  RADIUS:    85,
+  HOLD:      180,
+  RAMP:      12,
+  EVERY_NTH: 3,
+};
+
 export class TrackPath {
   constructor(rng = Math.random) {
     this._rng = rng;
@@ -50,6 +62,14 @@ export class TrackPath {
   curvatureAt(s) {
     for (const t of this.turns) {
       if (s > t.s0 && s < t.s1) {
+        if (t.shape === 'real') {
+          // Trapezoid: linear clothoid ramp → constant 1/R hold → ramp out.
+          const ds = s - t.s0;
+          const { RAMP } = REAL_CORNER;
+          if (ds < RAMP) return t.kMax * (ds / RAMP);
+          if (s > t.s1 - RAMP) return t.kMax * ((t.s1 - s) / RAMP);
+          return t.kMax;
+        }
         const u = (s - t.s0) / (t.s1 - t.s0);
         const sn = Math.sin(Math.PI * u);
         return t.kMax * sn * sn;
@@ -63,6 +83,16 @@ export class TrackPath {
     const kUnclamped = TURN_CFG.MAX_YAW_RATE / Math.max(vEmit, 1e-6);
     const kMax = dir * Math.min(kUnclamped, 1 / TURN_CFG.MIN_RADIUS);
     this.turns.push({ s0, s1: s0 + L, kMax, dir, vEmit, emitS: this._car.s });
+  }
+
+  /* The signature corner: fixed real-world geometry, independent of speed. */
+  _emitRealCorner({ s0, dir, vEmit }) {
+    const { RADIUS, HOLD, RAMP } = REAL_CORNER;
+    this.turns.push({
+      s0, s1: s0 + HOLD + 2 * RAMP,
+      kMax: dir / RADIUS, dir, vEmit,
+      emitS: this._car.s, shape: 'real',
+    });
   }
 
   /* Extend the forward knot cache up to sMax (midpoint rule per step). */
@@ -137,7 +167,12 @@ export class TrackPath {
       const s0 = Math.max(genEnd, this._car.s + TURN_CFG.LOOKAHEAD);
       const dur = this._uniform(TURN_CFG.DUR_MIN_S, TURN_CFG.DUR_MAX_S);
       const dir = this._rng() < 0.5 ? 1 : -1;
-      this._emitTurn({ s0, L: dur * v, dir, vEmit: v });
+      this._turnCount = (this._turnCount ?? 0) + 1;
+      if (this._turnCount % REAL_CORNER.EVERY_NTH === 0) {
+        this._emitRealCorner({ s0, dir, vEmit: v });
+      } else {
+        this._emitTurn({ s0, L: dur * v, dir, vEmit: v });
+      }
       this._gapTimer = 0;
       this._nextGap = this._uniform(TURN_CFG.GAP_MIN_S, TURN_CFG.GAP_MAX_S);
     }

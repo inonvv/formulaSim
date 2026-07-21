@@ -54,6 +54,21 @@ const fastForwardToTurn = () => page.evaluate(() => {
   return null;
 });
 
+// Fast-forward into the REAL_CORNER's constant-radius hold (shape 'real',
+// |κ| = 1/85) — the signature R 85 m sweeper emitted every 3rd turn.
+const fastForwardToRealCorner = () => page.evaluate(() => {
+  const tp = window.__fsim.trackPath;
+  const v = 77.8;
+  for (let i = 0; i < 1200; i++) {                     // ≤600 sim-seconds
+    for (let j = 0; j < 10; j++) tp.update(0.05, v);
+    tp.rebaseIfNeeded();
+    const s = tp.pose.s;
+    const t = tp.turns.find(t => t.shape === 'real' && s > t.s0 + 12 && s < t.s1 - 12);
+    if (t) return tp.curvatureAt(s);
+  }
+  return null;
+});
+
 // Straight-road reference first.
 await page.screenshot({ path: `${OUT}/t0-straight-chase.png` });
 
@@ -63,6 +78,15 @@ for (let shot = 1; shot <= 2; shot++) {
   console.log(`turn shot ${shot}: curvature ${k.toFixed(5)} (${k > 0 ? 'LEFT' : 'RIGHT'})`);
   await page.waitForTimeout(1500);                     // let rows recycle + bank settle
   await page.screenshot({ path: `${OUT}/t${shot}-turn-chase.png` });
+}
+
+const kr = await fastForwardToRealCorner();
+if (kr === null) {
+  console.log('REAL corner not reached');
+} else {
+  console.log(`REAL corner: curvature ${kr.toFixed(5)} = R ${(1 / Math.abs(kr)).toFixed(1)} m (${kr > 0 ? 'LEFT' : 'RIGHT'})`);
+  await page.waitForTimeout(1500);
+  await page.screenshot({ path: `${OUT}/t3-real-corner-chase.png` });
 }
 
 await browser.close();

@@ -59,6 +59,64 @@ describe('TURN_CFG contract', () => {
   });
 });
 
+describe('REAL_CORNER — signature R85 sweeper every Nth turn', () => {
+  // Deterministic LCG so the schedule is reproducible.
+  const lcg = (seed) => () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32;
+
+  async function pathWithTurns(n) {
+    const { TrackPath } = await import('../track-path.js');
+    const tp = new TrackPath(lcg(42));
+    while (tp.turns.length < n) tp.update(0.05, 50);
+    return tp;
+  }
+
+  it('spec constants: R 85 m, 180 m constant-radius hold, 12 m clothoid ramps', async () => {
+    const { REAL_CORNER } = await import('../track-path.js');
+    expect(REAL_CORNER.RADIUS).toBe(85);
+    expect(REAL_CORNER.HOLD).toBe(180);
+    expect(REAL_CORNER.RAMP).toBe(12);
+    expect(REAL_CORNER.EVERY_NTH).toBe(3);
+  });
+
+  it('every 3rd scheduled turn is the real corner; others stay speed-scaled sweeps', async () => {
+    const { REAL_CORNER } = await import('../track-path.js');
+    const tp = await pathWithTurns(6);
+    expect(tp.turns[2].shape).toBe('real');
+    expect(tp.turns[5].shape).toBe('real');
+    for (const i of [0, 1, 3, 4]) expect(tp.turns[i].shape).not.toBe('real');
+    const real = tp.turns[2];
+    expect(real.s1 - real.s0).toBeCloseTo(REAL_CORNER.HOLD + 2 * REAL_CORNER.RAMP, 9);
+  });
+
+  it('trapezoidal curvature: linear ramp to exactly 1/85, constant hold, ramp out', async () => {
+    const tp = await pathWithTurns(3);
+    const t = tp.turns[2];
+    const k85 = 1 / 85;
+    expect(Math.abs(tp.curvatureAt(t.s0 + 6))).toBeCloseTo(k85 / 2, 9);      // mid-ramp
+    expect(Math.abs(tp.curvatureAt(t.s0 + 12))).toBeCloseTo(k85, 9);         // hold start
+    expect(Math.abs(tp.curvatureAt((t.s0 + t.s1) / 2))).toBeCloseTo(k85, 9); // mid-corner
+    expect(Math.abs(tp.curvatureAt(t.s1 - 6))).toBeCloseTo(k85 / 2, 9);      // ramp out
+    expect(tp.curvatureAt(t.s0 - 1)).toBe(0);
+    expect(tp.curvatureAt(t.s1 + 1)).toBe(0);
+  });
+
+  it('heading change through the hold is 180/85 rad = 121.3° (spec)', async () => {
+    const tp = await pathWithTurns(3);
+    const t = tp.turns[2];
+    let dTheta = 0;
+    for (let s = t.s0 + 12; s < t.s1 - 12; s += 0.01) dTheta += tp.curvatureAt(s) * 0.01;
+    expect(Math.abs(dTheta)).toBeCloseTo(180 / 85, 3);                       // 2.1176 rad
+    expect((Math.abs(dTheta) * 180) / Math.PI).toBeCloseTo(121.3, 1);
+  });
+
+  it('at 180 km/h the mid-corner yaw rate is the spec 0.588 rad/s = 33.7°/s', async () => {
+    const tp = await pathWithTurns(3);
+    const t = tp.turns[2];
+    const v = 50; // 180 km/h
+    expect(Math.abs(v * tp.curvatureAt((t.s0 + t.s1) / 2))).toBeCloseTo(50 / 85, 9);
+  });
+});
+
 describe('cameraBankRad — cinematic camera roll into turns', () => {
   it('zero at zero yaw rate; antisymmetric in ω', async () => {
     const { cameraBankRad } = await import('../track-path.js');

@@ -14,7 +14,7 @@ import { OutputPass }      from 'three/addons/postprocessing/OutputPass.js';
 import { buildCar, getCarMeta, WHEEL_NAMES } from './cars.js';
 import { CAR_MANIFEST } from './car-manifest.js';
 import { createDebugOverlay } from './debug-overlay.js';
-import { buildTrack }      from './track.js';
+import { buildTrack, buildSkyline } from './track.js';
 import { TrackPath, TURN_CFG, steerAngleRad, rollAngleRad, cameraBankRad } from './track-path.js';
 import { AirflowEffect, RainEffect } from './effects.js';
 import { CfdEffect } from './cfd-effect.js';
@@ -95,6 +95,10 @@ scene.add(rimLight);
 const track = buildTrack();
 const trackGroup = track.group;
 scene.add(trackGroup);
+
+// Horizon panorama: yaws with the world during turns, never translates.
+const skyline = buildSkyline();
+scene.add(skyline.group);
 
 /* Virtual driving path — the car is fixed, the track gets the inverse pose. */
 const trackPath = new TrackPath();
@@ -521,7 +525,10 @@ function animateCar(dt) {
     if (w) { w.rotation.order = 'YXZ'; w.rotation.y = steer; }
   }
   state.carGroup.rotation.z = rollAngleRad(mps, omega);
-  state.carGroup.rotation.y = (omega / TURN_CFG.MAX_YAW_RATE) * 0.07;   // nose-in yaw ≤4°
+  // Nose-in yaw ≤4° — clamp the ratio: the REAL_CORNER's fixed R 85 geometry
+  // can push ω to ~3× MAX_YAW_RATE at top speed.
+  const yawRatio = Math.max(-1, Math.min(1, omega / TURN_CFG.MAX_YAW_RATE));
+  state.carGroup.rotation.y = yawRatio * 0.07;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -539,6 +546,7 @@ function updateTrack(dt) {
   const w = trackPath.worldTransform();
   trackGroup.rotation.y = w.rotY;
   trackGroup.position.set(w.x, 0, w.z);
+  skyline.group.rotation.y = w.rotY;   // horizon yaws with the turn, stays centred
 
   // Recycle furniture rows through the sliding window.
   track.update(trackPath);
@@ -576,7 +584,10 @@ function animate() {
   // Effects
   if (!state.paused) {
     // Turn coupling: rain/spray get real centrifugal accel, ribbons drift.
-    const turnOmega = trackPath.yawRate(state.speed / 3.6);
+    // Clamped ±0.6 rad/s: the drift gains were tuned near MAX_YAW_RATE, and
+    // the REAL_CORNER at top speed reaches ~0.9 — unclamped, ribbons sweep
+    // metres sideways and read as a glitch.
+    const turnOmega = Math.max(-0.6, Math.min(0.6, trackPath.yawRate(state.speed / 3.6)));
     airflow.setTurnState?.(turnOmega, state.speed / 3.6);
     rain.setTurnState?.(turnOmega, state.speed / 3.6);
     try { airflow.update(dt, state.time); } catch (e) { console.error('[airflow.update]', e); }

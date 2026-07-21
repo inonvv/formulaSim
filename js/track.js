@@ -18,8 +18,10 @@ import {
 } from './track-path.js';
 
 const ROAD_W      = 30;     // full ground width (m)
+const GRASS_W     = 160;    // grass apron width (m) — fills the view to the sides
 const RIBBON_DS   = 2;      // ground ribbon row spacing (m)
 const SURFACE_Y   = -0.34;
+const GRASS_Y     = SURFACE_Y - 0.04;   // under the asphalt, no z-fight
 
 function makeAsphaltTexture() {
   const canvas = document.createElement('canvas');
@@ -58,8 +60,120 @@ function makeAsphaltTexture() {
   return tex;
 }
 
-/* ── Ground ribbon — path-following asphalt strip ─────────────────── */
-function buildGroundRibbon(groundTex) {
+function makeGrassTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width  = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+
+  // Mid-green base
+  ctx.fillStyle = '#2e6b2a';
+  ctx.fillRect(0, 0, 512, 512);
+
+  // Mottled patches — mowing/wear variation
+  for (let i = 0; i < 260; i++) {
+    const x = Math.random() * 512, y = Math.random() * 512;
+    const r = Math.random() * 26 + 8;
+    const g = Math.floor(Math.random() * 45 + 85);
+    ctx.fillStyle = `rgba(${Math.floor(g * 0.42)},${g},${Math.floor(g * 0.3)},0.35)`;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Fine blade speckle
+  for (let i = 0; i < 7000; i++) {
+    const x = Math.random() * 512, y = Math.random() * 512;
+    const g = Math.floor(Math.random() * 70 + 75);
+    ctx.fillStyle = `rgb(${Math.floor(g * 0.45)},${g},${Math.floor(g * 0.32)})`;
+    ctx.fillRect(x, y, 1.2, Math.random() * 3 + 1);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+/* ── Skyline — distant horizon panorama that meets the grass ─────── *
+ * A ground disc (hazy distant grass) fills the floor from the grass
+ * apron out to a panorama cylinder: treeline + hill silhouettes over a
+ * sky gradient that tops out at the scene background colour. Distant
+ * scenery YAWS with the world during turns but never translates, so the
+ * group is added to the SCENE (not trackGroup) and main.js copies only
+ * the world rotation onto it each frame. */
+const SKYLINE_R = 350;   // m — horizon ring radius
+const SKYLINE_H = 90;    // m — panorama height (sky gradient blends out on top)
+
+function makeSkylineTexture() {
+  const W = 2048, H = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  // Sky: background blue at top → pale haze at the horizon line (62%).
+  const sky = ctx.createLinearGradient(0, 0, 0, H * 0.66);
+  sky.addColorStop(0,    '#87ceeb');   // = BACKGROUND_COLOR, seamless blend up
+  sky.addColorStop(0.75, '#b8dcec');
+  sky.addColorStop(1,    '#d8e9e4');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, H * 0.66);
+
+  // Silhouette bands — sums of integer-cycle sinusoids so the 360°
+  // panorama wraps with no seam. Far hills first (pale), treeline after.
+  const bands = [
+    { base: 0.630, amps: [[3, 0.030], [7, 0.014], [11, 0.008]], phase: 1.7, color: '#9dbba8' },
+    { base: 0.680, amps: [[5, 0.026], [9, 0.016], [17, 0.007]], phase: 4.2, color: '#587f58' },
+    { base: 0.725, amps: [[8, 0.020], [13, 0.012], [23, 0.006]], phase: 0.6, color: '#3d603c' },
+  ];
+  for (const b of bands) {
+    ctx.fillStyle = b.color;
+    ctx.beginPath();
+    ctx.moveTo(0, H);
+    for (let x = 0; x <= W; x += 4) {
+      let y = b.base;
+      for (const [k, a] of b.amps) y -= a * Math.sin((2 * Math.PI * k * x) / W + b.phase * k);
+      ctx.lineTo(x, y * H);
+    }
+    ctx.lineTo(W, H);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Base: darker green grading to the ground-disc colour at the bottom
+  // edge so the cylinder foot melts into the floor.
+  const base = ctx.createLinearGradient(0, H * 0.80, 0, H);
+  base.addColorStop(0, 'rgba(62,96,60,0)');
+  base.addColorStop(1, '#4a7a40');
+  ctx.fillStyle = base;
+  ctx.fillRect(0, H * 0.80, W, H * 0.20);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  return tex;
+}
+
+export function buildSkyline() {
+  const group = new THREE.Group();
+  group.name = 'skyline';
+
+  // Hazy distant-grass floor out to the horizon ring.
+  const discGeo = new THREE.CircleGeometry(SKYLINE_R + 40, 48);
+  discGeo.rotateX(-Math.PI / 2);
+  const disc = new THREE.Mesh(discGeo, new THREE.MeshBasicMaterial({ color: 0x4a7a40 }));
+  disc.position.y = GRASS_Y - 0.06;
+  group.add(disc);
+
+  const cylGeo = new THREE.CylinderGeometry(SKYLINE_R, SKYLINE_R, SKYLINE_H, 64, 1, true);
+  const cylMat = new THREE.MeshBasicMaterial({ map: makeSkylineTexture(), side: THREE.BackSide });
+  const cyl = new THREE.Mesh(cylGeo, cylMat);
+  cyl.position.y = SKYLINE_H / 2 + GRASS_Y - 0.1;
+  group.add(cyl);
+
+  return { group };
+}
+
+/* ── Ground ribbon — path-following textured strip (asphalt or grass) ── */
+function buildGroundRibbon(groundTex, width = ROAD_W, y = SURFACE_Y, uRepeat = 18) {
   const rows = poolSize(RIBBON_DS);            // fixed vertex count
   const positions = new Float32Array(rows * 2 * 3);
   const uvs       = new Float32Array(rows * 2 * 2);
@@ -88,16 +202,16 @@ function buildGroundRibbon(groundTex) {
     for (let r = 0; r < rows; r++) {
       const k = Math.min(kMin + r, kMax);     // tail rows degenerate on kMax
       const s = k * RIBBON_DS;
-      const L = rowPose(path, s, -ROAD_W / 2);
-      const R = rowPose(path, s,  ROAD_W / 2);
+      const L = rowPose(path, s, -width / 2);
+      const R = rowPose(path, s,  width / 2);
       const i = r * 2 * 3;
-      positions[i]     = L.x; positions[i + 1] = SURFACE_Y; positions[i + 2] = L.z;
-      positions[i + 3] = R.x; positions[i + 4] = SURFACE_Y; positions[i + 5] = R.z;
+      positions[i]     = L.x; positions[i + 1] = y; positions[i + 2] = L.z;
+      positions[i + 3] = R.x; positions[i + 4] = y; positions[i + 5] = R.z;
       const j = r * 2 * 2;
       // matches the old PlaneGeometry(30,70) + repeat(18,36): one tile ≈ 1.67×1.94 m
       const v = s / (70 / 36);
       uvs[j] = 0;  uvs[j + 1] = v;
-      uvs[j + 2] = 18; uvs[j + 3] = v;
+      uvs[j + 2] = uRepeat; uvs[j + 3] = v;
     }
     geo.attributes.position.needsUpdate = true;
     geo.attributes.uv.needsUpdate = true;
@@ -142,6 +256,12 @@ function placeRow(obj, k, spacing, lateralX, y, path) {
 export function buildTrack() {
   const grp = new THREE.Group();
   grp.name = 'track';
+
+  // Grass apron first (renders under the asphalt): same path-following
+  // ribbon, much wider, slightly lower — replaces the bare sky-bright void
+  // either side of the road. Tile density matches the asphalt (~1.67 m/tile).
+  const grass = buildGroundRibbon(makeGrassTexture(), GRASS_W, GRASS_Y, GRASS_W / (30 / 18));
+  grp.add(grass.mesh);
 
   const groundTex = makeAsphaltTexture();
   const ribbon = buildGroundRibbon(groundTex);
@@ -233,8 +353,9 @@ export function buildTrack() {
     }));
   }
 
-  /* Re-place every out-of-date row + rebuild the ground ribbon. */
+  /* Re-place every out-of-date row + rebuild the ground ribbons. */
   function update(path) {
+    grass.update(path);
     ribbon.update(path);
     for (const p of pools) p.update(path);
   }
