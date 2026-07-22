@@ -10,7 +10,7 @@ import {
   venturiSpeedRatio, cpToColor,
 } from './airflow-core.js';
 import { lerpCpProfile } from './cfd-effect.js';
-import { ribbonDrift, rainLateralAccel } from './track-path.js';
+import { bendLookup, rainLateralAccel } from './track-path.js';
 
 /* ── Phase C modifier strengths (VISUAL approximations, not CFD-calibrated) ── *
  * Each vent/wing in AirflowEffect._buildModifiers emits an entry into the
@@ -415,7 +415,8 @@ export class AirflowEffect {
     this._time         = 0;
     this._baseY        = 0;
     this._measure      = null;
-    this._turnOmega    = 0;   // car yaw rate (rad/s) while turning
+    this._turnOmega    = 0;    // car yaw rate (rad/s) while turning
+    this._pathBend     = null; // pathBendTable sample — the road's own curve
 
     this._build(getProfile('F1'), null);
     this.group.visible = false;
@@ -830,8 +831,13 @@ export class AirflowEffect {
   setSpeed(speed) { this._speed = speed; }
 
   /* Turn coupling — ribbons sweep with the apparent rotation of the air mass
-   * around the turning car frame (see ribbonDrift; ×6 legibility exaggeration). */
+   * around the turning car frame. ω is stored for future cues; the ribbon
+   * bend itself comes from setPathBend so air and road can never diverge. */
   setTurnState(omega, _v) { this._turnOmega = omega; }
+
+  /* Exact car-frame road bend (pathBendTable in track-path.js), refreshed
+     per frame by main.js. Ribbons offset by bendLookup(table, z). */
+  setPathBend(table) { this._pathBend = table; }
 
   setVisible(v) {
     this._visible = v;
@@ -932,10 +938,11 @@ export class AirflowEffect {
           wz += (g.z / mag) * lift;
         }
 
-        // Turn coupling — lateral sweep from the apparent rotation of the
-        // air mass around the car frame (~0.4 s response time scale).
-        if (this._turnOmega !== 0) {
-          wx += ribbonDrift(this._turnOmega, wz) * 0.4;
+        // Turn coupling — bend the ribbon along the ACTUAL road curve
+        // (pathBendTable), so streamlines and track stay coherent
+        // mid-corner instead of shearing by a rigid-rotation heuristic.
+        if (this._pathBend) {
+          wx += bendLookup(this._pathBend, wz);
         }
 
         positions[i * 3]     = wx;

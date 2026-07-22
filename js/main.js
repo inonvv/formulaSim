@@ -15,7 +15,7 @@ import { buildCar, getCarMeta, WHEEL_NAMES } from './cars.js';
 import { CAR_MANIFEST } from './car-manifest.js';
 import { createDebugOverlay } from './debug-overlay.js';
 import { buildTrack, buildSkyline } from './track.js';
-import { TrackPath, TURN_CFG, steerAngleRad, rollAngleRad, cameraBankRad } from './track-path.js';
+import { TrackPath, TURN_CFG, steerAngleRad, rollAngleRad, cameraBankRad, pathBendTable } from './track-path.js';
 import { AirflowEffect, RainEffect } from './effects.js';
 import { CfdEffect } from './cfd-effect.js';
 import { VentEmitterSystem } from './vent-emitters.js';
@@ -583,11 +583,12 @@ function animate() {
 
   // Effects
   if (!state.paused) {
-    // Turn coupling: rain/spray get real centrifugal accel, ribbons drift.
-    // Clamped ±0.6 rad/s: the drift gains were tuned near MAX_YAW_RATE, and
-    // the REAL_CORNER at top speed reaches ~0.9 — unclamped, ribbons sweep
-    // metres sideways and read as a glitch.
+    // Turn coupling. Ribbons bend along the EXACT road geometry (sampled
+    // fresh each frame), so airflow and track cannot diverge mid-corner.
+    // Rain keeps the ω-based centrifugal accel, clamped ±0.6 rad/s — its
+    // gains were tuned near MAX_YAW_RATE and the REAL_CORNER reaches ~0.9.
     const turnOmega = Math.max(-0.6, Math.min(0.6, trackPath.yawRate(state.speed / 3.6)));
+    airflow.setPathBend?.(pathBendTable(trackPath));
     airflow.setTurnState?.(turnOmega, state.speed / 3.6);
     rain.setTurnState?.(turnOmega, state.speed / 3.6);
     try { airflow.update(dt, state.time); } catch (e) { console.error('[airflow.update]', e); }

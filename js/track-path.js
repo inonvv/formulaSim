@@ -237,8 +237,12 @@ export function rowPose(path, s, lateralX) {
 
 /* ── Sliding furniture window (row pools) ────────────────────────── */
 
-export const WINDOW_BEHIND = 35; // m of track kept behind the car
-export const WINDOW_AHEAD  = 41; // m ahead (≥ LOOKAHEAD so bends are visible)
+export const WINDOW_BEHIND = 35;  // m of track kept behind the car
+export const WINDOW_AHEAD  = 160; // m ahead — the row-window edge must sit
+                                  // near the horizon: at 41 m the road/grass
+                                  // visibly ENDED at a border line in front
+                                  // of the car once the green floor disc
+                                  // replaced the old white void behind it
 
 /* Grid lines k·spacing inside [sCar−behind, sCar+ahead]. */
 export function rowWindow(sCar, spacing, behind = WINDOW_BEHIND, ahead = WINDOW_AHEAD) {
@@ -260,8 +264,8 @@ export function poolIndex(k, n) {
 
 /* ── Car visual helpers ──────────────────────────────────────────── */
 
-const STEER_EXAG = 3;                       // legibility ×3 (real δ < 0.5°)
-const STEER_CAP  = (8 * Math.PI) / 180;
+const STEER_EXAG = 6;                       // legibility ×6 (real δ ≈ 2.4° even in the R 85 corner)
+const STEER_CAP  = (16 * Math.PI) / 180;
 const ROLL_GAIN  = (7 * Math.PI) / 180;     // 7° at 1 g lateral
 const G = 9.81;
 
@@ -290,6 +294,36 @@ export function cameraBankRad(omega) {
 }
 
 /* ── Effect coupling helpers ─────────────────────────────────────── */
+
+/* Car-frame lateral offset of the driving path itself, sampled on a fixed
+   z grid. Streamlines of still air, seen from the car, trace the car's own
+   trajectory — so ribbons must bend along the EXACT road curve, not by a
+   rigid-rotation heuristic (the old ribbonDrift shear could never match
+   the drawn road, which the user spotted the moment the R 85 corner and
+   grass made the geometry legible). Car-frame z < 0 is ahead of the nose
+   (flow arrives from −z), so the arc offset is −z. */
+export function pathBendTable(path, zMin = -24, zMax = 12, step = 2) {
+  const s = path.pose.s;
+  const w = path.worldTransform();
+  const c = Math.cos(w.rotY), sn = Math.sin(w.rotY);
+  const dx = [];
+  for (let z = zMin; z <= zMax + 1e-9; z += step) {
+    const p = path.poseAt(s - z);
+    dx.push(c * p.x + sn * p.z + w.x);   // world transform of a track-space point, x only
+  }
+  return { zMin, step, dx };
+}
+
+/* Linear interpolation into a pathBendTable, clamped at the ends. */
+export function bendLookup(table, z) {
+  if (!table) return 0;
+  const { zMin, step, dx } = table;
+  const f = (z - zMin) / step;
+  const i = Math.max(0, Math.min(dx.length - 1, Math.floor(f)));
+  const j = Math.min(dx.length - 1, i + 1);
+  const t = Math.max(0, Math.min(1, f - i));
+  return dx[i] + (dx[j] - dx[i]) * t;
+}
 
 /* Real centrifugal pseudo-acceleration on free particles in the car frame
    (rain, spray): a = v·ω along +x (outward on a left turn). No exaggeration —

@@ -117,6 +117,53 @@ describe('REAL_CORNER — signature R85 sweeper every Nth turn', () => {
   });
 });
 
+describe('pathBendTable / bendLookup — car-frame road bend for effect coherence', () => {
+  const lcg = (seed) => () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32;
+
+  it('straight road: every sample is ~0, and z = 0 maps onto the car exactly', async () => {
+    const { TrackPath, pathBendTable } = await import('../track-path.js');
+    const tp = new TrackPath(lcg(1));
+    for (let i = 0; i < 100; i++) tp.update(0.05, 30); // < first turn gap
+    const table = pathBendTable(tp);
+    for (const dx of table.dx) expect(Math.abs(dx)).toBeLessThan(1e-6);
+  });
+
+  it('mid-hold in the REAL corner the table matches the analytic R 85 circle', async () => {
+    const { TrackPath, pathBendTable, REAL_CORNER } = await import('../track-path.js');
+    const tp = new TrackPath(lcg(42));
+    // Drive until the car sits deep enough in a real-corner hold that the
+    // whole sampled window [−24, +12] m lies inside the constant-radius arc.
+    let real = null;
+    while (!real) {
+      tp.update(0.05, 50);
+      const s = tp.pose.s;
+      real = tp.turns.find(t =>
+        t.shape === 'real' && s > t.s0 + REAL_CORNER.RAMP + 24 && s < t.s1 - REAL_CORNER.RAMP - 24) ?? null;
+    }
+    const k = real.kMax;                       // ±1/85
+    const table = pathBendTable(tp);
+    for (let i = 0; i < table.dx.length; i++) {
+      const z = table.zMin + i * table.step;
+      const expected = -(1 - Math.cos(k * z)) / k;   // cos is even: same law fore & aft
+      expect(table.dx[i]).toBeCloseTo(expected, 2);
+    }
+    // Direction: ahead of the nose (z<0) the road bends toward the turn side.
+    const iAhead = 0;                          // z = −24
+    expect(Math.sign(table.dx[iAhead])).toBe(-Math.sign(k));
+  });
+
+  it('bendLookup lerps between samples and clamps beyond the table ends', async () => {
+    const { bendLookup } = await import('../track-path.js');
+    const table = { zMin: -4, step: 2, dx: [0, 2, 6, 6, 8] };  // z: −4,−2,0,2,4
+    expect(bendLookup(table, -4)).toBe(0);
+    expect(bendLookup(table, -3)).toBeCloseTo(1, 9);   // midpoint lerp
+    expect(bendLookup(table, 1)).toBeCloseTo(6, 9);
+    expect(bendLookup(table, -40)).toBe(0);            // clamp low
+    expect(bendLookup(table, 40)).toBe(8);             // clamp high
+    expect(bendLookup(null, 3)).toBe(0);
+  });
+});
+
 describe('cameraBankRad — cinematic camera roll into turns', () => {
   it('zero at zero yaw rate; antisymmetric in ω', async () => {
     const { cameraBankRad } = await import('../track-path.js');
@@ -415,12 +462,14 @@ describe('rowWindow / poolIndex — sliding furniture window', () => {
 });
 
 describe('Car visual helpers', () => {
-  it('steerAngleRad follows Ackermann ∝ wheelbase·κ, exaggerated, capped at 8°', () => {
+  it('steerAngleRad follows Ackermann ∝ wheelbase·κ, exaggerated ×6, capped at 16°', () => {
     expect(steerAngleRad(0, 3.6)).toBe(0);
     const small = steerAngleRad(0.002, 3.6);
-    expect(small).toBeCloseTo(Math.atan(3.6 * 0.002) * 3, 4); // ×3 legibility
-    expect(steerAngleRad(0.05, 3.6)).toBeLessThanOrEqual((8 * Math.PI) / 180 + 1e-9);
+    expect(small).toBeCloseTo(Math.atan(3.6 * 0.002) * 6, 4); // ×6 legibility
+    expect(steerAngleRad(0.05, 3.6)).toBeLessThanOrEqual((16 * Math.PI) / 180 + 1e-9);
     expect(steerAngleRad(-0.002, 3.6)).toBeCloseTo(-small, 9);
+    // REAL corner (R 85): visibly steered, inside the cap.
+    expect(steerAngleRad(1 / 85, 3.6) * 180 / Math.PI).toBeCloseTo(14.6, 1);
   });
 
   it('rollAngleRad: left turn (ω>0) rolls right side down (negative rot.z), capped 7°', () => {

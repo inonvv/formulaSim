@@ -216,18 +216,27 @@ describe('RainEffect — turn coupling', () => {
   });
 });
 
-describe('AirflowEffect — turn coupling (apparent-rotation ribbon drift)', () => {
-  async function ribbonXDeltas(omega) {
+describe('AirflowEffect — turn coupling (ribbons bend along the REAL road path)', () => {
+  // Arbitrary smooth bend table — what pathBendTable(trackPath) produces live.
+  const TABLE = {
+    zMin: -24, step: 2,
+    dx: Array.from({ length: 19 }, (_, i) => {
+      const z = -24 + i * 2;
+      return -(1 - Math.cos(z / 85)) * 85;   // analytic R 85 circle, left turn
+    }),
+  };
+
+  async function ribbonXDeltas(table) {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
     airflow.setVisible(true);
     airflow.setSpeed(180);
 
-    airflow.setTurnState(0, V);
+    airflow.setPathBend(null);
     airflow.update(0.016, 0);
     const bases = airflow._ribbonLines.map(R => Float32Array.from(R.positions));
 
-    airflow.setTurnState(omega, V);
+    airflow.setPathBend(table);
     airflow.update(0.016, 0.016);
 
     const deltas = [];
@@ -240,25 +249,42 @@ describe('AirflowEffect — turn coupling (apparent-rotation ribbon drift)', () 
     return deltas;
   }
 
-  it('exposes setTurnState(omega, v)', async () => {
+  it('exposes setPathBend(table) and setTurnState(omega, v)', async () => {
     const { AirflowEffect } = await import('../effects.js');
-    expect(typeof new AirflowEffect(makeScene()).setTurnState).toBe('function');
+    const a = new AirflowEffect(makeScene());
+    expect(typeof a.setPathBend).toBe('function');
+    expect(typeof a.setTurnState).toBe('function');
   });
 
-  it('every vertex obeys the rigid apparent-rotation law dx = ribbonDrift(ω, z)·0.4', async () => {
-    const { ribbonDrift } = await import('../track-path.js');
-    const deltas = await ribbonXDeltas(OMEGA);
+  it('every vertex offsets by bendLookup(table, z) — streamlines follow the road arc', async () => {
+    const { bendLookup } = await import('../track-path.js');
+    const deltas = await ribbonXDeltas(TABLE);
     expect(deltas.length).toBeGreaterThan(100);
     let sawFar = false;
     for (const d of deltas) {
-      expect(d.dx).toBeCloseTo(ribbonDrift(OMEGA, d.z) * 0.4, 4);
+      expect(d.dx).toBeCloseTo(bendLookup(TABLE, d.z), 4);
       if (Math.abs(d.z) > 2) sawFar = true;
     }
-    expect(sawFar).toBe(true); // far vertices exist ⇒ scaling with |z| exercised
+    expect(sawFar).toBe(true); // far vertices exist ⇒ real arc curvature exercised
   });
 
-  it('ω = 0 produces zero drift (vertices identical across frames)', async () => {
-    const deltas = await ribbonXDeltas(0);
+  it('no table → zero drift (vertices identical across frames)', async () => {
+    const deltas = await ribbonXDeltas(null);
     for (const d of deltas) expect(d.dx).toBe(0);
+  });
+
+  it('setTurnState alone no longer shears ribbons — the road geometry drives the bend', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setVisible(true);
+    airflow.setSpeed(180);
+    airflow.update(0.016, 0);
+    const base = Float32Array.from(airflow._ribbonLines[0].positions);
+    airflow.setTurnState(OMEGA, V);
+    airflow.update(0.016, 0.016);
+    const now = airflow._ribbonLines[0].positions;
+    for (let i = 0; i < base.length / 3; i++) {
+      expect(now[i * 3]).toBeCloseTo(base[i * 3], 9);
+    }
   });
 });

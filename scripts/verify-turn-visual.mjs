@@ -30,6 +30,7 @@ const curvature = () => page.evaluate(() => {
 await page.goto('http://localhost:3000/', { waitUntil: 'load' });
 await page.waitForSelector('canvas');
 await page.waitForTimeout(6000);
+await page.click('#btn-airflow');                      // ribbons must bend WITH the road
 await page.click('[data-speed="280"]');
 await page.waitForTimeout(12000);                      // speed ramp
 
