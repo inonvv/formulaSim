@@ -701,20 +701,31 @@ describe('Phase 3 — tire-anchored wake emitters', () => {
 /*  Phase 4 — speed-coherent flow shape (retrace per sf bucket)     */
 /* ════════════════════════════════════════════════════════════════ */
 describe('Phase 4 — speed-coherent flow shape', () => {
-  it('P4.1 trace-time modifier strengths scale with (0.35 + 0.65·sf); base table stays unscaled', async () => {
+  it('P4.1 trace-time strengths scale with (0.35 + 0.65·sf), sinks capped at 0.07; base table stays unscaled', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
     airflow.setCarType('F1', glbF1Measure());
     airflow.setSpeed(350);   // sf 1.0
     const base = airflow.getModifiers().find(m => m.type === 'sink');
     expect(base.strength).toBeCloseTo(0.25, 6);   // CFD-facing table untouched
+    // Trace-time sink = min(strength·scale, SINK_CAPTURE_CAP 0.07): the
+    // sidepod inlet (0.25) binds the cap at every speed (0.25·0.35 > 0.07).
     const at1 = airflow._activeModifiers.find(m =>
       m.type === 'sink' && Math.abs(m.x - base.x) < 1e-9);
-    expect(at1.strength).toBeCloseTo(0.25 * (0.35 + 0.65 * 1.0), 6);
+    expect(at1.strength).toBeCloseTo(Math.min(0.25 * (0.35 + 0.65 * 1.0), 0.07), 6);
     airflow.setSpeed(70);    // sf 0.2
     const at02 = airflow._activeModifiers.find(m =>
       m.type === 'sink' && Math.abs(m.x - base.x) < 1e-9);
-    expect(at02.strength).toBeCloseTo(0.25 * (0.35 + 0.65 * 0.2), 6);
+    expect(at02.strength).toBeCloseTo(Math.min(0.25 * (0.35 + 0.65 * 0.2), 0.07), 6);
+    // Sources are NOT capped — they still scale with speed.
+    const baseSrc = airflow.getModifiers().find(m => m.type === 'source');
+    const src02 = airflow._activeModifiers.find(m =>
+      m.type === 'source' && Math.abs(m.x - baseSrc.x) < 1e-9 && Math.abs(m.e - baseSrc.e) < 1e-9);
+    expect(src02.strength).toBeCloseTo(baseSrc.strength * (0.35 + 0.65 * 0.2), 6);
+    airflow.setSpeed(350);   // sf 1.0
+    const src1 = airflow._activeModifiers.find(m =>
+      m.type === 'source' && Math.abs(m.x - baseSrc.x) < 1e-9 && Math.abs(m.e - baseSrc.e) < 1e-9);
+    expect(src1.strength).toBeCloseTo(baseSrc.strength * (0.35 + 0.65 * 1.0), 6);
     // Tire doublets stay geometric (bluff body) at every speed.
     const doublet = airflow._activeModifiers.find(m => m.type === 'doublet');
     expect(doublet.R).toBeCloseTo(0.28, 6);
@@ -969,5 +980,125 @@ describe('Phase 5 — RainEffect flow coupling', () => {
     rain.setFlowCoupling(null, null, null);
     expect(rain._flowCoupling).toBeNull();
     for (let i = 0; i < rain._dCount; i++) expect(rain._dVelX[i]).toBe(0);
+  });
+});
+
+/* ════════════════════════════════════════════════════════════════ */
+/*  Ingestion calibration — plan vents-speed-and-ingestion          */
+/*  Sink capture width (2D, v = strength/r, unit freestream) is     */
+/*  2π·strength: SIDEPOD_INLET 0.25 ⇒ 1.57 ≈ 3.5 lanes swallowed.   */
+/*  Trace-time cap 0.07 ⇒ capture 0.44 ≤ lane spacing 0.45.         */
+/* ════════════════════════════════════════════════════════════════ */
+describe('Ingestion calibration — trace-time sink cap + tail fade', () => {
+  it('T1 at sf 1.0 at most 1 pod lane per height is speed-ingested (pre-fix: 5 lower + 1 upper)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    // Termination state at rest (bucket 0). Stagnation-terminated lanes
+    // (nose impact near the centreline) exist at EVERY speed and are not
+    // ingestions — only lanes that newly vanish at speed count.
+    const restTerm = airflow._seeds.map((s, i) => {
+      if (s.band !== 'pod') return false;
+      const p = airflow._paths[i];
+      return p[p.length - 1].eta < 2.0;
+    });
+    airflow.setSpeed(350);   // sf 1.0 — resample preserves the end vertex
+    const byHeight = new Map();
+    airflow._seeds.forEach((s, i) => {
+      if (s.band !== 'pod') return;
+      const p = airflow._paths[i];
+      const term = p[p.length - 1].eta < 2.0;
+      const k = s.y.toFixed(4);
+      if (!byHeight.has(k)) byHeight.set(k, { term: 0, ingested: 0 });
+      const h = byHeight.get(k);
+      if (term) h.term += 1;
+      if (term && !restTerm[i]) h.ingested += 1;
+    });
+    expect(byHeight.size).toBe(2);   // two pod heights × 7 lanes
+    let totalIngested = 0;
+    for (const [y, h] of byHeight) {
+      console.info(`[ingestion] pod height y=${y}: ${h.term}/7 terminated before eta 2.0, ${h.ingested} speed-ingested`);
+      expect(h.ingested).toBeLessThanOrEqual(1);
+      totalIngested += h.ingested;
+    }
+    console.info(`[ingestion] total speed-ingested pod lanes at sf 1.0: ${totalIngested}/14`);
+  });
+
+  it('T2 inlet-aligned pod lane still deflects ≥ 0.05 (dimensionless) toward the inlet', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    airflow.setSpeed(350);
+    // Upper pod height (y ≈ +0.062): gated into the sidepod-inlet yBand but
+    // outside the brake-duct band — isolates the inlet's own pull.
+    const seed = airflow._seeds.find(s =>
+      s.band === 'pod' && Math.abs(s.seedXi - (-0.9)) < 1e-6 && s.y > 0);
+    expect(seed).toBeTruthy();
+    const withSinks = airflow._traceSeedPath(seed, airflow._activeModifiers);
+    const noSinks   = airflow._traceSeedPath(
+      seed, airflow._activeModifiers.filter(m => m.type !== 'sink'));
+    // Inlet at xi −0.8615 (x −0.70), eta −0.166 (z −0.40): pull toward the
+    // inlet moves the −0.9 lane in +xi. Compare against the sink-free trace
+    // so the body bulge cancels out.
+    let maxDefl = 0;
+    for (let i = 0; i < Math.min(withSinks.length, noSinks.length); i++) {
+      const eta = noSinks[i].eta;
+      if (eta < -0.8 || eta > 0.5) continue;
+      maxDefl = Math.max(maxDefl, withSinks[i].xi - noSinks[i].xi);
+    }
+    console.info(`[ingestion] inlet-aligned lane deflection at sf 1.0: ${maxDefl.toFixed(4)} (dimensionless)`);
+    expect(maxDefl).toBeGreaterThanOrEqual(0.05);
+  });
+
+  it('T3 getModifiers() output is byte-identical across speed changes (CFD guard)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    const before = JSON.stringify(airflow.getModifiers());
+    airflow.setSpeed(350);
+    expect(JSON.stringify(airflow.getModifiers())).toBe(before);
+    airflow.setSpeed(70);
+    expect(JSON.stringify(airflow.getModifiers())).toBe(before);
+    // Base sidepod-inlet sink keeps its uncapped CFD-facing strength.
+    const sink = airflow.getModifiers().find(m =>
+      m.type === 'sink' && Math.abs(m.x - (-0.70 / airflow._halfW)) < 1e-6);
+    expect(sink.strength).toBeCloseTo(0.25, 6);
+  });
+
+  it('T4 early-terminated ribbon tail fades monotonically to ≤ 0.05; full-length ribbons unchanged', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    airflow.setSpeed(350);
+    airflow.setVisible(true);
+    // Lower pod height, xi −0.45: stagnation-terminated at every bucket —
+    // a deterministic early-terminated ribbon.
+    const earlyIdx = airflow._seeds.findIndex(s =>
+      s.band === 'pod' && Math.abs(s.seedXi - (-0.45)) < 1e-6 && s.y < 0);
+    expect(earlyIdx).toBeGreaterThanOrEqual(0);
+    const earlyPath = airflow._paths[earlyIdx];
+    expect(earlyPath.length).toBeLessThan(0.95 * 200);   // genuinely truncated
+    // Full-length control: freestream reference lane (never terminates).
+    const fullIdx = airflow._seeds.findIndex(s =>
+      s.band === 'free' && Math.abs(s.seedXi - 0.45) < 1e-6);
+    expect(fullIdx).toBeGreaterThanOrEqual(0);
+    const Rearly = airflow._ribbonLines.find(r => r.seedIdx === earlyIdx);
+    const Rfull  = airflow._ribbonLines.find(r => r.seedIdx === fullIdx);
+    // Park the brightness pulse mid-line so the tail readout is pure fade
+    // (wrapped pulse distance grows monotonically toward both ends).
+    Rearly.phase = earlyPath.length / 2;
+    Rfull.phase  = airflow._paths[fullIdx].length / 2;
+    airflow.update(0.016, 0);
+    // Brightness = colors / cr (cr = 0.92 for non-underfloor ribbons).
+    const n = earlyPath.length;
+    const tail = [];
+    for (let i = n - 6; i < n; i++) tail.push(Rearly.colors[i * 3] / 0.92);
+    for (let k = 1; k < tail.length; k++) {
+      expect(tail[k]).toBeLessThanOrEqual(tail[k - 1] + 1e-6);   // monotonic fade
+    }
+    expect(tail[tail.length - 1]).toBeLessThanOrEqual(0.05);
+    // Full-length path: tail brightness stays at the baseline (no fade).
+    const m = airflow._paths[fullIdx].length;
+    expect(Rfull.colors[(m - 1) * 3] / 0.92).toBeGreaterThan(0.25);
   });
 });

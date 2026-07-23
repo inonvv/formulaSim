@@ -664,6 +664,10 @@ function animate() {
     // this, a single preset click left the overlay at the click-instant
     // speed (≈0) forever — CFD invisible in any deterministic session.
     cfd.setSpeed(state.speed);
+    // Vents too — inlet phase advance and outlet jet speed read _speed in
+    // update(); without this the vent streams freeze at the last-clicked
+    // speed while state.speed lerps toward its target.
+    vents.setSpeed(state.speed);
     airflow.setPathBend?.(pathBendTable(trackPath));
     airflow.setTurnState?.(turnOmega, state.speed / 3.6);
     rain.setTurnState?.(turnOmega, state.speed / 3.6);

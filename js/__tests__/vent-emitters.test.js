@@ -275,3 +275,43 @@ describe('VentEmitterSystem', () => {
     expect(r.dir.z).toBeCloseTo(l.dir.z, 5);
   });
 });
+
+/* ── Per-frame speed propagation (plan vents-speed-and-ingestion) ── */
+describe('VentEmitterSystem per-frame speed', () => {
+  it('V7. inlet phase advance responds to setSpeed between update calls', async () => {
+    const { VentEmitterSystem } = await import('../vent-emitters.js');
+    const ves = new VentEmitterSystem(makeScene());
+    ves.setVisible(true);
+    ves.setCarType('F1', makeMeasure());
+    let i = -1;
+    for (let k = 0; k < ves._capacity; k++) {
+      if (ves._emIdx[k] === 0) { i = k; break; }
+    }
+    expect(i).toBeGreaterThanOrEqual(0);
+
+    // advance = dt · (0.6 + speed/350 · 1.2) — read fresh each update call.
+    ves.setSpeed(0);
+    ves._phase[i] = 0;
+    ves.update(0.1);
+    expect(ves._phase[i]).toBeCloseTo(0.06, 5);
+
+    ves.setSpeed(350);
+    ves._phase[i] = 0;
+    ves.update(0.1);
+    expect(ves._phase[i]).toBeCloseTo(0.18, 5);
+  });
+
+  it('V8. main.js propagates state.speed to vents in the per-frame block (not only syncEffects)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const src = readFileSync(fileURLToPath(new URL('../main.js', import.meta.url)), 'utf8');
+    // The per-frame block runs from the cfd.setSpeed call to vents.update —
+    // without vents.setSpeed there, vent jets freeze at the last-clicked
+    // speed while state.speed lerps toward its target.
+    const start = src.indexOf('cfd.setSpeed(state.speed)');
+    const end   = src.indexOf('vents.update(dt)');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(src.slice(start, end)).toContain('vents.setSpeed(state.speed)');
+  });
+});

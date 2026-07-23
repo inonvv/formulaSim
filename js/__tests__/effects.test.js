@@ -761,11 +761,14 @@ describe('fog envelope — crisp entry, fog develops over the body', () => {
     const R = airflow._ribbonLines.find(r => airflow._seeds[r.seedIdx].group === 'ribbon');
     const path = airflow._paths[R.seedIdx];
     expect(R.haloColors).not.toBe(R.colors);
-    // Mocked paths run eta −8 → −0.5: upstream vertex ≈ 0.12, last ≈ 0.56.
-    const vLast = path.length - 1;
+    // Mocked paths run eta −8 → −0.5 and are shorter than 0.95·STEPS, so
+    // the early-termination tail fade zeroes the last 6 verts (0/0 = NaN).
+    // Probe the last vertex OUTSIDE the fade window instead — the halo
+    // relation haloColors = colors × fogEnvelope(eta) holds everywhere.
+    const vRef = path.length - 1 - 6;
     expect(R.haloColors[1] / R.colors[1]).toBeCloseTo(fogEnvelope(path[0].eta), 4);
-    expect(R.haloColors[vLast * 3 + 1] / R.colors[vLast * 3 + 1])
-      .toBeCloseTo(fogEnvelope(path[vLast].eta), 4);
+    expect(R.haloColors[vRef * 3 + 1] / R.colors[vRef * 3 + 1])
+      .toBeCloseTo(fogEnvelope(path[vRef].eta), 4);
     expect(R.haloColors[1] / R.colors[1]).toBeLessThan(0.2);
   });
 
