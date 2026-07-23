@@ -303,10 +303,24 @@ const STEER_CAP  = (16 * Math.PI) / 180;
 const ROLL_GAIN  = (7 * Math.PI) / 180;     // 7° at 1 g lateral
 const G = 9.81;
 
-/* Front-wheel steer angle from path curvature (Ackermann δ = atan(wb·κ)). */
+/* Front-wheel steer angle from path curvature (Ackermann δ = atan(wb·κ)).
+   Smooth p-norm saturation instead of a hard clamp: small angles pass
+   through untouched (deviation ∝ (d/CAP)⁸), but the approach to the cap is
+   rounded — the wheel never sits pinned dead-flat at 16° through a whole
+   sweep (which read as "stuck"), and δ stays strictly monotonic in κ. */
 export function steerAngleRad(curvature, wheelbase) {
   const d = Math.atan(wheelbase * curvature) * STEER_EXAG;
-  return Math.max(-STEER_CAP, Math.min(STEER_CAP, d));
+  const r = Math.abs(d) / STEER_CAP;
+  return d / Math.pow(1 + Math.pow(r, 8), 1 / 8);
+}
+
+/* Exponential (one-pole) smoothing toward a target angle. Time-constant
+   form is frame-rate independent: two dt/2 steps compose to one dt step
+   exactly. tau 0.22 s ⇒ ~63% of a steer step in 0.22 s — fluid wheel
+   motion without feeling laggy against the 2-4 s turn sweeps. */
+export function smoothAngle(prev, target, dt, tau = 0.22) {
+  if (!(dt > 0)) return prev;
+  return prev + (target - prev) * (1 - Math.exp(-dt / tau));
 }
 
 /* Body roll: outward lean, capped 7°. Left turn (ω>0) ⇒ right side down (−rot.z). */

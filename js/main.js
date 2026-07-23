@@ -15,7 +15,7 @@ import { buildCar, getCarMeta, WHEEL_NAMES } from './cars.js';
 import { CAR_MANIFEST } from './car-manifest.js';
 import { createDebugOverlay } from './debug-overlay.js';
 import { buildTrack, buildSkyline } from './track.js';
-import { TrackPath, TURN_CFG, steerAngleRad, rollAngleRad, cameraBankRad, pathBendTable } from './track-path.js';
+import { TrackPath, TURN_CFG, steerAngleRad, rollAngleRad, smoothAngle, cameraBankRad, pathBendTable } from './track-path.js';
 import { AirflowEffect, RainEffect } from './effects.js';
 import { CfdEffect, syncCfdLegend } from './cfd-effect.js';
 import { VentEmitterSystem } from './vent-emitters.js';
@@ -155,6 +155,9 @@ const state = {
   camMode:    'orbit',    // orbit | trackside | cockpit | drone
   activeEnvs: new Set(),  // 'airflow' | 'rain' | 'cfd'
   turnMode:   'auto',     // 'auto' | 't5' | 't10' | 'only' (TURN_MODES)
+  steerVis:   0,          // time-smoothed visual pose (smoothAngle targets)
+  rollVis:    0,
+  yawVis:     0,
   time:       0,
   carGroup:   null,
   carMeasure: null,       // group.userData.measure snapshot — consumed by effects / overlay
@@ -594,16 +597,21 @@ function animateCar(dt) {
   const mps   = speed / 3.6;
   const kappa = trackPath.curvatureAt(trackPath.pose.s);
   const omega = mps * kappa;
+  // Time-smooth the visual pose targets (steer/roll/yaw share the same
+  // curvature trapezoid — smoothing all three keeps the whole car fluid).
   const steer = steerAngleRad(kappa, state.carMeasure?.wheelbase ?? 3.6);
+  state.steerVis = smoothAngle(state.steerVis, steer, dt);
   for (const key of ['FL', 'FR', 'wFL', 'wFR']) {
     const w = state.wheels[key];
-    if (w) { w.rotation.order = 'YXZ'; w.rotation.y = steer; }
+    if (w) { w.rotation.order = 'YXZ'; w.rotation.y = state.steerVis; }
   }
-  state.carGroup.rotation.z = rollAngleRad(mps, omega);
+  state.rollVis = smoothAngle(state.rollVis, rollAngleRad(mps, omega), dt);
+  state.carGroup.rotation.z = state.rollVis;
   // Nose-in yaw ≤4° — clamp the ratio: the REAL_CORNER's fixed R 85 geometry
   // can push ω to ~3× MAX_YAW_RATE at top speed.
   const yawRatio = Math.max(-1, Math.min(1, omega / TURN_CFG.MAX_YAW_RATE));
-  state.carGroup.rotation.y = yawRatio * 0.07;
+  state.yawVis = smoothAngle(state.yawVis, yawRatio * 0.07, dt);
+  state.carGroup.rotation.y = state.yawVis;
 }
 
 /* ══════════════════════════════════════════════════════════════════

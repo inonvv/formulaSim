@@ -18,6 +18,7 @@ import {
   TrackPath,
   rowPose,
   steerAngleRad,
+  smoothAngle,
   rollAngleRad,
   rainLateralAccel,
   ribbonDrift,
@@ -534,14 +535,34 @@ describe('rowWindow / poolIndex — sliding furniture window', () => {
 });
 
 describe('Car visual helpers', () => {
-  it('steerAngleRad follows Ackermann ∝ wheelbase·κ, exaggerated ×6, capped at 16°', () => {
+  it('steerAngleRad follows Ackermann ∝ wheelbase·κ, exaggerated ×6, soft-capped at 16°', () => {
     expect(steerAngleRad(0, 3.6)).toBe(0);
     const small = steerAngleRad(0.002, 3.6);
-    expect(small).toBeCloseTo(Math.atan(3.6 * 0.002) * 6, 4); // ×6 legibility
+    expect(small).toBeCloseTo(Math.atan(3.6 * 0.002) * 6, 4); // ×6 legibility, small angles untouched
     expect(steerAngleRad(0.05, 3.6)).toBeLessThanOrEqual((16 * Math.PI) / 180 + 1e-9);
     expect(steerAngleRad(-0.002, 3.6)).toBeCloseTo(-small, 9);
-    // REAL corner (R 85): visibly steered, inside the cap.
-    expect(steerAngleRad(1 / 85, 3.6) * 180 / Math.PI).toBeCloseTo(14.6, 1);
+    // REAL corner (R 85): visibly steered, rounded knee below the cap.
+    expect(steerAngleRad(1 / 85, 3.6) * 180 / Math.PI).toBeCloseTo(13.9, 1);
+    // Soft saturation, not a flat pin: strictly monotonic through the knee —
+    // the old hard clamp returned the identical 16° for both of these.
+    expect(steerAngleRad(0.05, 3.6)).toBeGreaterThan(steerAngleRad(0.03, 3.6));
+  });
+
+  it('smoothAngle: one-pole smoothing, frame-rate independent, dt≤0 safe', () => {
+    // 63.2% of the step after exactly one time-constant.
+    const one = smoothAngle(0, 1, 0.22, 0.22);
+    expect(one).toBeCloseTo(1 - Math.exp(-1), 6);
+    // Two half-steps compose to one full step exactly (exponential form).
+    const half = smoothAngle(smoothAngle(0, 1, 0.11, 0.22), 1, 0.11, 0.22);
+    expect(half).toBeCloseTo(one, 12);
+    // dt 0 / negative / NaN leave the value untouched.
+    expect(smoothAngle(0.5, 1, 0)).toBe(0.5);
+    expect(smoothAngle(0.5, 1, -0.1)).toBe(0.5);
+    expect(smoothAngle(0.5, 1, NaN)).toBe(0.5);
+    // Converges to the target.
+    let v = 0;
+    for (let i = 0; i < 300; i++) v = smoothAngle(v, 1, 1 / 60);
+    expect(v).toBeCloseTo(1, 3);
   });
 
   it('rollAngleRad: left turn (ω>0) rolls right side down (negative rot.z), capped 7°', () => {
