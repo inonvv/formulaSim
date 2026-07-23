@@ -26,6 +26,7 @@ import { collectOccupancyMeshes } from './car-loader.js';
 import { createSwapGuard } from './swap-guard.js';
 import { EffectStub } from './effect-stub.js';
 import { gearFromSpeed, wheelRotationRate, aeroSquishFactor, rpmRatio, lerpSpeed } from './physics.js';
+import { partForHit, eduEntryFor, splitCopy } from './edu-content.js';
 import {
   BACKGROUND_COLOR, AMBIENT_COLOR, AMBIENT_INTENSITY,
   SUN_COLOR, SUN_INTENSITY, FILL_COLOR, FILL_INTENSITY,
@@ -179,6 +180,8 @@ const state = {
   turnCount:  0,          // completed-turn tally shown in the HUD
   _turnEdge:  null,       // turnEdgeCounter state {inTurn, count}
   steeringWheel: null,    // cockpit wheel group (buildSteeringWheel), steered by steerVis
+  infoMode:   false,      // P6 educational layer — part cards on hover
+  _infoTargets: [],       // cached raycast subset: occupancy meshes + wheel groups
 };
 
 // Verify-script hook: headless scripts read sim state (turn count, steering
@@ -304,7 +307,12 @@ async function spawnCar(type) {
   // (collectOccupancyMeshes — same manifest-driven list as the SDF); the
   // rectangle patches only render for procedural fallbacks.
   grp.updateMatrixWorld(true);
-  cfd.setBodySurface(collectOccupancyMeshes(grp, CAR_MANIFEST[carKey] ?? null), grp);
+  const occMeshes = collectOccupancyMeshes(grp, CAR_MANIFEST[carKey] ?? null);
+  cfd.setBodySurface(occMeshes, grp);
+  // P6: cached raycast subset for INFO-mode part hover — the manifest
+  // occupancy meshes plus the four wheel corner groups (cheap vs the
+  // GT mega-mesh's full scene graph).
+  state._infoTargets = [...occMeshes, ...Object.values(state.wheels).filter(Boolean)];
   cfd.setCarType(type, state.carMeasure);
   // Phase C: pipe the same feature-aware modifier list into CFD so the
   // pressure map sinks under inlets / low-pressure under the rear wing
@@ -405,15 +413,34 @@ function syncEffects() {
   renderer.toneMappingExposure     = w.exposure;
 }
 
-/* ── CFD hover probe: 10 Hz raycast against the overlay clones ──── */
-const probeTip = document.getElementById('cfd-probe-tip');
+/* ── Hover raycasts (shared 10 Hz listener) ──────────────────────
+   CFD probe (Cp tooltip) + P6 INFO part cards share one throttled
+   pointermove raycast. When BOTH CFD and INFO are active, the info card
+   takes precedence and the probe stays hidden. */
+const probeTip  = document.getElementById('cfd-probe-tip');
+const infoCard  = document.getElementById('info-card');
+const infoTitle = document.getElementById('info-card-title');
+const infoBody  = document.getElementById('info-card-body');
 const probeRaycaster = new THREE.Raycaster();
 const probeNdc = new THREE.Vector2();
 let probeLastT = 0;
 
+/** Part id for a raycast hit: wheel corner groups → 'wheels'; body hits →
+ *  nearest-anchor lookup on the car-local point (subtract baseY). */
+function partForHitObject(hit) {
+  const wheelSet = new Set(Object.values(state.wheels).filter(Boolean));
+  for (let o = hit.object; o; o = o.parent) {
+    if (wheelSet.has(o)) return 'wheels';
+  }
+  const baseY = state.carGroup?.userData?.baseY ?? 0;
+  const p = { x: hit.point.x, y: hit.point.y - baseY, z: hit.point.z };
+  return partForHit(p, state.carMeasure?.anchors ?? null, state.carType);
+}
+
 renderer.domElement.addEventListener('pointermove', (e) => {
-  if (!probeTip) return;
-  if (!state.activeEnvs.has('cfd')) return;          // syncEffects hides the tip
+  const infoOn = state.infoMode;
+  const cfdOn  = state.activeEnvs.has('cfd');
+  if (!infoOn && !cfdOn) return;
   const now = performance.now();
   if (now - probeLastT < 100) return;                // throttle to 10 Hz
   probeLastT = now;
@@ -423,6 +450,26 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     (e.clientY / window.innerHeight) * -2 + 1,
   );
   probeRaycaster.setFromCamera(probeNdc, camera);
+
+  if (infoOn && infoCard) {
+    probeTip?.classList.remove('show');              // card takes precedence
+    const hit = probeRaycaster.intersectObjects(state._infoTargets, true)[0];
+    const part  = hit ? partForHitObject(hit) : null;
+    const entry = part ? eduEntryFor(part, state.carType) : null;
+    if (entry) {
+      const { title, body } = splitCopy(entry);
+      infoTitle.textContent = title;
+      infoBody.textContent  = body;
+      infoCard.style.left = `${Math.min(e.clientX + 16, window.innerWidth - 260)}px`;
+      infoCard.style.top  = `${e.clientY - 12}px`;
+      infoCard.classList.add('show');
+    } else {
+      infoCard.classList.remove('show');
+    }
+    return;
+  }
+
+  if (!probeTip) return;
   const res = cfd.raycastCp?.(probeRaycaster);
   if (res) {
     probeTip.textContent = `Cp ≈ ${res.cp.toFixed(2)}`;
@@ -905,6 +952,16 @@ document.getElementById('reset-btn').addEventListener('click', () => {
   document.getElementById('turn-counter').textContent = '0';
   updateChips();
   syncEffects();
+});
+
+/* ── INFO mode toggle (P6 educational layer) ────────────────────── */
+const infoBtn = document.getElementById('info-btn');
+infoBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();          // header click collapses the panel — keep it out
+  state.infoMode = !state.infoMode;
+  infoBtn.classList.toggle('active', state.infoMode);
+  infoBtn.setAttribute('aria-pressed', String(state.infoMode));
+  if (!state.infoMode) infoCard?.classList.remove('show');
 });
 
 /* ── Panel collapse (desktop only) ─────────────────────────────── */

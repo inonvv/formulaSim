@@ -325,6 +325,41 @@ body {
   transform: translateY(0);
 }
 
+/* ─── Educational part card (INFO mode) ─────────────────────────── */
+#info-card {
+  position: fixed;
+  display: block;
+  max-width: 240px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity var(--ease), visibility var(--ease), transform var(--ease);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--panel-border);
+  background: rgba(10,10,15,0.9);
+  pointer-events: none;
+  z-index: 31;
+}
+#info-card.show {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+#info-card-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent2);
+  margin-bottom: 4px;
+}
+#info-card-body {
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: #d8dce4;
+}
+
 /* ─── Panel ──────────────────────────────────────────────────────── */
 #panel {
   position: fixed;
@@ -391,6 +426,25 @@ body {
   display: flex; align-items: center; justify-content: center;
 }
 #panel-toggle:hover { background: rgba(255,255,255,0.07); }
+
+#info-btn {
+  background: none;
+  border: 1px solid var(--panel-border);
+  color: var(--dim);
+  border-radius: 6px;
+  width: 26px; height: 26px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+  display: flex; align-items: center; justify-content: center;
+}
+#info-btn:hover { background: rgba(255,255,255,0.07); }
+#info-btn.active {
+  color: var(--accent2);
+  border-color: color-mix(in srgb, var(--accent2) 60%, transparent);
+  background: color-mix(in srgb, var(--accent2) 14%, transparent);
+}
 
 #panel-body {
   flex: 1;
