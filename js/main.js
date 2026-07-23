@@ -364,6 +364,11 @@ spawnCar('F1').catch(e => console.error('[init] spawnCar failed:', e));
 // Verify-script hook (scripts/verify-cfd-emphasis.mjs): lets Playwright
 // inspect the CFD overlay state (mesh counts, colour buffers) headlessly.
 window.__fsim.cfd = cfd;
+// P7 hooks (scripts/verify-edu-backlog.mjs): rain streak buffers (gust
+// sway), vent emitter counts (GT sidepod inlets), renderer.info (perf audit).
+window.__fsim.rain     = rain;
+window.__fsim.vents    = vents;
+window.__fsim.renderer = renderer;
 
 /**
  * Phase 5 (part-precision): wire rain to the airflow field when BOTH envs
