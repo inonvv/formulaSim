@@ -216,6 +216,31 @@ export function fogEnvelope(eta) {
 }
 
 /**
+ * Uniformly resample a traced path to exactly `n` vertices (linear interp).
+ * Used on speed-bucket retrace so the new shape fits the ribbon's existing
+ * Float32 buffers (allocated once per build).
+ */
+function _resamplePath(path, n) {
+  if (path.length === n || path.length === 0 || n <= 0) return path;
+  if (path.length === 1) return new Array(n).fill(path[0]);
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const t  = (path.length - 1) * (n === 1 ? 0 : i / (n - 1));
+    const i0 = Math.floor(t);
+    const i1 = Math.min(path.length - 1, i0 + 1);
+    const f  = t - i0;
+    const a = path[i0], b = path[i1];
+    out[i] = {
+      xi:   a.xi   + (b.xi   - a.xi)   * f,
+      eta:  a.eta  + (b.eta  - a.eta)  * f,
+      vxi:  a.vxi  + (b.vxi  - a.vxi)  * f,
+      veta: a.veta + (b.veta - a.veta) * f,
+    };
+  }
+  return out;
+}
+
+/**
  * Straight-through channel path for an underfloor seed — constant xi
  * (venturi tunnels are longitudinal), uniform eta sampling. Speed and
  * pressure are expressed per-vertex in the update loop (puff advection
@@ -565,34 +590,15 @@ export class AirflowEffect {
     // Procedural fallbacks (no measure.anchors) get an empty list ⇒ the
     // potential-flow baseline is preserved.
     this._modifiers       = this._buildModifiers(profile, this._measure);
-    // When a body-occupancy field is attached, pass it per-path with a
-    // toWorld closure that lifts the seed's Y into the lookup (xi→X, eta→Z).
-    const occ = this._occupancy || null;
-    const halfW = this._halfW, halfL = this._halfL;
-    const mods = this._modifiers;
-    this._paths = this._seeds.map(s => {
-      // Underfloor seeds run straight through the floor gap — the cylinder
-      // potential flow would stagnate/divert them at the nose (r² ≤ 1).
-      if (s.group === 'underfloor') return _traceUnderfloorPath(s.seedXi, s.seedEta, halfL);
-      const opts = {};
-      if (occ) {
-        opts.occupancy = occ;
-        opts.toWorld = (xi, eta) => ({ x: xi * halfW, y: s.y, z: eta * halfL });
-      }
-      if (mods && mods.length > 0) {
-        opts.modifiers = mods;
-        // Per-part locality (Phase 3): the seed height gates yBand-tagged
-        // modifiers; physical dims let tire doublets evaluate in real xz.
-        opts.seedY = s.y;
-        opts.halfW = halfW;
-        opts.halfL = halfL;
-      }
-      // Height-aware body: null section ⇒ default whole-car cylinder
-      // (procedural fallback), {rw:0} ⇒ no body at this height.
-      const body = this._bodyForBand(s.band);
-      if (body) opts.body = body;
-      return traceStreamlinePath(s.seedXi, s.seedEta, STEPS, STEP_SIZE, opts);
-    });
+    // Phase 4 (part-precision): halo shed-vortex pair — speed-proportional
+    // action at the halo, trace-time only (never exposed to CFD).
+    this._shedVortices    = this._buildShedVortices();
+    // Trace at the CURRENT quantized speed bucket; setSpeed retraces when
+    // the bucket changes (≤ 6 shapes, deterministic within a bucket).
+    this._tracedBucket    = this._sfBucket();
+    this._activeModifiers = this._traceModifiersFor(this._tracedBucket);
+    this._paths = this._seeds.map(s => this._traceSeedPath(s, this._activeModifiers));
+    this._traceCount      = (this._traceCount || 0) + 1;
     this._vortexDefs      = this._resolveVortexDefs(profile, this._measure);
     this._buildRibbonLines();
     this._buildVortexSpirals(this._vortexDefs);
@@ -872,6 +878,94 @@ export class AirflowEffect {
     return this._sections[band] ?? null;
   }
 
+  /** Quantized speedFactor bucket (0.2 steps ⇒ ≤ 6 flow shapes). */
+  _sfBucket() {
+    const sf = Math.min((this._speed || 0) / 350, 1);
+    return Math.min(1, Math.round(sf * 5) / 5);
+  }
+
+  /**
+   * Phase 4 (part-precision): halo shed-vortex defs — a counter-rotating
+   * pair just behind the cockpit, banded to the halo/engine-cover rows.
+   * gamma ∝ speedFactor bucket (0 at rest), applied at trace time only.
+   */
+  _buildShedVortices() {
+    const halo = this._measure?.anchors?.halo;
+    if (!halo || !Number.isFinite(halo.y) || !Number.isFinite(halo.z)) return null;
+    const e = (halo.z + 0.85) / this._halfL;
+    const yBand = [halo.y - 0.15, halo.y + 0.45];
+    return [
+      { type: 'vortex', x: -0.28 / this._halfW, e, rc: 0.12, yBand, gammaBase: 0.5, sign:  1 },
+      { type: 'vortex', x:  0.28 / this._halfW, e, rc: 0.12, yBand, gammaBase: 0.5, sign: -1 },
+    ];
+  }
+
+  /**
+   * Concrete modifier list for a speed bucket: sink/source strengths and
+   * wing-vortex gammas scale with (0.35 + 0.65·sf) — the flow picture
+   * strengthens with speed; tire doublets stay geometric (bluff bodies).
+   * The halo shed pair joins with gamma ∝ sf. The BASE table
+   * (this._modifiers / getModifiers) is never mutated — CFD keeps its
+   * regression-locked inputs.
+   */
+  _traceModifiersFor(bucket) {
+    const scale = 0.35 + 0.65 * bucket;
+    const out = (this._modifiers || []).map(m => {
+      if (m.type === 'sink' || m.type === 'source') return { ...m, strength: m.strength * scale };
+      if (m.type === 'vortex') return { ...m, gamma: m.gamma * scale };
+      return m;
+    });
+    if (bucket > 0 && this._shedVortices) {
+      for (const sv of this._shedVortices) {
+        out.push({ ...sv, gamma: sv.gammaBase * bucket * sv.sign });
+      }
+    }
+    return out;
+  }
+
+  /** Trace one seed's path with the given (speed-scaled) modifier list. */
+  _traceSeedPath(s, mods) {
+    const halfW = this._halfW, halfL = this._halfL;
+    // Underfloor seeds run straight through the floor gap — the cylinder
+    // potential flow would stagnate/divert them at the nose (r² ≤ 1).
+    if (s.group === 'underfloor') return _traceUnderfloorPath(s.seedXi, s.seedEta, halfL);
+    const opts = {};
+    if (this._occupancy) {
+      // toWorld closure lifts the seed's Y into the lookup (xi→X, eta→Z).
+      opts.occupancy = this._occupancy;
+      opts.toWorld = (xi, eta) => ({ x: xi * halfW, y: s.y, z: eta * halfL });
+    }
+    if (mods && mods.length > 0) {
+      opts.modifiers = mods;
+      // Per-part locality (Phase 3): the seed height gates yBand-tagged
+      // modifiers; physical dims let tire doublets evaluate in real xz.
+      opts.seedY = s.y;
+      opts.halfW = halfW;
+      opts.halfL = halfL;
+    }
+    // Height-aware body: null section ⇒ default whole-car cylinder
+    // (procedural fallback), {rw:0} ⇒ no body at this height.
+    const body = this._bodyForBand(s.band);
+    if (body) opts.body = body;
+    return traceStreamlinePath(s.seedXi, s.seedEta, STEPS, STEP_SIZE, opts);
+  }
+
+  /**
+   * Retrace all ribbon paths for the current bucket, resampled onto each
+   * ribbon's existing vertex count (buffers are allocated once). Underfloor
+   * paths are speed-independent by construction and are left untouched.
+   */
+  _retracePaths() {
+    this._activeModifiers = this._traceModifiersFor(this._tracedBucket);
+    for (let i = 0; i < this._seeds.length; i++) {
+      const s = this._seeds[i];
+      if (s.group === 'underfloor') continue;
+      const traced = this._traceSeedPath(s, this._activeModifiers);
+      this._paths[i] = _resamplePath(traced, this._paths[i].length);
+    }
+    this._traceCount = (this._traceCount || 0) + 1;
+  }
+
   /* ── Convert potential-flow (xi, eta) + y → world XYZ ── */
   _toWorld(xi, eta, y) {
     return new THREE.Vector3(xi * this._halfW, y, eta * this._halfL);
@@ -1092,7 +1186,19 @@ export class AirflowEffect {
     this.group.add(this._wakePoints);
   }
 
-  setSpeed(speed) { this._speed = speed; }
+  /**
+   * Store speed and retrace the flow shape when the QUANTIZED speedFactor
+   * bucket changes (Phase 4). Within a bucket this is a plain setter —
+   * zero per-frame cost.
+   */
+  setSpeed(speed) {
+    this._speed = speed;
+    const b = this._sfBucket();
+    if (this._paths && b !== this._tracedBucket) {
+      this._tracedBucket = b;
+      this._retracePaths();
+    }
+  }
 
   /* Turn coupling — ribbons sweep with the apparent rotation of the air mass
    * around the turning car frame. ω is stored for future cues; the ribbon

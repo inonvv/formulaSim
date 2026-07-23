@@ -696,3 +696,128 @@ describe('Phase 3 — tire-anchored wake emitters', () => {
     }
   });
 });
+
+/* ════════════════════════════════════════════════════════════════ */
+/*  Phase 4 — speed-coherent flow shape (retrace per sf bucket)     */
+/* ════════════════════════════════════════════════════════════════ */
+describe('Phase 4 — speed-coherent flow shape', () => {
+  it('P4.1 trace-time modifier strengths scale with (0.35 + 0.65·sf); base table stays unscaled', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    airflow.setSpeed(350);   // sf 1.0
+    const base = airflow.getModifiers().find(m => m.type === 'sink');
+    expect(base.strength).toBeCloseTo(0.25, 6);   // CFD-facing table untouched
+    const at1 = airflow._activeModifiers.find(m =>
+      m.type === 'sink' && Math.abs(m.x - base.x) < 1e-9);
+    expect(at1.strength).toBeCloseTo(0.25 * (0.35 + 0.65 * 1.0), 6);
+    airflow.setSpeed(70);    // sf 0.2
+    const at02 = airflow._activeModifiers.find(m =>
+      m.type === 'sink' && Math.abs(m.x - base.x) < 1e-9);
+    expect(at02.strength).toBeCloseTo(0.25 * (0.35 + 0.65 * 0.2), 6);
+    // Tire doublets stay geometric (bluff body) at every speed.
+    const doublet = airflow._activeModifiers.find(m => m.type === 'doublet');
+    expect(doublet.R).toBeCloseTo(0.28, 6);
+  });
+
+  it('P4.2 D6 fix: path shape differs between sf 0.2 and 1.0 near a sidepod inlet by ≥ 0.08 m (was 0)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    const podIdx = airflow._seeds.findIndex(s => s.band === 'pod' && Math.abs(s.seedXi - (-0.9)) < 1e-6);
+    expect(podIdx).toBeGreaterThanOrEqual(0);
+
+    airflow.setSpeed(70);    // sf 0.2
+    const slow = airflow._paths[podIdx].map(p => ({ xi: p.xi, eta: p.eta }));
+    airflow.setSpeed(350);   // sf 1.0
+    const fast = airflow._paths[podIdx];
+    expect(fast.length).toBe(slow.length);
+
+    // Per-vertex 2-D displacement for vertices whose slow-path z lies near
+    // the inlet. (At sf 1.0 this lane is INGESTED by the front brake duct —
+    // the strengthened sink terminates it at the duct mouth — so the shape
+    // delta near the inlet is dominated by that capture.)
+    let maxDisp = 0;
+    for (let i = 0; i < fast.length; i++) {
+      const zSlow = slow[i].eta * airflow._halfL;
+      if (Math.abs(zSlow - (-0.40)) > 1.2) continue;   // near the inlet
+      maxDisp = Math.max(maxDisp, Math.hypot(
+        (fast[i].xi - slow[i].xi) * airflow._halfW,
+        (fast[i].eta - slow[i].eta) * airflow._halfL
+      ));
+    }
+    console.info(`[part-flow] sf-shape delta near sidepod inlet: ${maxDisp.toFixed(3)} m`);
+    expect(maxDisp).toBeGreaterThanOrEqual(0.08);
+  });
+
+  it('P4.3 same speed bucket ⇒ NO retrace and identical path objects (determinism)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    airflow.setSpeed(70);    // bucket 0.2
+    const count = airflow._traceCount;
+    const ref   = airflow._paths[10];
+    airflow.setSpeed(75);    // sf 0.214 → same bucket
+    airflow.setSpeed(65);    // sf 0.186 → same bucket
+    expect(airflow._traceCount).toBe(count);
+    expect(airflow._paths[10]).toBe(ref);
+  });
+
+  it('P4.4 speed buckets quantize to 0.2 (≤ 6 shapes over the whole range)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    const buckets = new Set();
+    for (let v = 0; v <= 350; v += 5) {
+      airflow.setSpeed(v);
+      buckets.add(airflow._tracedBucket);
+    }
+    expect(buckets.size).toBeLessThanOrEqual(6);
+  });
+
+  it('P4.5 halo shed-vortex pair: gamma ∝ sf, halo band, behind the cockpit — and hidden from CFD', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    // Never in the CFD-facing table.
+    expect(airflow.getModifiers().filter(m => m.type === 'vortex').length).toBe(2);
+
+    airflow.setSpeed(350);   // sf 1.0
+    const shed1 = airflow._activeModifiers.filter(m => m.gammaBase !== undefined);
+    expect(shed1.length).toBe(2);
+    for (const sv of shed1) {
+      expect(sv.type).toBe('vortex');
+      expect(sv.e * airflow._halfL).toBeGreaterThan(0.65);        // behind the cockpit
+      expect(sv.yBand[0]).toBeLessThanOrEqual(0.373 - 0.08);      // halo underside in band
+      expect(sv.yBand[1]).toBeGreaterThanOrEqual(0.373 + 0.30);   // engine cover in band
+      expect(Math.abs(sv.gamma)).toBeCloseTo(0.5 * 1.0, 6);
+    }
+    airflow.setSpeed(140);   // sf 0.4
+    const shed04 = airflow._activeModifiers.filter(m => m.gammaBase !== undefined);
+    expect(Math.abs(shed04[0].gamma)).toBeCloseTo(0.5 * 0.4, 6);
+    // Opposite signs — a counter-rotating pair.
+    expect(Math.sign(shed04[0].gamma)).toBe(-Math.sign(shed04[1].gamma));
+  });
+
+  it('P4.6 underfloor paths are bucket-independent (venturi shape untouched by retrace)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    const ufIdx = airflow._seeds.findIndex(s => s.group === 'underfloor');
+    const before = airflow._paths[ufIdx];
+    airflow.setSpeed(350);
+    expect(airflow._paths[ufIdx]).toBe(before);
+  });
+
+  it('P4.7 retrace cost: one bucket change stays well under a frame budget', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    airflow.setSpeed(0);
+    const t0 = performance.now();
+    airflow.setSpeed(350);   // bucket 0 → 1.0, full retrace
+    const ms = performance.now() - t0;
+    console.info(`[part-flow] retrace cost: ${ms.toFixed(1)} ms`);
+    expect(ms).toBeLessThan(100);
+  });
+});

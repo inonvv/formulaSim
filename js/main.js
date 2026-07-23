@@ -588,6 +588,12 @@ function animate() {
     // Rain keeps the ω-based centrifugal accel, clamped ±0.6 rad/s — its
     // gains were tuned near MAX_YAW_RATE and the REAL_CORNER reaches ~0.9.
     const turnOmega = Math.max(-0.6, Math.min(0.6, trackPath.yawRate(state.speed / 3.6)));
+    // Per-frame speed propagation: state.speed lerps toward the target every
+    // frame, but syncEffects only fires on UI events — without this the flow
+    // picture (and the Phase-4 speed-bucket retrace) would freeze at the
+    // speed captured when the user last clicked.
+    airflow.setSpeed(state.speed);
+    rain.setSpeed(state.speed);
     airflow.setPathBend?.(pathBendTable(trackPath));
     airflow.setTurnState?.(turnOmega, state.speed / 3.6);
     rain.setTurnState?.(turnOmega, state.speed / 3.6);

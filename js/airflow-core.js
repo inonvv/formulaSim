@@ -262,10 +262,38 @@ export function traceStreamlinePath(seedXi, seedEta, steps = 200, stepSize = 0.1
       }
     }
 
+    // Analytic-body slide (plan airflow-part-precision Phase 4): strong
+    // sinks can drag a path INTO the body cylinder mid-flight; terminating
+    // there killed most ribbons at the nose. Instead project the point
+    // radially (in scaled space) just outside the surface — the ribbon
+    // hugs the body and continues downstream, matching the occupancy-slide
+    // behavior. A stalled projection (stagnation line) still terminates.
+    if (insideBody(nextXi, nextEta)) {
+      let px = nextXi, pe = nextEta;
+      if (body) {
+        const xs = px / body.rw;
+        const es = (pe - (body.etaC || 0)) / body.rl;
+        const r  = Math.hypot(xs, es) || 1e-9;
+        const s  = 1.001 / r;
+        px = xs * s * body.rw;
+        pe = es * s * body.rl + (body.etaC || 0);
+      } else {
+        const r = Math.hypot(px, pe) || 1e-9;
+        const s = 1.001 / r;
+        px *= s;
+        pe *= s;
+      }
+      // Terminate when surface progress collapses — either a stagnation
+      // line or a vent sink pinning the path against the wall (air being
+      // ingested). 0.25·step keeps genuine tangential slides alive (they
+      // retain near-full step length) while killing sub-crawl loops.
+      if (Math.hypot(px - xi, pe - eta) < stepSize * 0.25) break;
+      nextXi = px;
+      nextEta = pe;
+    }
+
     xi  = nextXi;
     eta = nextEta;
-
-    if (insideBody(xi, eta)) break;
   }
 
   return path;
@@ -439,8 +467,19 @@ export function sumVelocity(xi, eta, baseFn, modifiers = [], opts) {
  * @returns {{vx: number, vz: number}}
  */
 export function doubletVelocity(x, z, x0, z0, R = 0.28, rc = 0.08) {
-  const dx = x - x0;
-  const dz = z - z0;
+  let dx = x - x0;
+  let dz = z - z0;
+  // Solid-body interior guard: the ideal doublet's interior recirculation
+  // (reversed flow for r < R) can TRAP streamlines that get numerically
+  // pushed inside the cylinder. Tires are solid — project interior samples
+  // onto the surface along the same ray, so the interior field equals the
+  // (tangential) surface field and paths slide around instead of orbiting.
+  const rRaw = Math.sqrt(dx * dx + dz * dz);
+  if (rRaw < R && rRaw > 1e-9) {
+    const s = R / rRaw;
+    dx *= s;
+    dz *= s;
+  }
   const r2 = dx * dx + dz * dz + rc * rc;
   const r4 = r2 * r2;
   const R2 = R * R;
