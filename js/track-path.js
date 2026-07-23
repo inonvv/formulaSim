@@ -26,6 +26,18 @@ export const TURN_CFG = {
   REBASE_DIST:  1000,  // m — floating-origin rebase cadence (float32 health)
 };
 
+/* User-selectable turn frequency (TURNS control). `auto` mirrors TURN_CFG —
+ * the legacy random schedule — so the default behaviour is unchanged. Rates
+ * are nominal at driving speed: cycle length = emission-to-emission gap.
+ * `only` chains turns end-to-end (short gaps + the genEnd guard) with
+ * alternating direction so continuous cornering reads as a circuit. */
+export const TURN_MODES = {
+  auto: { gapMin: 20,  gapMax: 35,  durMin: 3, durMax: 4,   altDir: false },
+  t5:   { gapMin: 5.5, gapMax: 6.5, durMin: 3, durMax: 4,   altDir: false }, // 30/6 ≈ 5 per 30 s
+  t10:  { gapMin: 2.7, gapMax: 3.3, durMin: 2, durMax: 2.5, altDir: false }, // 30/3 ≈ 10 per 30 s
+  only: { gapMin: 2.5, gapMax: 3.0, durMin: 3, durMax: 5,   altDir: true  }, // continuous slalom
+};
+
 const KNOT_DS = 0.5;   // m — pose integration grid
 
 /* Signature corner — a real F1 medium-speed sweeper with FIXED geometry
@@ -45,6 +57,8 @@ export class TrackPath {
     this._rng = rng;
     this.turns = [];          // [{s0, s1, kMax, dir, vEmit, emitS}]
     this.epoch = 0;           // bumped on rebase — consumers must re-place rows
+    this._turnMode = 'auto';
+    this._lastDir = 0;
     this._gapTimer = 0;
     this._nextGap = this._uniform(TURN_CFG.GAP_MIN_S, TURN_CFG.GAP_MAX_S);
     // progressive integration knots from s=0: forward (s ≥ 0) and backward
@@ -55,6 +69,22 @@ export class TrackPath {
   }
 
   get pose() { return this._car; }
+
+  get turnMode() { return this._turnMode; }
+
+  /**
+   * Switch turn-frequency mode. Resamples the pending gap from the NEW
+   * range and clamps the accumulated timer so a long pending `auto` gap
+   * (up to 35 s) can't stall the new mode — next turn ≤ new gapMax away.
+   * Already-emitted geometry is immutable; only future emissions change.
+   */
+  setTurnMode(mode) {
+    if (!TURN_MODES[mode]) return;
+    this._turnMode = mode;
+    const m = TURN_MODES[mode];
+    this._nextGap = this._uniform(m.gapMin, m.gapMax);
+    if (this._gapTimer > this._nextGap) this._gapTimer = this._nextGap;
+  }
 
   _uniform(a, b) { return a + this._rng() * (b - a); }
 
@@ -164,9 +194,13 @@ export class TrackPath {
       const genEnd = this.turns.length
         ? this.turns[this.turns.length - 1].s1
         : 0;
+      const mode = TURN_MODES[this._turnMode];
       const s0 = Math.max(genEnd, this._car.s + TURN_CFG.LOOKAHEAD);
-      const dur = this._uniform(TURN_CFG.DUR_MIN_S, TURN_CFG.DUR_MAX_S);
-      const dir = this._rng() < 0.5 ? 1 : -1;
+      const dur = this._uniform(mode.durMin, mode.durMax);
+      const dir = mode.altDir && this._lastDir !== 0
+        ? -this._lastDir
+        : (this._rng() < 0.5 ? 1 : -1);
+      this._lastDir = dir;
       this._turnCount = (this._turnCount ?? 0) + 1;
       if (this._turnCount % REAL_CORNER.EVERY_NTH === 0) {
         this._emitRealCorner({ s0, dir, vEmit: v });
@@ -174,7 +208,7 @@ export class TrackPath {
         this._emitTurn({ s0, L: dur * v, dir, vEmit: v });
       }
       this._gapTimer = 0;
-      this._nextGap = this._uniform(TURN_CFG.GAP_MIN_S, TURN_CFG.GAP_MAX_S);
+      this._nextGap = this._uniform(mode.gapMin, mode.gapMax);
     }
 
     const s = this._car.s + v * dt;

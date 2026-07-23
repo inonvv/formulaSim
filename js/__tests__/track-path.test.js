@@ -14,6 +14,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   TURN_CFG,
+  TURN_MODES,
   TrackPath,
   rowPose,
   steerAngleRad,
@@ -56,6 +57,77 @@ describe('TURN_CFG contract', () => {
     expect(TURN_CFG.MAX_YAW_RATE).toBeCloseTo(0.30, 5);
     expect(TURN_CFG.MIN_RADIUS).toBeGreaterThanOrEqual(20);
     expect(TURN_CFG.LOOKAHEAD).toBeGreaterThanOrEqual(36); // visible road ends ~35 m ahead
+  });
+});
+
+describe('TURN_MODES — user-selectable turn frequency', () => {
+  it('T5: auto mode mirrors the legacy TURN_CFG schedule (default, no setter call)', () => {
+    expect(TURN_MODES.auto).toEqual({
+      gapMin: TURN_CFG.GAP_MIN_S, gapMax: TURN_CFG.GAP_MAX_S,
+      durMin: TURN_CFG.DUR_MIN_S, durMax: TURN_CFG.DUR_MAX_S,
+      altDir: false,
+    });
+  });
+
+  it('T1: t5 emits ~5 turns per 30 s — 8–12 emissions over 60 s at 180 km/h', () => {
+    const p = new TrackPath(makeRng(7));
+    p.setTurnMode('t5');
+    drive(p, 60, V);
+    expect(p.turns.length).toBeGreaterThanOrEqual(8);
+    expect(p.turns.length).toBeLessThanOrEqual(12);
+  });
+
+  it('T2: t10 emits ~10 turns per 30 s — 17–23 emissions over 60 s at 180 km/h', () => {
+    const p = new TrackPath(makeRng(7));
+    p.setTurnMode('t10');
+    drive(p, 60, V);
+    expect(p.turns.length).toBeGreaterThanOrEqual(17);
+    expect(p.turns.length).toBeLessThanOrEqual(23);
+  });
+
+  it('T3: only mode corners ≥80% of driving time after warmup, alternating direction', () => {
+    const p = new TrackPath(makeRng(3));
+    p.setTurnMode('only');
+    drive(p, 15, V); // warmup — turn chain not yet established at s=0
+    let on = 0, total = 0;
+    const dt = 1 / 60, n = Math.round(60 / dt);
+    for (let i = 0; i < n; i++) {
+      p.update(dt, V);
+      total++;
+      if (Math.abs(p.curvatureAt(p.pose.s)) > 1e-4) on++;
+    }
+    expect(on / total).toBeGreaterThanOrEqual(0.8);
+    expect(p.turns.length).toBeGreaterThan(2);
+    for (let i = 1; i < p.turns.length; i++) {
+      expect(p.turns[i].dir).toBe(-p.turns[i - 1].dir);
+    }
+  });
+
+  it('T4: switching auto → t10 mid-gap emits within the new gapMax (+1 s)', () => {
+    const p = new TrackPath(makeRng(11));
+    drive(p, 5, V); // pending auto gap is 20–35 s — no turn yet
+    expect(p.turns.length).toBe(0);
+    p.setTurnMode('t10');
+    const dt = 1 / 60;
+    let t = 0;
+    while (p.turns.length === 0 && t < TURN_MODES.t10.gapMax + 1) {
+      p.update(dt, V);
+      t += dt;
+    }
+    expect(p.turns.length).toBe(1);
+    expect(t).toBeLessThanOrEqual(TURN_MODES.t10.gapMax + 1);
+  });
+
+  it('T6: REAL_CORNER cadence (every 3rd turn) holds in t10 and only modes', () => {
+    for (const mode of ['t10', 'only']) {
+      const p = new TrackPath(makeRng(42));
+      p.setTurnMode(mode);
+      while (p.turns.length < 9) p.update(0.05, V);
+      p.turns.forEach((t, i) => {
+        if ((i + 1) % 3 === 0) expect(t.shape).toBe('real');
+        else expect(t.shape).toBeUndefined();
+      });
+    }
   });
 });
 

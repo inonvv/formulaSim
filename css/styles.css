@@ -184,6 +184,7 @@ body {
 .chip-airflow  { border-color: #5599ff; color: #88bbff; background: rgba(85,153,255,0.12); }
 .chip-rain     { border-color: #44aaff; color: #aaddff; background: rgba(68,170,255,0.12); }
 .chip-cfd      { border-color: #ff4400; color: #ff8855; background: rgba(255,68,0,0.10); }
+.chip-turns    { border-color: #ff6b00; color: #ffaa66; background: rgba(255,107,0,0.10); }
 
 @keyframes chipIn {
   from { opacity:0; transform: translateY(-6px); }
@@ -370,7 +371,7 @@ body {
   box-shadow: 0 0 12px rgba(232,19,42,0.3);
 }
 
-.cam-btn.active {
+.cam-btn.active, .turn-btn.active {
   background: rgba(255,107,0,0.2);
   border-color: var(--accent2);
   color: #fff;
