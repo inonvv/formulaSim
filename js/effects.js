@@ -1590,6 +1590,47 @@ const RAIN_POS = {
  * crown of secondary droplets. */
 const SPLASH_LIFE = 0.25;
 
+/* Shared soft-sprite mist material — round feathered points with per-particle
+ * aSize/aFade attributes (PointsMaterial size/opacity are global). Used by the
+ * splash pool, tire spray and rooster tails so all three read as the same
+ * water. `uOpacity` is a global multiplier (driven per-frame by speedFactor
+ * for spray/rooster; fixed 1.0 for splashes whose fade bakes in 0.5). */
+function _makeMistMaterial(colorHex, baseOpacity) {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uColor:   { value: new THREE.Color(colorHex) },
+      uOpacity: { value: baseOpacity },
+    },
+    vertexShader: /* glsl */ `
+      attribute float aSize;
+      attribute float aFade;
+      varying float vFade;
+      void main() {
+        vFade = aFade;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = aSize * (300.0 / -mv.z);
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uColor;
+      uniform float uOpacity;
+      varying float vFade;
+      void main() {
+        vec2 d = gl_PointCoord - vec2(0.5);
+        float r = length(d);
+        if (r > 0.5) discard;
+        float soft = smoothstep(0.5, 0.15, r);
+        gl_FragColor = vec4(uColor, uOpacity * vFade * soft);
+      }`,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+}
+
+/* Drop palette is 0xbfd8e8; spray/rooster mist sits slightly desaturated. */
+const MIST_TINT = 0xc4d8e6;
+
 export class RainEffect {
   constructor(scene) {
     this.scene = scene;
@@ -1626,32 +1667,8 @@ export class RainEffect {
     geo.setAttribute('aFade', new THREE.BufferAttribute(fades, 1));
 
     // Per-particle size/opacity needs a shader — PointsMaterial is global.
-    const mat = new THREE.ShaderMaterial({
-      uniforms: { uColor: { value: new THREE.Color(0xbfd8e8) } },
-      vertexShader: /* glsl */ `
-        attribute float aSize;
-        attribute float aFade;
-        varying float vFade;
-        void main() {
-          vFade = aFade;
-          vec4 mv = modelViewMatrix * vec4(position, 1.0);
-          gl_PointSize = aSize * (300.0 / -mv.z);
-          gl_Position = projectionMatrix * mv;
-        }`,
-      fragmentShader: /* glsl */ `
-        uniform vec3 uColor;
-        varying float vFade;
-        void main() {
-          vec2 d = gl_PointCoord - vec2(0.5);
-          float r = length(d);
-          if (r > 0.5) discard;
-          float soft = smoothstep(0.5, 0.15, r);
-          gl_FragColor = vec4(uColor, vFade * soft);
-        }`,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
+    // uOpacity 1.0 ⇒ output identical to the pre-helper splash shader.
+    const mat = _makeMistMaterial(0xbfd8e8, 1.0);
 
     this._splashPoints = new THREE.Points(geo, mat);
     this.group.add(this._splashPoints);
@@ -1757,14 +1774,20 @@ export class RainEffect {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 
-    const mat = new THREE.PointsMaterial({
-      color: 0xaaddff,
-      size: 0.06,
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
+    // Presentation-only life-driven mist: aSize 0.035 → 0.10 (expanding
+    // cloud), aFade 1 → 0. update() rewrites both every frame from
+    // _sprayLife; the fills below just make the first frame coherent.
+    const life  = new Float32Array(COUNT).fill(0).map(() => rnd(0, 1));
+    const sizes = new Float32Array(COUNT);
+    const fades = new Float32Array(COUNT);
+    for (let i = 0; i < COUNT; i++) {
+      sizes[i] = 0.035 + 0.065 * life[i];
+      fades[i] = 1 - life[i];
+    }
+    geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+    geo.setAttribute('aFade', new THREE.BufferAttribute(fades, 1));
+
+    const mat = _makeMistMaterial(MIST_TINT, 0);
 
     this.spray = new THREE.Points(geo, mat);
     this.group.add(this.spray);
@@ -1774,7 +1797,9 @@ export class RainEffect {
     this._sCount = COUNT;
     this._sMat   = mat;
     this._spawnSpray = spawnSpray;
-    this._sprayLife  = new Float32Array(COUNT).fill(0).map(() => rnd(0, 1));
+    this._sprayLife  = life;
+    this._sSize = sizes;
+    this._sFade = fades;
   }
 
   _buildRoosterTails() {
@@ -1795,14 +1820,20 @@ export class RainEffect {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 
-    const mat = new THREE.PointsMaterial({
-      color: 0xaaddff,
-      size: 0.04,
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
+    // Presentation-only plume life (ages at 1.4/s ≈ typical flight time):
+    // aSize 0.04 → 0.15 growth, aFade 1 → 0. Recycle stays authoritative on
+    // the y/z bounds — life only caps the fade (invisible until recycled).
+    const life  = new Float32Array(COUNT).fill(0).map(() => rnd(0, 1));
+    const sizes = new Float32Array(COUNT);
+    const fades = new Float32Array(COUNT);
+    for (let i = 0; i < COUNT; i++) {
+      sizes[i] = 0.04 + 0.11 * life[i];
+      fades[i] = 1 - life[i];
+    }
+    geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+    geo.setAttribute('aFade', new THREE.BufferAttribute(fades, 1));
+
+    const mat = _makeMistMaterial(MIST_TINT, 0);
 
     this._roosterPoints = new THREE.Points(geo, mat);
     this.group.add(this._roosterPoints);
@@ -1810,6 +1841,9 @@ export class RainEffect {
     this._roosterVels  = vels;
     this._roosterCount = COUNT;
     this._roosterMat   = mat;
+    this._roosterLife  = life;
+    this._roosterSize  = sizes;
+    this._roosterFade  = fades;
   }
 
   _buildWetGround() {
@@ -2018,10 +2052,18 @@ export class RainEffect {
         this._sprayLife[i] = 0;
         this._spawnSpray(i);
       }
+      // Presentation: mist expands and thins as it lives.
+      const sprayLife = Math.min(this._sprayLife[i], 1);
+      this._sSize[i] = 0.035 + 0.065 * sprayLife;
+      this._sFade[i] = 1 - sprayLife;
     }
-    this.spray.geometry.attributes.position.needsUpdate = true;
-    this._sMat.opacity = speedFactor * 0.65;
-    this._sMat.size    = 0.04 + 0.07 * speedFactor;
+    {
+      const sa = this.spray.geometry.attributes;
+      sa.position.needsUpdate = true;
+      sa.aSize.needsUpdate    = true;
+      sa.aFade.needsUpdate    = true;
+    }
+    this._sMat.uniforms.uOpacity.value = speedFactor * 0.65;
 
     this._wetMat.opacity = speedFactor * 0.40;
 
@@ -2030,13 +2072,15 @@ export class RainEffect {
 
   _updateRoosterTails(dt, speedFactor) {
     if (this._speed <= 20) {
-      this._roosterMat.opacity = 0;
+      this._roosterMat.uniforms.uOpacity.value = 0;
       return;
     }
     const rp = this._roosterPos;
     const rv = this._roosterVels;
 
     for (let i = 0; i < this._roosterCount; i++) {
+      // Presentation life — capped at 1 (fully faded until bounds recycle).
+      this._roosterLife[i] = Math.min(1, this._roosterLife[i] + dt * 1.4);
       rv[i * 3]     += this._turnALat * dt;  // centrifugal drift while turning
       rv[i * 3 + 1] -= 9.8 * dt;             // gravity
       rp[i * 3]     += rv[i * 3]     * dt;
@@ -2059,11 +2103,21 @@ export class RainEffect {
           rv[i * 3 + 1] += f.vy * 0.15;
           rv[i * 3 + 2] += f.vz * 0.15;
         }
+        this._roosterLife[i] = 0;   // fresh plume at the contact patch
       }
+      // Presentation: plume grows 0.04 → 0.15 and fades over its life.
+      const life = this._roosterLife[i];
+      this._roosterSize[i] = 0.04 + 0.11 * life;
+      this._roosterFade[i] = 1 - life;
     }
 
-    this._roosterPoints.geometry.attributes.position.needsUpdate = true;
-    this._roosterMat.opacity = speedFactor * 0.75;
+    {
+      const ra = this._roosterPoints.geometry.attributes;
+      ra.position.needsUpdate = true;
+      ra.aSize.needsUpdate    = true;
+      ra.aFade.needsUpdate    = true;
+    }
+    this._roosterMat.uniforms.uOpacity.value = speedFactor * 0.75;
   }
 
   dispose() {

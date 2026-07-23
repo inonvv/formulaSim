@@ -965,7 +965,7 @@ describe('Phase 5 — RainEffect flow coupling', () => {
     rain.setSpeed(15);
     rain.setFlowCoupling(() => ({ vx: 8, vy: 0, vz: 3 }), null, ENV);
     rain.update(0.016, 0);
-    expect(rain._roosterMat.opacity).toBe(0);
+    expect(rain._roosterMat.uniforms.uOpacity.value).toBe(0);
   });
 
   it('P5.10 setFlowCoupling(null) fully disarms and zeroes coupled velocities', async () => {
