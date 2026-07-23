@@ -78,8 +78,8 @@
       <section class="ctrl-group" id="section-car">
         <label class="group-label">CAR</label>
         <div class="btn-row" id="car-btns">
-          <button class="car-btn active" data-car="F1">F1</button>
-          <button class="car-btn" data-car="GT">GT</button>
+          <button class="car-btn active" data-car="F1" aria-pressed="true">F1</button>
+          <button class="car-btn" data-car="GT" aria-pressed="false">GT</button>
         </div>
       </section>
 
@@ -100,22 +100,22 @@
       <section class="ctrl-group" id="section-env">
         <label class="group-label">ENVIRONMENT</label>
         <div class="toggle-row">
-          <button class="env-btn" id="btn-airflow" data-env="airflow">
+          <button class="env-btn" id="btn-airflow" data-env="airflow" aria-pressed="false">
             <span class="env-icon">🌬</span> Airflow
           </button>
-          <button class="env-btn" id="btn-rain" data-env="rain">
+          <button class="env-btn" id="btn-rain" data-env="rain" aria-pressed="false">
             <span class="env-icon">🌧</span> Rain
           </button>
-          <button class="env-btn" id="btn-cfd" data-env="cfd">
+          <button class="env-btn" id="btn-cfd" data-env="cfd" aria-pressed="false">
             <span class="env-icon">🔬</span> CFD
           </button>
         </div>
         <label class="group-label">TURNS</label>
         <div class="btn-row" id="turn-btns">
-          <button class="preset-btn turn-btn active" data-turn-mode="auto">AUTO</button>
-          <button class="preset-btn turn-btn" data-turn-mode="t5">5 /30s</button>
-          <button class="preset-btn turn-btn" data-turn-mode="t10">10 /30s</button>
-          <button class="preset-btn turn-btn" data-turn-mode="only">ONLY</button>
+          <button class="preset-btn turn-btn active" data-turn-mode="auto" aria-pressed="true">AUTO</button>
+          <button class="preset-btn turn-btn" data-turn-mode="t5" aria-pressed="false">5 /30s</button>
+          <button class="preset-btn turn-btn" data-turn-mode="t10" aria-pressed="false">10 /30s</button>
+          <button class="preset-btn turn-btn" data-turn-mode="only" aria-pressed="false">ONLY</button>
         </div>
       </section>
 
@@ -123,10 +123,10 @@
       <section class="ctrl-group" id="section-cam">
         <label class="group-label">CAMERA</label>
         <div class="btn-row" id="cam-btns">
-          <button class="cam-btn active" data-cam="orbit">Orbit</button>
-          <button class="cam-btn" data-cam="trackside">Trackside</button>
-          <button class="cam-btn" data-cam="cockpit">Cockpit</button>
-          <button class="cam-btn" data-cam="drone">Drone</button>
+          <button class="cam-btn active" data-cam="orbit" aria-pressed="true">Orbit</button>
+          <button class="cam-btn" data-cam="trackside" aria-pressed="false">Trackside</button>
+          <button class="cam-btn" data-cam="cockpit" aria-pressed="false">Cockpit</button>
+          <button class="cam-btn" data-cam="drone" aria-pressed="false">Drone</button>
         </div>
       </section>
 
@@ -134,7 +134,7 @@
       <section class="ctrl-group" id="section-play">
         <label class="group-label">PLAYBACK</label>
         <div class="btn-row">
-          <button id="play-pause-btn" class="play-btn" aria-label="Play or pause animation">&#9646;&#9646; PAUSE</button>
+          <button id="play-pause-btn" class="play-btn" aria-label="Play or pause animation" aria-pressed="true">&#9646;&#9646; PAUSE</button>
           <button id="reset-btn" class="reset-btn" aria-label="Reset simulation">&#8635; RESET</button>
         </div>
       </section>

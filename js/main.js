@@ -520,7 +520,9 @@ function switchCamera(mode) {
   document.getElementById('camera-label').textContent = CAM_CONFIGS[mode].label;
 
   document.querySelectorAll('.cam-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.cam === mode);
+    const on = b.dataset.cam === mode;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', String(on));
   });
 }
 
@@ -747,8 +749,12 @@ document.querySelectorAll('.car-btn').forEach(btn => {
     if (type === state.carType) return;
     state.carType = type;
 
-    document.querySelectorAll('.car-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.car-btn').forEach(b => {
+      b.classList.remove('active');
+      b.setAttribute('aria-pressed', 'false');
+    });
     btn.classList.add('active');
+    btn.setAttribute('aria-pressed', 'true');
 
     await spawnCar(type);
     syncEffects();
@@ -777,8 +783,11 @@ document.querySelectorAll('#speed-presets .preset-btn').forEach(btn => {
 function applyTurnMode(mode) {
   state.turnMode = mode;
   trackPath.setTurnMode(mode);
-  document.querySelectorAll('.turn-btn').forEach(b =>
-    b.classList.toggle('active', b.dataset.turnMode === mode));
+  document.querySelectorAll('.turn-btn').forEach(b => {
+    const on = b.dataset.turnMode === mode;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
   updateChips();
 }
 
@@ -797,9 +806,11 @@ document.querySelectorAll('.env-btn').forEach(btn => {
     if (state.activeEnvs.has(env)) {
       state.activeEnvs.delete(env);
       btn.classList.remove('active');
+      btn.setAttribute('aria-pressed', 'false');
     } else {
       state.activeEnvs.add(env);
       btn.classList.add('active');
+      btn.setAttribute('aria-pressed', 'true');
     }
     updateChips();
     syncEffects();
@@ -818,12 +829,15 @@ playBtn.addEventListener('click', () => {
   if (state.paused) {
     playBtn.innerHTML = '&#9654; PLAY';
     playBtn.classList.remove('playing');
+    playBtn.setAttribute('aria-pressed', 'false');
   } else {
     playBtn.innerHTML = '&#9646;&#9646; PAUSE';
     playBtn.classList.add('playing');
+    playBtn.setAttribute('aria-pressed', 'true');
   }
 });
 playBtn.classList.add('playing');
+playBtn.setAttribute('aria-pressed', 'true');
 
 /* ── Reset ──────────────────────────────────────────────────────── */
 document.getElementById('reset-btn').addEventListener('click', () => {
@@ -831,6 +845,7 @@ document.getElementById('reset-btn').addEventListener('click', () => {
   state.paused = false;
   playBtn.innerHTML = '&#9646;&#9646; PAUSE';
   playBtn.classList.add('playing');
+  playBtn.setAttribute('aria-pressed', 'true');
 
   // Reset camera
   switchCamera('orbit');
@@ -839,7 +854,10 @@ document.getElementById('reset-btn').addEventListener('click', () => {
 
   // Deactivate all envs
   state.activeEnvs.clear();
-  document.querySelectorAll('.env-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.env-btn').forEach(b => {
+    b.classList.remove('active');
+    b.setAttribute('aria-pressed', 'false');
+  });
   // Back to the default turn schedule — reset means the full selection resets
   applyTurnMode('auto');
   updateChips();
