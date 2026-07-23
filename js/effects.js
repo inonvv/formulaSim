@@ -27,6 +27,15 @@ const MOD_STR = Object.freeze({
   REAR_WING_VORT:   { gamma:    1.0,  rc: 0.12 },
 });
 
+/* Trace-time sink cap (plan vents-speed-and-ingestion). A 2D sink in unit
+ * freestream captures a streamtube of width 2π·strength — SIDEPOD_INLET's
+ * 0.25 swallows ≈3.5 of the 0.45-spaced ribbon lanes, which reads as lines
+ * vanishing into the pod. 0.07 keeps capture (0.44) ≤ one lane spacing, so
+ * at most the inlet-aligned lane dips in; pull at one-lane distance is still
+ * ≈0.16 — a visible bend. Applies ONLY at trace time; the base table
+ * (getModifiers) keeps the uncapped CFD-facing strengths. */
+const SINK_CAPTURE_CAP = 0.07;
+
 /* Fallback (xi, eta) scaling when a profile lacks halfW/halfL. Matches the
  * default basis used by traceStreamlinePath and CAR_AERO.F1. */
 const DEFAULT_HALF_L = 2.4;
@@ -88,6 +97,13 @@ function _makeWetMaskTexture() {
 const STEPS     = 200;
 const STEP_SIZE = 0.14;
 const VORTEX_PTS = 100;
+
+/* Early-terminated ribbon tails (stagnation lines / vent-captured lanes)
+ * dissolve over their last verts instead of hard-stopping mid-air —
+ * same smoothstep pattern as the underfloor end fades. A path counts as
+ * early-terminated when its RAW traced length is < 95% of STEPS. */
+const RIBBON_TAIL_FADE_VERTS = 6;
+const RIBBON_FULL_FRAC       = 0.95;
 
 /* ── Venturi underfloor channel ──────────────────────────────────── *
  * Dedicated 'underfloor' ribbon group: floor flow does NOT divert
@@ -611,6 +627,11 @@ export class AirflowEffect {
     this._tracedBucket    = this._sfBucket();
     this._activeModifiers = this._traceModifiersFor(this._tracedBucket);
     this._paths = this._seeds.map(s => this._traceSeedPath(s, this._activeModifiers));
+    // Raw traced length flags early termination (before retrace resampling
+    // stretches short paths onto their fixed buffers). Underfloor streaks
+    // are short by construction and carry their own end fades.
+    this._pathEarly = this._paths.map((p, i) =>
+      this._seeds[i].group !== 'underfloor' && p.length < STEPS * RIBBON_FULL_FRAC);
     this._traceCount      = (this._traceCount || 0) + 1;
     this._vortexDefs      = this._resolveVortexDefs(profile, this._measure);
     this._buildRibbonLines();
@@ -975,7 +996,10 @@ export class AirflowEffect {
   _traceModifiersFor(bucket) {
     const scale = 0.35 + 0.65 * bucket;
     const out = (this._modifiers || []).map(m => {
-      if (m.type === 'sink' || m.type === 'source') return { ...m, strength: m.strength * scale };
+      // Sinks are capped so no vent swallows more than its aligned lane
+      // (see SINK_CAPTURE_CAP); sources/vortices/doublets are untouched.
+      if (m.type === 'sink')   return { ...m, strength: Math.min(m.strength * scale, SINK_CAPTURE_CAP) };
+      if (m.type === 'source') return { ...m, strength: m.strength * scale };
       if (m.type === 'vortex') return { ...m, gamma: m.gamma * scale };
       return m;
     });
@@ -1031,6 +1055,9 @@ export class AirflowEffect {
       const s = this._seeds[i];
       if (s.group === 'underfloor') continue;
       const traced = this._traceSeedPath(s, this._activeModifiers);
+      // Flag from the RAW traced length — resampling onto the fixed buffer
+      // erases it (a short buffer can hold a full-length resampled path).
+      this._pathEarly[i] = traced.length < STEPS * RIBBON_FULL_FRAC;
       this._paths[i] = _resamplePath(traced, this._paths[i].length);
     }
     this._traceCount = (this._traceCount || 0) + 1;
@@ -1422,6 +1449,11 @@ export class AirflowEffect {
             cg += (c.g - cg) * mixW;
             cb += (c.b - cb) * mixW;
           }
+        } else if (this._pathEarly && this._pathEarly[s]) {
+          // Early-terminated ribbon (stagnation line or vent-captured lane):
+          // dissolve the tail instead of hard-stopping mid-air.
+          const fT = Math.min(1, (path.length - 1 - i) / RIBBON_TAIL_FADE_VERTS);
+          bright *= fT * fT * (3 - 2 * fT);
         }
         colors[i * 3]     = cr * bright;
         colors[i * 3 + 1] = cg * bright;
