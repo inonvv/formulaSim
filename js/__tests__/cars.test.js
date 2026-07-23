@@ -57,7 +57,8 @@ vi.mock('three', () => {
     this.children.forEach(c => { if (c && c.traverse) c.traverse(fn); });
   };
 
-  function BoxGeometry() {}
+  function BoxGeometry(w, h, d) { this.parameters = { width: w, height: h, depth: d }; this.type = 'BoxGeometry'; }
+  function TorusGeometry(r, tube) { this.parameters = { radius: r, tube }; this.type = 'TorusGeometry'; }
   function CylinderGeometry() {}
   function SphereGeometry() {}
   function ConeGeometry() {
@@ -115,6 +116,7 @@ vi.mock('three', () => {
     Group,
     Mesh,
     BoxGeometry,
+    TorusGeometry,
     CylinderGeometry,
     SphereGeometry,
     ConeGeometry,
@@ -709,6 +711,40 @@ describe('buildGTHybrid (T2.A Porsche GT)', () => {
     await buildGTHybrid({ color: 0xff0000 });
     expect(livMesh.material).toBe(cloned);
     expect(colorCopied).toBe(true);
+  });
+});
+
+/* ── P5: cockpit steering wheel ──────────────────────────────────── */
+describe('buildSteeringWheel (P5)', () => {
+  it('returns a group named "steeringWheel" for both types', async () => {
+    const { buildSteeringWheel } = await import('../cars.js');
+    expect(buildSteeringWheel('F1').name).toBe('steeringWheel');
+    expect(buildSteeringWheel('GT').name).toBe('steeringWheel');
+  });
+
+  it('F1: flat-bottom rect wheel — rim + 2 grips + hub screen (4 children)', async () => {
+    const { buildSteeringWheel } = await import('../cars.js');
+    const w = buildSteeringWheel('F1');
+    expect(w.children.length).toBe(4);
+    // Rim is the rounded-rect extrusion (rBox → ExtrudeGeometry), not a torus.
+    expect(w.children.some(c => c.geometry?.type === 'TorusGeometry')).toBe(false);
+  });
+
+  it('GT: round wheel — torus Ø0.36/tube 0.02 + 3 spokes (4 children)', async () => {
+    const { buildSteeringWheel } = await import('../cars.js');
+    const w = buildSteeringWheel('GT');
+    expect(w.children.length).toBe(4);
+    const torus = w.children.find(c => c.geometry?.type === 'TorusGeometry');
+    expect(torus).toBeDefined();
+    expect(torus.geometry.parameters.radius).toBeCloseTo(0.18, 5);   // Ø 0.36
+    expect(torus.geometry.parameters.tube).toBeCloseTo(0.02, 5);
+  });
+
+  it('unknown type falls back to the F1 wheel', async () => {
+    const { buildSteeringWheel } = await import('../cars.js');
+    const w = buildSteeringWheel('F2');
+    expect(w.children.some(c => c.geometry?.type === 'TorusGeometry')).toBe(false);
+    expect(w.children.length).toBe(4);
   });
 });
 

@@ -595,6 +595,45 @@ function synthesiseGTAnchors(bbox) {
   };
 }
 
+/* ── P5: cockpit steering wheel ───────────────────────────────────── *
+ * Procedural wheel group for BOTH F1 paths (GLB hybrid + procedural) and
+ * GT. Built in a local frame with the wheel face in the XY plane (facing
+ * +Z, toward the driver); main.js places it off the cockpit anchor, tilts
+ * the column about X, and drives rotation.z from state.steerVis.          */
+export function buildSteeringWheel(type) {
+  const grp = new THREE.Group();
+  grp.name = 'steeringWheel';
+  const matRim = makeMat(0x141414, 0.55, 0.25);
+  const matHub = makeMat(0x0a0a0a, 0.40, 0.50);
+
+  if (type === 'GT') {
+    // Road-car wheel: torus Ø0.36 / tube 0.02 + 3 spokes (9-, 3-, 6-o'clock).
+    const rim = mesh(new THREE.TorusGeometry(0.18, 0.02, 12, 32), matRim);
+    rim.name = 'sw_rim';
+    grp.add(rim);
+    for (const ang of [0, Math.PI, -Math.PI / 2]) {   // right, left, bottom
+      const spoke = mesh(box(0.16, 0.028, 0.018), matHub,
+        Math.cos(ang) * 0.085, Math.sin(ang) * 0.085, 0, 0, 0, ang);
+      spoke.name = 'sw_spoke';
+      grp.add(spoke);
+    }
+  } else {
+    // F1: flat-bottom rectangular wheel — rounded-rect rim + 2 grips + hub screen.
+    const rim = mesh(rBox(0.27, 0.17, 0.03, 0.045), matRim);
+    rim.name = 'sw_rim';
+    grp.add(rim);
+    for (const sx of [-1, 1]) {
+      const grip = mesh(box(0.045, 0.15, 0.045), matRim, sx * 0.145, 0, 0);
+      grip.name = 'sw_grip';
+      grp.add(grip);
+    }
+    const screen = mesh(rBox(0.09, 0.06, 0.012, 0.008), makeMat(0x061018, 0.2, 0.1, 0x2266aa, 0.6), 0, 0.015, 0.018);
+    screen.name = 'sw_screen';
+    grp.add(screen);
+  }
+  return grp;
+}
+
 export async function buildCar(type) {
   const meta = CAR_META[type] || CAR_META.F1;
   const flag = USE_IMPORTED_MODELS;

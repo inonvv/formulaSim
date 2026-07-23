@@ -12,7 +12,7 @@ import { RenderPass }      from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass }      from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass }      from 'three/addons/postprocessing/OutputPass.js';
-import { buildCar, getCarMeta, WHEEL_NAMES } from './cars.js';
+import { buildCar, getCarMeta, WHEEL_NAMES, buildSteeringWheel } from './cars.js';
 import { CAR_MANIFEST } from './car-manifest.js';
 import { createDebugOverlay } from './debug-overlay.js';
 import { buildTrack, buildSkyline } from './track.js';
@@ -178,6 +178,7 @@ const state = {
   camBank:    0,          // smoothed cinematic camera roll (rad)
   turnCount:  0,          // completed-turn tally shown in the HUD
   _turnEdge:  null,       // turnEdgeCounter state {inTurn, count}
+  steeringWheel: null,    // cockpit wheel group (buildSteeringWheel), steered by steerVis
 };
 
 // Verify-script hook: headless scripts read sim state (turn count, steering
@@ -257,6 +258,24 @@ async function spawnCar(type) {
   grp.traverse(obj => {
     if (obj.name?.startsWith('brake_')) state.brakes[obj.name] = obj;
   });
+
+  // P5: cockpit steering wheel — placed off the measured cockpit anchor,
+  // column-tilted about X; animateCar counter-rotates it with steerVis.
+  // Offsets calibrated so the wheel top sits in the helmet-cam's lower
+  // frame without covering the road.
+  const cockpitA = grp.userData.measure?.anchors?.cockpit;
+  const sw = buildSteeringWheel(type);
+  if (type === 'GT') {
+    // LHD: driver's side, deeper dash, steeper column rake.
+    sw.position.set((cockpitA?.x ?? 0) - 0.37, (cockpitA?.y ?? 0.60) - 0.28, (cockpitA?.z ?? 0) - 0.55);
+    sw.rotation.x = -0.5;
+  } else {
+    sw.position.set(cockpitA?.x ?? 0, (cockpitA?.y ?? 0.55) - 0.10, (cockpitA?.z ?? 0.30) - 0.45);
+    sw.rotation.x = -0.35;
+  }
+  grp.add(sw);
+  state.steeringWheel = sw;
+
   scene.add(grp);
   const carKey = String(type).toLowerCase();
   debugOverlay.attach(grp, CAR_MANIFEST[carKey] ?? null, state.carMeasure);
@@ -632,6 +651,12 @@ function animateCar(dt) {
     const w = state.wheels[key];
     if (w) { w.rotation.order = 'YXZ'; w.rotation.y = state.steerVis; }
   }
+  // Steering wheel counter-motion (×2.5 the front-wheel steer). Positive
+  // rotation.z moves the wheel top toward −X, which is frame-LEFT for the
+  // driver looking down −Z — so a left road turn (steerVis > 0) turns the
+  // wheel top left, matching the front wheels. (The plan's authored −2.5
+  // sign fails that check; verified in the P7 cockpit shot.)
+  if (state.steeringWheel) state.steeringWheel.rotation.z = state.steerVis * 2.5;
   state.rollVis = smoothAngle(state.rollVis, rollAngleRad(mps, omega), dt);
   state.carGroup.rotation.z = state.rollVis;
   // Nose-in yaw ≤4° — clamp the ratio: the REAL_CORNER's fixed R 85 geometry
