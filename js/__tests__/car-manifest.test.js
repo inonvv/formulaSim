@@ -88,6 +88,16 @@ describe('CAR_MANIFEST', () => {
     }
   });
 
+  it('gt.anchorSources authors sidepod inlets (992 rear-fender intakes) mirrored L/R', () => {
+    const a = CAR_MANIFEST.gt.anchorSources;
+    expect(a.sidepodInletL).toBeDefined();
+    expect(a.sidepodInletL.anchor).toBe('bodyShell');
+    expect(a.sidepodInletL.role).toBe('inlet');
+    expect(a.sidepodInletL.offset).toEqual([-0.92, -0.15, 0.85]);
+    expect(a.sidepodInletL.direction).toEqual([0.3, 0, -1]);
+    expect(a.sidepodInletR).toEqual({ mirrored: 'sidepodInletL' });
+  });
+
   it('occupancyMeshes list the collision extras per car (f1 mirror/suspension, gt glass/doors/hood)', () => {
     expect(CAR_MANIFEST.f1.occupancyMeshes).toEqual(['Object_20', 'Object_6']);
     expect(CAR_MANIFEST.gt.occupancyMeshes).toEqual([
