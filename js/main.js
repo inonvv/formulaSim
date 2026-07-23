@@ -250,7 +250,12 @@ async function spawnCar(type) {
   requestAnimationFrame(() => {
     if (!carSpawnGuard.isCurrent(myToken)) return;
     state.bodyOccupancy = buildBodyOccupancyFor(grp, carKey);
-    if (state.bodyOccupancy) airflow.setCarType(type, state.carMeasure, state.bodyOccupancy);
+    if (state.bodyOccupancy) {
+      airflow.setCarType(type, state.carMeasure, state.bodyOccupancy);
+      // CFD upstream shadowing: world-frame SDF sampled at car-local y +
+      // baseY (occupancy frame convention). Forces an overlay recolor.
+      cfd.setOccupancy?.(state.bodyOccupancy, grp.userData?.baseY ?? 0);
+    }
     wireRainCoupling();   // rain body-splash gains the occupancy once it lands
   });
 
