@@ -44,6 +44,23 @@ const DEFAULT_HALF_W = 0.9;
 /* ── Utility ───────────────────────────────────────────────────── */
 function rnd(min, max) { return min + Math.random() * (max - min); }
 
+/* ── Rain gusts + density waves (P4) ─────────────────────────────── *
+ * Deterministic beating sinusoids — two incommensurate frequencies per
+ * axis give a slow, non-repeating sway with near-zero mean. No RNG in
+ * the update loop; both are pure in t (seconds). Units: m/s.           */
+export function gustVector(t) {
+  return {
+    gx: 2.2 * Math.sin(0.31 * t) * Math.sin(0.113 * t + 1.7),
+    gz: 1.4 * Math.sin(0.23 * t + 0.9) * Math.sin(0.077 * t),
+  };
+}
+
+/* Slow rain-density wave, ±15% around the baseline — scales streak
+ * opacity so downpour intensity breathes instead of holding constant. */
+export function rainDensity(t) {
+  return 1 + 0.15 * Math.sin(0.09 * t + 2.1) * Math.sin(0.19 * t);
+}
+
 /* ── Soft radial puff for ribbon fog haloes (shared singleton) ── */
 let _puffTex = null;
 function _makePuffTexture() {
@@ -1955,12 +1972,22 @@ export class RainEffect {
     // still subtle.
     const windRear = speedFactor * 30;
 
+    // P4: deterministic wind gusts sway BOTH the drift and the streak
+    // orientation; the density wave breathes the streak opacity. Part of
+    // the baseline on coupled AND uncoupled paths (t defaults to 0 for
+    // callers that omit it — gust(0) is exactly zero).
+    const t = _t || 0;
+    const gust = gustVector(t);
+    this._dMat.opacity = 0.55 * rainDensity(t);
+
     // Streak rendering — update tail position then compute head
     const dp = this._dPos;
     // Turn coupling: falling drops pick up lateral speed ≈ a_lat × mean fall
     // time (~0.4 s); the streak leans outward because vel.x ≠ 0.
     const aLat = this._turnALat;
     const turnDrift = aLat * 0.4;
+    const driftX = turnDrift + gust.gx;   // shared by drift + streak vector
+    const sweepZ = windRear + gust.gz;
     // Phase 5: airflow coupling — only above the sf gate, and only inside
     // the envelope. With coupling off this loop is byte-identical to the
     // uncoupled baseline (the coupled-velocity arrays are never touched).
@@ -1984,9 +2011,9 @@ export class RainEffect {
           this._splashFade[i] = (1 - u) * 0.5;
         }
       }
-      dp[i * 6]     += dt * turnDrift;
+      dp[i * 6]     += dt * driftX;
       dp[i * 6 + 1] -= dt * this._dVels[i];
-      dp[i * 6 + 2] += dt * windRear;
+      dp[i * 6 + 2] += dt * sweepZ;
       if (coupleOn) {
         const x = dp[i * 6], y = dp[i * 6 + 1], z = dp[i * 6 + 2];
         const env = cpl.env;
@@ -2019,10 +2046,10 @@ export class RainEffect {
       }
       // Velocity-aligned streak: head = tail + v̂·L (≈12 ms exposure).
       // Coupled velocities are always zero while coupling is off, so the
-      // uncoupled streak is exactly (turnDrift, −vFall, windRear).
-      const vx = turnDrift + this._dVelX[i];
+      // uncoupled streak is exactly (turnDrift + gx, −vFall, windRear + gz).
+      const vx = driftX + this._dVelX[i];
       const vy = -this._dVels[i];
-      const vz = windRear + this._dVelZ[i];
+      const vz = sweepZ + this._dVelZ[i];
       const vm = Math.sqrt(vx * vx + vy * vy + vz * vz);
       const L  = Math.min(Math.max(vm * 0.012, 0.05), 0.9);
       const k  = L / vm;
