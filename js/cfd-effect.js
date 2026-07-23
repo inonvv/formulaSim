@@ -513,6 +513,35 @@ export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor
   return cp * speedFactor;
 }
 
+/**
+ * Cp readout for the hover probe. Converts a raycast hit on the overlay
+ * (world frame — the CFD group is lifted by baseY) into the car-local frame
+ * and evaluates the same surface model that painted the vertex colours.
+ * Pure — exported for tests.
+ *
+ * @param {object} hit    — raycast intersection ({ point, face })
+ * @param {string} type   — car type
+ * @param {object} anchors
+ * @param {number} sf     — speedFactor [0, 1]
+ * @param {number} baseY  — CFD group lift (world y = car-local y + baseY)
+ */
+export function probeCp(hit, type, anchors, sf, baseY = 0) {
+  const p = hit?.point ?? { x: 0, y: 0, z: 0 };
+  const n = hit?.face?.normal ?? { x: 0, y: 1, z: 0 };
+  return computeSurfaceCp(p.x, p.y - baseY, p.z, n.x, n.y, n.z, type, anchors, sf);
+}
+
+/**
+ * Toggle the DOM colorbar legend with the CFD env state. Tiny and DOM-shape
+ * agnostic so it is unit-testable without a browser.
+ * @returns {boolean} whether the legend is now shown
+ */
+export function syncCfdLegend(el, active) {
+  if (!el) return false;
+  el.classList.toggle('show', !!active);
+  return !!active;
+}
+
 /* ════════════════════════════════════════════════════════════════════
    CfdEffect class
 ════════════════════════════════════════════════════════════════════ */
@@ -634,6 +663,23 @@ export class CfdEffect {
   setVisible(v) {
     this._visible      = v;
     this.group.visible = v;
+  }
+
+  /**
+   * Hover probe: raycast the body-surface overlay clones only (cheap — the
+   * caller throttles) and return the Cp at the hit, or null. Only answers
+   * while CFD is visible and the GLB overlay exists.
+   */
+  raycastCp(raycaster) {
+    if (!this._visible || this._surfaceMeshes.length === 0) return null;
+    const meshes = this._surfaceMeshes.map(s => s.mesh);
+    const hits = raycaster.intersectObjects(meshes, false);
+    if (!hits.length) return null;
+    const sf = Math.min(this._speed / 350, 1);
+    return {
+      cp:    probeCp(hits[0], this._type, this._anchors, sf, this._baseY),
+      point: hits[0].point,
+    };
   }
 
   update(dt, t) {
@@ -1028,6 +1074,14 @@ export class CfdEffect {
       const m = new THREE.Mesh(geo, mat);
       const [x, y, z] = this._resolveBlobPos(blob.role, blob.pos);
       m.position.set(x, y, z);
+      m.userData.blobRole = blob.role;
+      // Declutter: when Cp is painted on the real body (GLB overlay path),
+      // the stagnation/cockpit glow spheres just duplicate the paint — hide
+      // them. Volumes the paint cannot show (diffuser/suction/vortices) and
+      // the procedural fallback keep every blob.
+      if (this._bodyMeshes && (blob.role === 'stagnation' || blob.role === 'cockpit')) {
+        m.visible = false;
+      }
       this.group.add(m);
       this._blobMeshes.push(m);
     }

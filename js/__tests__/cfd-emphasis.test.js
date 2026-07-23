@@ -28,7 +28,9 @@ vi.mock('../airflow-core.js', async (importOriginal) => {
 });
 
 import { cpToColor } from '../airflow-core.js';
-import { CfdEffect, cpToEmphasisColor } from '../cfd-effect.js';
+import {
+  CfdEffect, cpToEmphasisColor, computeSurfaceCp, probeCp, syncCfdLegend,
+} from '../cfd-effect.js';
 
 const lum = (c) => Math.max(c.r, c.g, c.b);
 
@@ -180,5 +182,62 @@ describe('overlay + patch recolor apply emphasis', () => {
       }
     }
     expect(dim / total).toBeGreaterThan(0.1);
+  });
+});
+
+/* ── Phase 3 UX: hover probe, legend sync, blob declutter ────────── */
+describe('probeCp (hover Cp readout)', () => {
+  it('UX1. converts a world-frame raycast hit to car-local and matches computeSurfaceCp', () => {
+    const hit = {
+      point: { x: 0.95, y: 1.20, z: -0.30 },       // world (baseY 0.25 lift)
+      face:  { normal: { x: 0, y: 0, z: -1 } },
+    };
+    const cp = probeCp(hit, 'GT', GT_ANCHORS, 1.0, 0.25);
+    expect(Number.isFinite(cp)).toBe(true);
+    expect(cp).toBeCloseTo(
+      computeSurfaceCp(0.95, 0.95, -0.30, 0, 0, -1, 'GT', GT_ANCHORS, 1.0), 10);
+  });
+
+  it('UX2. hit without a face still returns a finite Cp (fallback normal)', () => {
+    const cp = probeCp({ point: { x: 0, y: 1.0, z: 0.5 } }, 'GT', GT_ANCHORS, 0.8);
+    expect(Number.isFinite(cp)).toBe(true);
+  });
+});
+
+describe('syncCfdLegend', () => {
+  it('UX3. toggles the "show" class with the CFD env state', () => {
+    const calls = [];
+    const el = { classList: { toggle: (cls, on) => calls.push([cls, on]) } };
+    expect(syncCfdLegend(el, true)).toBe(true);
+    expect(syncCfdLegend(el, false)).toBe(false);
+    expect(calls).toEqual([['show', true], ['show', false]]);
+  });
+
+  it('UX4. null element is safe and reads as hidden', () => {
+    expect(syncCfdLegend(null, true)).toBe(false);
+  });
+});
+
+describe('blob declutter on the body-surface overlay path', () => {
+  it('UX5. GLB path hides stagnation + cockpit blobs (paint shows them now)', () => {
+    const cfd = new CfdEffect(makeScene());
+    const { mesh, carGroup } = bodyFixture();
+    cfd.setBodySurface([mesh], carGroup);
+    cfd.setCarType('GT', { anchors: { ...GT_ANCHORS } });
+    const byRole = (role) => cfd._blobMeshes.filter(m => m.userData.blobRole === role);
+    expect(byRole('stagnation').every(m => m.visible === false)).toBe(true);
+    expect(byRole('cockpit').every(m => m.visible === false)).toBe(true);
+    expect(byRole('stagnation').length).toBeGreaterThan(0);
+    expect(byRole('cockpit').length).toBeGreaterThan(0);
+    // Volumes the paint canNOT show stay visible.
+    expect(byRole('diffuser').every(m => m.visible === true)).toBe(true);
+    expect(byRole('rearWing').every(m => m.visible === true)).toBe(true);
+  });
+
+  it('UX6. procedural fallback keeps ALL blobs visible', () => {
+    const cfd = new CfdEffect(makeScene());
+    cfd.setCarType('GT');
+    expect(cfd._blobMeshes.length).toBeGreaterThan(0);
+    expect(cfd._blobMeshes.every(m => m.visible === true)).toBe(true);
   });
 });

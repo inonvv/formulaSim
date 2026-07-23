@@ -17,7 +17,7 @@ import { createDebugOverlay } from './debug-overlay.js';
 import { buildTrack, buildSkyline } from './track.js';
 import { TrackPath, TURN_CFG, steerAngleRad, rollAngleRad, cameraBankRad, pathBendTable } from './track-path.js';
 import { AirflowEffect, RainEffect } from './effects.js';
-import { CfdEffect } from './cfd-effect.js';
+import { CfdEffect, syncCfdLegend } from './cfd-effect.js';
 import { VentEmitterSystem } from './vent-emitters.js';
 import { buildOccupancy } from './body-sdf.js';
 import { collectOccupancyMeshes } from './car-loader.js';
@@ -343,6 +343,11 @@ function syncEffects() {
   airflow.setVisible(state.activeEnvs.has('airflow'));
   rain.setVisible(state.activeEnvs.has('rain'));
   cfd.setVisible(state.activeEnvs.has('cfd'));
+  // CFD legend follows the env toggle; the probe tooltip never outlives it.
+  syncCfdLegend(document.getElementById('cfd-legend'), state.activeEnvs.has('cfd'));
+  if (!state.activeEnvs.has('cfd')) {
+    document.getElementById('cfd-probe-tip')?.classList.remove('show');
+  }
   wireRainCoupling();
   // Vents are visible whenever the user is viewing the airflow or CFD picture —
   // the vent stream is part of the flow visualisation, not a standalone env.
@@ -355,6 +360,35 @@ function syncEffects() {
   sunLight.intensity               = w.sunIntensity;
   renderer.toneMappingExposure     = w.exposure;
 }
+
+/* ── CFD hover probe: 10 Hz raycast against the overlay clones ──── */
+const probeTip = document.getElementById('cfd-probe-tip');
+const probeRaycaster = new THREE.Raycaster();
+const probeNdc = new THREE.Vector2();
+let probeLastT = 0;
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!probeTip) return;
+  if (!state.activeEnvs.has('cfd')) return;          // syncEffects hides the tip
+  const now = performance.now();
+  if (now - probeLastT < 100) return;                // throttle to 10 Hz
+  probeLastT = now;
+
+  probeNdc.set(
+    (e.clientX / window.innerWidth)  *  2 - 1,
+    (e.clientY / window.innerHeight) * -2 + 1,
+  );
+  probeRaycaster.setFromCamera(probeNdc, camera);
+  const res = cfd.raycastCp?.(probeRaycaster);
+  if (res) {
+    probeTip.textContent = `Cp ≈ ${res.cp.toFixed(2)}`;
+    probeTip.style.left = `${e.clientX + 14}px`;
+    probeTip.style.top  = `${e.clientY - 10}px`;
+    probeTip.classList.add('show');
+  } else {
+    probeTip.classList.remove('show');
+  }
+});
 
 /* ══════════════════════════════════════════════════════════════════
    CAMERA MODES

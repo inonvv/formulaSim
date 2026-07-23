@@ -190,6 +190,76 @@ body {
   to   { opacity:1; transform: translateY(0); }
 }
 
+/* ─── CFD legend (colorbar, bottom-left, CFD env only) ───────────── */
+#cfd-legend {
+  position: fixed;
+  left: 24px;
+  bottom: 96px;
+  display: none;
+  align-items: stretch;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,68,0,0.35);
+  background: rgba(10,10,15,0.72);
+  backdrop-filter: blur(6px);
+  z-index: 10;
+  pointer-events: none;
+}
+#cfd-legend.show { display: flex; }
+
+.cfd-legend-title {
+  align-self: flex-start;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  color: #ff8855;
+}
+
+/* Gradient mirrors cpToEmphasisColor: bright red at +1, fading to black
+ * through the mid-range dead band around 0, then dim green → cyan at −2. */
+.cfd-legend-bar {
+  width: 12px;
+  height: 120px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: linear-gradient(
+    180deg,
+    #ff0000 0%,          /* Cp +1  — stagnation, full luminance */
+    #874400 17%,         /* Cp +0.5 — fading                    */
+    #000000 27%,         /* Cp +0.2 — emphasis dead band        */
+    #000000 50%,         /* Cp −0.5 — still faded               */
+    #004d00 67%,         /* Cp −1                               */
+    #00d96c 83%,         /* Cp −1.5                             */
+    #00ffff 100%         /* Cp −2  — suction, full luminance    */
+  );
+}
+
+.cfd-legend-labels {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  color: #ccd6e4;
+  white-space: nowrap;
+}
+
+/* ─── CFD hover probe tooltip ────────────────────────────────────── */
+#cfd-probe-tip {
+  position: fixed;
+  display: none;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,68,0,0.4);
+  background: rgba(10,10,15,0.85);
+  color: #ffb08a;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  pointer-events: none;
+  z-index: 30;
+}
+#cfd-probe-tip.show { display: block; }
+
 /* ─── Panel ──────────────────────────────────────────────────────── */
 #panel {
   position: fixed;
