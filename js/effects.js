@@ -513,8 +513,21 @@ export class AirflowEffect {
    * follow the variant's true ride height instead of floating at y=0.
    */
   setBaseY(y) {
-    this._baseY = y || 0;
+    const next = y || 0;
+    const changed = next !== this._baseY;
+    this._baseY = next;
     this.group.position.y = this._baseY;
+    // Frame hardening (plan occupancy-frame-offset O3): the occupancy SDF is
+    // world-voxelized, so traced slides baked with a stale baseY would be
+    // wrong. Current main.js call order sets baseY before occupancy arrives
+    // (never hit in practice) — rebuild mirrors the occupancy-arrival path
+    // in setCarType.
+    if (changed && this._occupancy) {
+      this._disposeAll();
+      this._build(getProfile(this._type), this._measure);
+      this.group.visible = this._visible;
+      this.group.position.y = this._baseY;
+    }
   }
 
   setCarType(type, measure, bodyOccupancy) {
@@ -983,8 +996,14 @@ export class AirflowEffect {
     const opts = {};
     if (this._occupancy) {
       // toWorld closure lifts the seed's Y into the lookup (xi→X, eta→Z).
+      // FRAME: the occupancy SDF is voxelized in WORLD space (main.js lifts
+      // the car by baseY before sampling), while seed y is CAR-LOCAL — so
+      // the lookup adds _baseY. Safe because setBaseY() rebuilds when the
+      // value changes with occupancy present. The slice scan in
+      // _occupancySection applies the SAME +baseY — never offset twice.
       opts.occupancy = this._occupancy;
-      opts.toWorld = (xi, eta) => ({ x: xi * halfW, y: s.y, z: eta * halfL });
+      const baseYOff = this._baseY || 0;
+      opts.toWorld = (xi, eta) => ({ x: xi * halfW, y: s.y + baseYOff, z: eta * halfL });
     }
     if (mods && mods.length > 0) {
       opts.modifiers = mods;
@@ -1348,9 +1367,14 @@ export class AirflowEffect {
         // instead of cutting through it. Underfloor ribbons skip this: they
         // sit below the underside by construction, and voxel blur at the
         // floor plane would wrongly eject them upward through the body.
-        if (this._occupancy && !isUnderfloor && this._occupancy.sample(wx, wy, wz) > 0.5) {
+        // FRAME: the SDF is world-voxelized; wy is car-local (group lifted
+        // by baseY), so sample/gradient look up at wy + _baseY. The nudge
+        // itself stays in car-local wy — gradient direction is
+        // frame-independent.
+        const wyWorld = wy + (this._baseY || 0);
+        if (this._occupancy && !isUnderfloor && this._occupancy.sample(wx, wyWorld, wz) > 0.5) {
           const g = this._occupancy.gradient
-            ? this._occupancy.gradient(wx, wy, wz)
+            ? this._occupancy.gradient(wx, wyWorld, wz)
             : { x: 0, y: 1, z: 0 };
           const mag = Math.hypot(g.x, g.y, g.z) || 1;
           const lift = 0.12;
