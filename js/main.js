@@ -154,6 +154,7 @@ const state = {
   paused:     false,
   camMode:    'orbit',    // orbit | trackside | cockpit | drone
   activeEnvs: new Set(),  // 'airflow' | 'rain' | 'cfd'
+  turnMode:   'auto',     // 'auto' | 't5' | 't10' | 'only' (TURN_MODES)
   time:       0,
   carGroup:   null,
   carMeasure: null,       // group.userData.measure snapshot — consumed by effects / overlay
@@ -520,6 +521,8 @@ function updateHUD(speed) {
 /* ══════════════════════════════════════════════════════════════════
    EFFECTS CHIPS
 ══════════════════════════════════════════════════════════════════ */
+const TURN_CHIP_LABELS = { t5: '↩ TURNS 5/30s', t10: '↩ TURNS 10/30s', only: '↩ TURNS ONLY' };
+
 function updateChips() {
   const container = document.getElementById('effects-chips');
   container.innerHTML = '';
@@ -530,6 +533,12 @@ function updateChips() {
     chip.textContent = labels[env];
     container.appendChild(chip);
   });
+  if (state.turnMode !== 'auto') {           // scene must mirror the selection
+    const chip = document.createElement('div');
+    chip.className = 'chip chip-turns';
+    chip.textContent = TURN_CHIP_LABELS[state.turnMode];
+    container.appendChild(chip);
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -717,8 +726,22 @@ function setSpeed(v) {
 
 speedSlider.addEventListener('input', () => setSpeed(Number(speedSlider.value)));
 
-document.querySelectorAll('.preset-btn').forEach(btn => {
+// Scoped to the speed section — `.turn-btn` also carries `.preset-btn` (style only).
+document.querySelectorAll('#speed-presets .preset-btn').forEach(btn => {
   btn.addEventListener('click', () => setSpeed(Number(btn.dataset.speed)));
+});
+
+/* ── TURNS frequency ────────────────────────────────────────────── */
+document.querySelectorAll('.turn-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const mode = btn.dataset.turnMode;
+    if (mode === state.turnMode) return;
+    state.turnMode = mode;
+    trackPath.setTurnMode(mode);
+    document.querySelectorAll('.turn-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    updateChips();
+  });
 });
 
 /* ── Environment toggles ────────────────────────────────────────── */
