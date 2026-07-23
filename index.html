@@ -58,17 +58,17 @@
   <!-- ── Control Panel ─────────────────────────────────────────── -->
   <div id="panel">
     <div id="panel-header">
-      <button id="panel-toggle" title="Collapse">&#8249;</button>
+      <button id="panel-toggle" title="Collapse" aria-label="Collapse control panel">&#8249;</button>
       <span class="panel-title">FormulaSim</span>
 
       <!-- Mobile-only tab bar (hidden on desktop via CSS) -->
       <div class="mobile-tabs">
-        <button class="tab-btn" data-section="section-car">🚗<span>Car</span></button>
-        <button class="tab-btn" data-section="section-speed">⚡<span>Speed</span></button>
-        <button class="tab-btn" data-section="section-cam">📷<span>Cam</span></button>
-        <button class="tab-btn" data-section="section-env">🌬<span>Env</span></button>
-        <button class="tab-btn" data-section="section-play">▶<span>Play</span></button>
-        <button id="mobile-menu-toggle" title="Show menu">&#8679;</button>
+        <button class="tab-btn" data-section="section-car" aria-label="Car selection">🚗<span>Car</span></button>
+        <button class="tab-btn" data-section="section-speed" aria-label="Speed controls">⚡<span>Speed</span></button>
+        <button class="tab-btn" data-section="section-cam" aria-label="Camera modes">📷<span>Cam</span></button>
+        <button class="tab-btn" data-section="section-env" aria-label="Environment effects">🌬<span>Env</span></button>
+        <button class="tab-btn" data-section="section-play" aria-label="Playback controls">▶<span>Play</span></button>
+        <button id="mobile-menu-toggle" title="Show menu" aria-label="Show menu">&#8679;</button>
       </div>
     </div>
 
@@ -86,7 +86,7 @@
       <!-- Speed -->
       <section class="ctrl-group" id="section-speed">
         <label class="group-label">SPEED — <span id="speed-label-val">0</span> km/h</label>
-        <input type="range" id="speed-slider" min="0" max="350" step="5" value="0" />
+        <input type="range" id="speed-slider" min="0" max="350" step="5" value="0" aria-label="Speed km/h" />
         <div class="btn-row" id="speed-presets">
           <button class="preset-btn" data-speed="0">IDLE</button>
           <button class="preset-btn" data-speed="80">SLOW</button>
@@ -134,8 +134,8 @@
       <section class="ctrl-group" id="section-play">
         <label class="group-label">PLAYBACK</label>
         <div class="btn-row">
-          <button id="play-pause-btn" class="play-btn">&#9646;&#9646; PAUSE</button>
-          <button id="reset-btn" class="reset-btn">&#8635; RESET</button>
+          <button id="play-pause-btn" class="play-btn" aria-label="Play or pause animation">&#9646;&#9646; PAUSE</button>
+          <button id="reset-btn" class="reset-btn" aria-label="Reset simulation">&#8635; RESET</button>
         </div>
       </section>
 

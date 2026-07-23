@@ -13,6 +13,19 @@
   --panel-w: 280px;
   --font: 'Segoe UI', system-ui, sans-serif;
   --mono: 'Consolas', 'SF Mono', monospace;
+  /* Semantic effect colors */
+  --c-airflow: #5599ff;
+  --c-rain: #44aaff;
+  --c-cfd: #ff4400;
+  --c-turns: #ff6b00;
+  --ok: #27ae60;
+  --warn: #f39c12;
+  /* Shared rhythm tokens */
+  --label-fs: 0.62rem;
+  --label-track: 0.18em;
+  --ease: 0.18s ease;
+  --glow: 0 0 12px;
+  --overlay-bg: rgba(8,9,14,0.55);
 }
 
 body {
@@ -42,7 +55,7 @@ body {
   display: flex;
   align-items: center;
   gap: 20px;
-  background: rgba(0,0,0,0.55);
+  background: var(--overlay-bg);
   border: 1px solid var(--panel-border);
   border-radius: 14px;
   padding: 12px 28px;
@@ -65,7 +78,7 @@ body {
   min-width: 4ch;
   text-align: right;
   line-height: 1;
-  text-shadow: 0 0 20px rgba(232,19,42,0.6);
+  text-shadow: 0 0 20px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 
 #speed-unit {
@@ -82,8 +95,8 @@ body {
 }
 
 #rpm-label {
-  font-size: 0.65rem;
-  letter-spacing: 0.15em;
+  font-size: var(--label-fs);
+  letter-spacing: var(--label-track);
   color: var(--dim);
 }
 
@@ -99,11 +112,11 @@ body {
   height: 100%;
   width: 0%;
   border-radius: 3px;
-  background: linear-gradient(90deg, #27ae60, #f39c12, #e8132a);
+  background: linear-gradient(90deg, var(--ok), var(--warn), var(--accent));
   transition: width 0.15s ease, filter 0.15s ease;
 }
 
-#rpm-fill.redline { filter: brightness(1.5) drop-shadow(0 0 6px #e8132a); }
+#rpm-fill.redline { filter: brightness(1.5) drop-shadow(0 0 6px var(--accent)); }
 
 #gear-display {
   font-family: var(--mono);
@@ -112,7 +125,7 @@ body {
   color: var(--accent);
   min-width: 2ch;
   text-align: center;
-  text-shadow: 0 0 18px rgba(232,19,42,0.8);
+  text-shadow: 0 0 18px color-mix(in srgb, var(--accent) 80%, transparent);
 }
 
 /* ─── Car badge (top-left) ───────────────────────────────────────── */
@@ -148,10 +161,10 @@ body {
   top: 24px;
   right: calc(var(--panel-w) + 32px);
   font-family: var(--mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.2em;
+  font-size: var(--label-fs);
+  letter-spacing: var(--label-track);
   color: var(--dim);
-  background: rgba(0,0,0,0.4);
+  background: var(--overlay-bg);
   border: 1px solid var(--panel-border);
   padding: 4px 10px;
   border-radius: 20px;
@@ -173,18 +186,18 @@ body {
 }
 
 .chip {
-  font-size: 0.65rem;
-  letter-spacing: 0.12em;
+  font-size: var(--label-fs);
+  letter-spacing: var(--label-track);
   padding: 3px 10px;
   border-radius: 20px;
   border: 1px solid;
   backdrop-filter: blur(6px);
   animation: chipIn 0.25s ease;
 }
-.chip-airflow  { border-color: #5599ff; color: #88bbff; background: rgba(85,153,255,0.12); }
-.chip-rain     { border-color: #44aaff; color: #aaddff; background: rgba(68,170,255,0.12); }
-.chip-cfd      { border-color: #ff4400; color: #ff8855; background: rgba(255,68,0,0.10); }
-.chip-turns    { border-color: #ff6b00; color: #ffaa66; background: rgba(255,107,0,0.10); }
+.chip-airflow  { border-color: var(--c-airflow); color: #a3c8ff; background: color-mix(in srgb, var(--c-airflow) 12%, transparent); }
+.chip-rain     { border-color: var(--c-rain);    color: #bfe6ff; background: color-mix(in srgb, var(--c-rain) 12%, transparent); }
+.chip-cfd      { border-color: var(--c-cfd);     color: #ff9a70; background: color-mix(in srgb, var(--c-cfd) 10%, transparent); }
+.chip-turns    { border-color: var(--c-turns);   color: #ffbb80; background: color-mix(in srgb, var(--c-turns) 10%, transparent); }
 
 @keyframes chipIn {
   from { opacity:0; transform: translateY(-6px); }
@@ -201,7 +214,7 @@ body {
   gap: 8px;
   padding: 10px 12px;
   border-radius: 10px;
-  border: 1px solid rgba(255,68,0,0.35);
+  border: 1px solid color-mix(in srgb, var(--c-cfd) 35%, transparent);
   background: rgba(10,10,15,0.72);
   backdrop-filter: blur(6px);
   z-index: 10;
@@ -211,9 +224,9 @@ body {
 
 .cfd-legend-title {
   align-self: flex-start;
-  font-size: 0.7rem;
-  letter-spacing: 0.08em;
-  color: #ff8855;
+  font-size: var(--label-fs);
+  letter-spacing: var(--label-track);
+  color: #ff9a70;
 }
 
 /* Gradient mirrors cpToEmphasisColor: bright red at +1, fading to black
@@ -250,8 +263,8 @@ body {
   position: fixed;
   display: none;
   padding: 3px 8px;
-  border-radius: 6px;
-  border: 1px solid rgba(255,68,0,0.4);
+  border-radius: var(--radius);
+  border: 1px solid color-mix(in srgb, var(--c-cfd) 40%, transparent);
   background: rgba(10,10,15,0.85);
   color: #ffb08a;
   font-size: 0.7rem;
@@ -330,8 +343,8 @@ body {
 .ctrl-group { display: flex; flex-direction: column; gap: 8px; }
 
 .group-label {
-  font-size: 0.6rem;
-  letter-spacing: 0.2em;
+  font-size: var(--label-fs);
+  letter-spacing: var(--label-track);
   color: var(--dim);
   text-transform: uppercase;
 }
@@ -346,7 +359,7 @@ body {
 /* ─── Car buttons ────────────────────────────────────────────────── */
 .car-btn, .cam-btn, .preset-btn {
   flex: 1;
-  padding: 7px 4px;
+  padding: 8px 6px;
   background: rgba(255,255,255,0.04);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius);
@@ -355,27 +368,39 @@ body {
   font-weight: 600;
   letter-spacing: 0.08em;
   cursor: pointer;
-  transition: all 0.18s ease;
+  transition: all var(--ease);
   white-space: nowrap;
 }
 
 .car-btn:hover, .cam-btn:hover, .preset-btn:hover {
-  background: rgba(255,255,255,0.09);
+  background: rgba(255,255,255,0.08);
   color: var(--text);
 }
 
 .car-btn.active {
-  background: rgba(232,19,42,0.2);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
   border-color: var(--accent);
   color: #fff;
-  box-shadow: 0 0 12px rgba(232,19,42,0.3);
+  box-shadow: var(--glow) color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .cam-btn.active, .turn-btn.active {
-  background: rgba(255,107,0,0.2);
+  background: color-mix(in srgb, var(--accent2) 20%, transparent);
   border-color: var(--accent2);
   color: #fff;
-  box-shadow: 0 0 12px rgba(255,107,0,0.25);
+  box-shadow: var(--glow) color-mix(in srgb, var(--accent2) 28%, transparent);
+}
+
+/* Press feedback — panel button families only (mobile tabs get color feedback) */
+.car-btn:active, .cam-btn:active, .preset-btn:active, .env-btn:active,
+.play-btn:active, .reset-btn:active {
+  transform: scale(0.97);
+}
+
+/* Keyboard focus — visible ring without polluting mouse UX */
+button:focus-visible, input:focus-visible {
+  outline: 2px solid var(--accent2);
+  outline-offset: 2px;
 }
 
 /* ─── Speed slider ───────────────────────────────────────────────── */
@@ -397,10 +422,27 @@ body {
   border-radius: 50%;
   background: var(--accent);
   cursor: pointer;
-  box-shadow: 0 0 10px rgba(232,19,42,0.7);
+  box-shadow: var(--glow) color-mix(in srgb, var(--accent) 70%, transparent);
   transition: transform 0.15s;
 }
 #speed-slider::-webkit-slider-thumb:hover { transform: scale(1.2); }
+
+/* Firefox parity — mirrors the webkit track/thumb above */
+#speed-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.1);
+}
+#speed-slider::-moz-range-thumb {
+  width: 16px; height: 16px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  box-shadow: var(--glow) color-mix(in srgb, var(--accent) 70%, transparent);
+  transition: transform 0.15s;
+}
+#speed-slider::-moz-range-thumb:hover { transform: scale(1.2); }
 
 /* ─── Environment toggles ────────────────────────────────────────── */
 .toggle-row {
@@ -413,32 +455,39 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 12px;
+  padding: 10px 12px;
   background: rgba(255,255,255,0.04);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius);
   color: var(--dim);
   font-size: 0.8rem;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
-  transition: all 0.18s ease;
+  transition: all var(--ease);
   text-align: left;
 }
 
 .env-btn:hover { background: rgba(255,255,255,0.08); color: var(--text); }
 
 .env-btn.active[data-env="airflow"] {
-  background: rgba(85,153,255,0.15);
-  border-color: #5599ff;
+  background: color-mix(in srgb, var(--c-airflow) 15%, transparent);
+  border-color: var(--c-airflow);
   color: #aaccff;
-  box-shadow: 0 0 14px rgba(85,153,255,0.2);
+  box-shadow: var(--glow) color-mix(in srgb, var(--c-airflow) 28%, transparent);
 }
 
 .env-btn.active[data-env="rain"] {
-  background: rgba(68,170,255,0.15);
-  border-color: #44aaff;
+  background: color-mix(in srgb, var(--c-rain) 15%, transparent);
+  border-color: var(--c-rain);
   color: #bbddff;
-  box-shadow: 0 0 14px rgba(68,170,255,0.2);
+  box-shadow: var(--glow) color-mix(in srgb, var(--c-rain) 28%, transparent);
+}
+
+.env-btn.active[data-env="cfd"] {
+  background: color-mix(in srgb, var(--c-cfd) 15%, transparent);
+  border-color: var(--c-cfd);
+  color: #ffb08a;
+  box-shadow: var(--glow) color-mix(in srgb, var(--c-cfd) 28%, transparent);
 }
 
 .env-icon { font-size: 1rem; }
@@ -446,25 +495,25 @@ body {
 /* ─── Play/Reset buttons ─────────────────────────────────────────── */
 .play-btn, .reset-btn {
   flex: 1;
-  padding: 9px 8px;
+  padding: 10px 12px;
   border-radius: var(--radius);
   font-size: 0.75rem;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.08em;
   cursor: pointer;
-  transition: all 0.18s ease;
+  transition: all var(--ease);
   border: 1px solid;
 }
 
 .play-btn {
-  background: rgba(232,19,42,0.15);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
   border-color: var(--accent);
   color: #ff6070;
 }
-.play-btn:hover { background: rgba(232,19,42,0.28); }
+.play-btn:hover { background: color-mix(in srgb, var(--accent) 28%, transparent); }
 .play-btn.playing {
-  background: rgba(39,174,96,0.15);
-  border-color: #27ae60;
+  background: color-mix(in srgb, var(--ok) 15%, transparent);
+  border-color: var(--ok);
   color: #5de08a;
 }
 
@@ -567,6 +616,7 @@ body {
     text-transform: uppercase;
     letter-spacing: 0.06em;
   }
+  .tab-btn:hover { color: var(--text); }
   .tab-btn.active { color: var(--accent); }
   .tab-btn:active { background: rgba(255,255,255,0.05); }
 
