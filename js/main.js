@@ -309,10 +309,14 @@ async function spawnCar(type) {
   grp.updateMatrixWorld(true);
   const occMeshes = collectOccupancyMeshes(grp, CAR_MANIFEST[carKey] ?? null);
   cfd.setBodySurface(occMeshes, grp);
-  // P6: cached raycast subset for INFO-mode part hover — the manifest
-  // occupancy meshes plus the four wheel corner groups (cheap vs the
-  // GT mega-mesh's full scene graph).
-  state._infoTargets = [...occMeshes, ...Object.values(state.wheels).filter(Boolean)];
+  // P6: cached raycast targets for INFO-mode part hover. F1: the whole car
+  // group — its GLB is many small meshes, so full coverage is cheap and the
+  // occupancy subset left visible parts (engine cover, livery) card-less.
+  // GT: keep the occupancy subset — its 224k-vert mega-mesh costs 37-65 ms
+  // per cast (docs/perf-audit.md R4), too slow for the 10 Hz hover.
+  state._infoTargets = carKey === 'gt'
+    ? [...occMeshes, ...Object.values(state.wheels).filter(Boolean)]
+    : [grp];
   cfd.setCarType(type, state.carMeasure);
   // Phase C: pipe the same feature-aware modifier list into CFD so the
   // pressure map sinks under inlets / low-pressure under the rear wing
@@ -442,12 +446,12 @@ function partForHitObject(hit) {
   return partForHit(p, state.carMeasure?.anchors ?? null, state.carType);
 }
 
-renderer.domElement.addEventListener('pointermove', (e) => {
+function runProbe(e, force = false) {
   const infoOn = state.infoMode;
   const cfdOn  = state.activeEnvs.has('cfd');
   if (!infoOn && !cfdOn) return;
   const now = performance.now();
-  if (now - probeLastT < 100) return;                // throttle to 10 Hz
+  if (!force && now - probeLastT < 100) return;      // throttle to 10 Hz
   probeLastT = now;
 
   probeNdc.set(
@@ -466,7 +470,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
       infoTitle.textContent = title;
       infoBody.textContent  = body;
       infoCard.style.left = `${Math.min(e.clientX + 16, window.innerWidth - 260)}px`;
-      infoCard.style.top  = `${e.clientY - 12}px`;
+      infoCard.style.top  = `${Math.min(e.clientY - 12, window.innerHeight - 150)}px`;
       infoCard.classList.add('show');
     } else {
       infoCard.classList.remove('show');
@@ -484,6 +488,13 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   } else {
     probeTip.classList.remove('show');
   }
+}
+
+renderer.domElement.addEventListener('pointermove', runProbe);
+// Touch has no hover: a tap raycasts immediately (bypasses the throttle) so
+// INFO cards work on mobile. Misses hide the card via the same path.
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (state.infoMode) runProbe(e, true);
 });
 
 /* ══════════════════════════════════════════════════════════════════

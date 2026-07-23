@@ -703,6 +703,19 @@ button:focus-visible, input:focus-visible {
   .panel-title,
   #panel-toggle { display: none; }
 
+  /* INFO joins the tab bar as a fixed-width tab (it was being flex-squeezed
+     to a sliver by the 100%-wide .mobile-tabs — unclickable). */
+  #info-btn {
+    flex: 0 0 48px;
+    height: 100%;
+    width: auto;
+    border: none;
+    border-radius: 0;
+    background: none;
+    font-size: 1.2rem;
+  }
+  #info-btn.active { background: none; }
+
   /* Header becomes the tab bar container */
   #panel-header {
     height: 60px;
@@ -716,7 +729,8 @@ button:focus-visible, input:focus-visible {
 
   .mobile-tabs {
     display: flex;
-    width: 100%;
+    flex: 1 1 auto;
+    width: auto;
     height: 100%;
     align-items: stretch;
     padding-bottom: env(safe-area-inset-bottom);
