@@ -17,7 +17,7 @@ import { createDebugOverlay } from './debug-overlay.js';
 import { buildTrack, buildSkyline } from './track.js';
 import { TrackPath, TURN_CFG, steerAngleRad, rollAngleRad, cameraBankRad, pathBendTable } from './track-path.js';
 import { AirflowEffect, RainEffect } from './effects.js';
-import { CfdEffect } from './cfd-effect.js';
+import { CfdEffect, syncCfdLegend } from './cfd-effect.js';
 import { VentEmitterSystem } from './vent-emitters.js';
 import { buildOccupancy } from './body-sdf.js';
 import { collectOccupancyMeshes } from './car-loader.js';
@@ -250,7 +250,12 @@ async function spawnCar(type) {
   requestAnimationFrame(() => {
     if (!carSpawnGuard.isCurrent(myToken)) return;
     state.bodyOccupancy = buildBodyOccupancyFor(grp, carKey);
-    if (state.bodyOccupancy) airflow.setCarType(type, state.carMeasure, state.bodyOccupancy);
+    if (state.bodyOccupancy) {
+      airflow.setCarType(type, state.carMeasure, state.bodyOccupancy);
+      // CFD upstream shadowing: world-frame SDF sampled at car-local y +
+      // baseY (occupancy frame convention). Forces an overlay recolor.
+      cfd.setOccupancy?.(state.bodyOccupancy, grp.userData?.baseY ?? 0);
+    }
     wireRainCoupling();   // rain body-splash gains the occupancy once it lands
   });
 
@@ -309,6 +314,10 @@ catch (e) { console.error('[VentEmitterSystem] constructor failed:', e); vents =
 // this safe against an early user click on a different car-btn.
 spawnCar('F1').catch(e => console.error('[init] spawnCar failed:', e));
 
+// Verify-script hook (scripts/verify-cfd-emphasis.mjs): lets Playwright
+// inspect the CFD overlay state (mesh counts, colour buffers) headlessly.
+window.__fsim.cfd = cfd;
+
 /**
  * Phase 5 (part-precision): wire rain to the airflow field when BOTH envs
  * are active. The sampler translates rain's world-frame coords into
@@ -338,6 +347,11 @@ function syncEffects() {
   airflow.setVisible(state.activeEnvs.has('airflow'));
   rain.setVisible(state.activeEnvs.has('rain'));
   cfd.setVisible(state.activeEnvs.has('cfd'));
+  // CFD legend follows the env toggle; the probe tooltip never outlives it.
+  syncCfdLegend(document.getElementById('cfd-legend'), state.activeEnvs.has('cfd'));
+  if (!state.activeEnvs.has('cfd')) {
+    document.getElementById('cfd-probe-tip')?.classList.remove('show');
+  }
   wireRainCoupling();
   // Vents are visible whenever the user is viewing the airflow or CFD picture —
   // the vent stream is part of the flow visualisation, not a standalone env.
@@ -350,6 +364,35 @@ function syncEffects() {
   sunLight.intensity               = w.sunIntensity;
   renderer.toneMappingExposure     = w.exposure;
 }
+
+/* ── CFD hover probe: 10 Hz raycast against the overlay clones ──── */
+const probeTip = document.getElementById('cfd-probe-tip');
+const probeRaycaster = new THREE.Raycaster();
+const probeNdc = new THREE.Vector2();
+let probeLastT = 0;
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!probeTip) return;
+  if (!state.activeEnvs.has('cfd')) return;          // syncEffects hides the tip
+  const now = performance.now();
+  if (now - probeLastT < 100) return;                // throttle to 10 Hz
+  probeLastT = now;
+
+  probeNdc.set(
+    (e.clientX / window.innerWidth)  *  2 - 1,
+    (e.clientY / window.innerHeight) * -2 + 1,
+  );
+  probeRaycaster.setFromCamera(probeNdc, camera);
+  const res = cfd.raycastCp?.(probeRaycaster);
+  if (res) {
+    probeTip.textContent = `Cp ≈ ${res.cp.toFixed(2)}`;
+    probeTip.style.left = `${e.clientX + 14}px`;
+    probeTip.style.top  = `${e.clientY - 10}px`;
+    probeTip.classList.add('show');
+  } else {
+    probeTip.classList.remove('show');
+  }
+});
 
 /* ══════════════════════════════════════════════════════════════════
    CAMERA MODES
@@ -616,6 +659,11 @@ function animate() {
     // speed captured when the user last clicked.
     airflow.setSpeed(state.speed);
     rain.setSpeed(state.speed);
+    // CFD too — its overlay opacity and recolor threshold read _speed; the
+    // >5 km/h rebake trigger keeps the per-frame call amortized. Without
+    // this, a single preset click left the overlay at the click-instant
+    // speed (≈0) forever — CFD invisible in any deterministic session.
+    cfd.setSpeed(state.speed);
     airflow.setPathBend?.(pathBendTable(trackPath));
     airflow.setTurnState?.(turnOmega, state.speed / 3.6);
     rain.setTurnState?.(turnOmega, state.speed / 3.6);

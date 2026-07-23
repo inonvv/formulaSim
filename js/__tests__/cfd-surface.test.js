@@ -58,8 +58,11 @@ describe('computeSurfaceCp', () => {
     expect(cp).toBeGreaterThan(0);
   });
 
-  it('CS3. rear-wing band reads stronger suction than the mid roof', () => {
-    const wing = computeSurfaceCp(0, 0.86, 1.92, 0, 0.9, 0, 'GT', GT_ANCHORS, 1.0);
+  it('CS3. rear-wing SUCTION SIDE reads stronger suction than the mid roof', () => {
+    // Gated model: suction lives on the forward-lower quadrant normals of
+    // the wing (the suction surface of a high-AoA inverted airfoil), not on
+    // every vertex inside a z-band.
+    const wing = computeSurfaceCp(0, 0.86, 1.80, 0, -0.25, -0.95, 'GT', GT_ANCHORS, 1.0);
     const roof = computeSurfaceCp(0, 1.25, 0.60, 0, 1.0, 0, 'GT', GT_ANCHORS, 1.0);
     expect(wing).toBeLessThan(roof);
     expect(wing).toBeLessThan(-1.0);
@@ -70,9 +73,10 @@ describe('computeSurfaceCp', () => {
     expect(computeSurfaceCp(0, 0.35, -2.10, 0, 0.2, -0.9, 'GT', GT_ANCHORS, 0)).toBe(0);
   });
 
-  it('CS5. F1 front-wing band reads strong suction below wing height', () => {
+  it('CS5. F1 front-wing UNDERSIDE reads strong suction below wing height', () => {
     const anchors = { frontWing: { x: 0, y: 0.05, z: -2.30 }, rearWing: { x: 0, y: 0.45, z: 2.41 }, floor: { x: 0, y: -0.37, z: 0.13 } };
-    const fw = computeSurfaceCp(0.4, 0.03, -2.30, 0, 0.8, 0, 'F1', anchors, 1.0);
+    // Gated model: front-wing suction only on underside normals (ny < -0.2).
+    const fw = computeSurfaceCp(0.4, 0.03, -2.45, 0, -0.9, -0.1, 'F1', anchors, 1.0);
     const mid = computeSurfaceCp(0.4, 0.40, 0.0, 0, 1.0, 0, 'F1', anchors, 1.0);
     expect(fw).toBeLessThan(mid);
   });
@@ -104,6 +108,104 @@ describe('computeSurfaceCp', () => {
     const side = computeSurfaceCp(1.0, 0.60, 0.0, 1, 0, 0, 'GT', GT_ANCHORS, 1.0);
     const front = computeSurfaceCp(1.0, 0.60, 0.0, 0, 0, -1, 'GT', GT_ANCHORS, 1.0);
     expect(front).toBeGreaterThan(side + 0.5);
+  });
+});
+
+/* ── Accurate heat points: LE stripe, gated wing suction, shadowing ─ *
+ * F1 anchors WITH measured bboxes (car-local, nose at −z) — values from
+ * docs/f1-bboxes.json via measureAnchors: anchor z = bbox centre z,
+ * anchor y = bbox max y (use: 'peak').
+ */
+const F1_BBOX_ANCHORS = {
+  frontWing: {
+    x: 0, y: -0.052, z: -2.297,
+    bbox: { minX: -0.98, maxX: 0.98, minY: -0.416, maxY: -0.052, minZ: -2.636, maxZ: -1.957 },
+  },
+  rearWing: {
+    x: 0, y: 0.454, z: 2.412,
+    bbox: { minX: -0.51, maxX: 0.51, minY: -0.184, maxY: 0.454, minZ: 2.050, maxZ: 2.774 },
+  },
+  floor:   { x: 0, y: -0.37, z: 0.13 },
+  noseTip: { x: 0, y: -0.10, z: -2.60 },
+};
+
+describe('computeSurfaceCp — heat points (gated wing model + shadowing)', () => {
+  it('CS15. LEADING-EDGE stripe: frontmost 12% of chord with forward normal reads stagnation red', () => {
+    // z = bbox.minZ + 0.03 (inside the 12% stripe of a 0.679 m chord),
+    // forward-facing LE normal. The old flat box-subtraction painted this
+    // vertex deep negative; the real flow stagnates ON the leading edge.
+    const cp = computeSurfaceCp(0.3, -0.2, -2.606, 0, -0.45, -0.87, 'F1', F1_BBOX_ANCHORS, 1.0);
+    expect(cp).toBeGreaterThanOrEqual(0.55);
+  });
+
+  it('CS16. mid-chord UNDERSIDE keeps the strong suction peak (amplitude preserved)', () => {
+    // 25% chord (gaussian peak), underside normal (ny < -0.2).
+    const cp = computeSurfaceCp(0.3, -0.30, -2.466, 0, -0.95, -0.1, 'F1', F1_BBOX_ANCHORS, 1.0);
+    expect(cp).toBeLessThanOrEqual(-0.75);
+  });
+
+  it('CS17. PRESSURE SIDE (upper surface) gets NO wing suction', () => {
+    // Same chord station as CS16 but the upper surface — the old box model
+    // subtracted −1.10 here too. The F1 longitudinal table itself carries a
+    // −2.20 spike at the wing station (nose-blended to ≈ −1.09), so the
+    // bound is that spike WITHOUT any suction subtraction (old model: −2.19).
+    const pressure = computeSurfaceCp(0.3, -0.10, -2.466, 0, 0.9, -0.2, 'F1', F1_BBOX_ANCHORS, 1.0);
+    const suction  = computeSurfaceCp(0.3, -0.30, -2.466, 0, -0.95, -0.1, 'F1', F1_BBOX_ANCHORS, 1.0);
+    expect(pressure).toBeGreaterThanOrEqual(-1.2);
+    expect(pressure - suction).toBeGreaterThan(1.0);   // the two sides must split
+  });
+
+  it('CS18. ENDPLATES (|nx| > 0.7) are excluded from wing suction', () => {
+    const cp = computeSurfaceCp(0.9, -0.2, -2.466, 0.95, 0, -0.31, 'F1', F1_BBOX_ANCHORS, 1.0);
+    expect(cp).toBeGreaterThanOrEqual(-1.0);
+  });
+
+  it('CS19. upstream SHADOWING scales the impact term to ≤ 0.4× (wake impingement)', () => {
+    // GT mirror vertex (CS11 position). shadow = 0.35 models a body part
+    // sitting upstream; impact = facing²·1.4 with facing×0.35 ⇒ ~0.17×.
+    const base     = computeSurfaceCp(0.95, 0.95, -0.30, 1, 0, 0, 'GT', GT_ANCHORS, 1.0);
+    const exposed  = computeSurfaceCp(0.95, 0.95, -0.30, 0, 0, -1, 'GT', GT_ANCHORS, 1.0);
+    const shadowed = computeSurfaceCp(0.95, 0.95, -0.30, 0, 0, -1, 'GT', GT_ANCHORS, 1.0, 0.35);
+    const impactExposed  = exposed  - base;
+    const impactShadowed = shadowed - base;
+    expect(impactExposed).toBeGreaterThan(0);
+    expect(impactShadowed).toBeGreaterThan(0);                       // still warms — wake, not vacuum
+    expect(impactShadowed / impactExposed).toBeLessThanOrEqual(0.4);
+  });
+});
+
+describe('CfdEffect.setOccupancy — SDF upstream shadowing on the overlay', () => {
+  it('CS20. occupancy arrival forces a recolor and dims shadowed flow-facing vertices', () => {
+    const cfd = new CfdEffect(makeScene());
+    const { mesh, carGroup } = bodyFixture();
+    cfd.setBodySurface([mesh], carGroup);
+    cfd.setCarType('GT', { anchors: { ...GT_ANCHORS } });
+    cfd.setVisible(true);
+    cfd.setSpeed(350);
+    cfd.update(0.016, 1.0);
+
+    const overlay = cfd._surfaceMeshes[0].mesh;
+    const nrm = overlay.geometry.attributes.normal;
+    const col = overlay.geometry.attributes.color;
+    const frontLum = () => {
+      let sum = 0, n = 0;
+      for (let i = 0; i < col.count; i++) {
+        if (nrm.getZ(i) < -0.5) {
+          sum += Math.max(col.getX(i), col.getY(i), col.getZ(i));
+          n++;
+        }
+      }
+      return sum / n;
+    };
+    const before = frontLum();
+
+    // Everything-occupied stub: every upstream march hits the body.
+    cfd.setOccupancy({ sample: () => 1 }, 0.25);
+    cfd.update(0.016, 1.1);                  // same speed — recolor must still fire
+    const after = frontLum();
+
+    expect(before).toBeGreaterThan(0.5);     // exposed faces glowed red
+    expect(after).toBeLessThan(before - 0.2);
   });
 });
 

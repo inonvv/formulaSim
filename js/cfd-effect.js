@@ -61,6 +61,36 @@ const CP_TABLES = {
   },
 };
 
+/**
+ * Emphasis colour mapping for the CFD overlays (heat-point legibility).
+ *
+ * cpToColor always emits one full-luminance channel, so under additive
+ * blending the mid-range Cp band (−1…+0.5 ⇒ green/yellow) glowed as bright
+ * as the true stagnation/suction peaks — the whole shell washed uniform.
+ *
+ * Here the HUE still comes from cpToColor (which is shared with the venturi
+ * underfloor tint and must not change), but luminance is scaled by
+ *   w = smoothstep(0.25, 0.85, |cp| / cpRef)      (cpRef per sign)
+ * Zero luminance is invisible under additive blending: mid-range fades out,
+ * peaks glow. Callers normalise cpRef by the CURRENT speed's attainable
+ * peak (cpRef·sf) so the emphasis pattern survives at low speed.
+ *
+ * @param {number} cp
+ * @param {number} cpRefPos — reference positive peak (stagnation), default 0.9
+ * @param {number} cpRefNeg — reference negative peak (suction), default 2.2
+ * @returns {{r: number, g: number, b: number}}
+ */
+export function cpToEmphasisColor(cp, cpRefPos = 0.9, cpRefNeg = 2.2) {
+  const ref = cp >= 0 ? cpRefPos : cpRefNeg;
+  if (!(ref > 1e-6)) return { r: 0, g: 0, b: 0 };
+  const x = Math.abs(cp) / ref;
+  const t = Math.min(1, Math.max(0, (x - 0.25) / 0.60));
+  const w = t * t * (3 - 2 * t);                 // smoothstep(0.25, 0.85, x)
+  if (w <= 0) return { r: 0, g: 0, b: 0 };
+  const c = cpToColor(cp);
+  return { r: c.r * w, g: c.g * w, b: c.b * w };
+}
+
 export function lerpCpProfile(z, type = 'F1', surface = 'under') {
   const tables = CP_TABLES[type] || CP_TABLES.F1;
   const table  = tables[surface] || tables.under;
@@ -354,8 +384,20 @@ export function computePatchCp(p, lx, ly, speedFactor, modifiers = [], vortexCor
  *      is what paints the heat/compression points red wherever they really
  *      are: mirror faces, the windshield base mid-car, bumper, intake lips,
  *      A-pillar leading edges — independent of where they sit along z.
- *      Rear-facing surfaces get base/wake suction instead.
- *   4. The wing bands get their suction peaks at the measured anchors.
+ *      Rear-facing surfaces get base/wake suction instead. `shadow` (from
+ *      the body-SDF upstream march) scales facing: a surface sitting in
+ *      another part's wake gets impingement, not clean stagnation.
+ *   4. WING TREATMENT at the measured anchors — chord-resolved:
+ *      • Leading-edge stagnation stripe: frontmost 12% of the chord with a
+ *        forward normal (nz < −0.2) blends to Cp +0.90 — the classic red
+ *        LE stripe. Applied on the front wing / splitter AND the rear wing.
+ *      • Suction only on SUCTION-SIDE normals (front wing: underside
+ *        ny < −0.2; rear wing: forward-lower quadrant), weighted by a
+ *        gaussian in chord distance (σ = 0.35·chord) peaking at 25% chord.
+ *        Peak amplitudes preserved: −1.10 FW / −0.95 RW.
+ *      • Endplates (|nx| > 0.7) excluded from all wing treatment.
+ *      Chord comes from the anchor's measured bbox when present, else a
+ *      fallback band around the anchor z (legacy widths).
  *
  * Everything scales with speedFactor so the overlay fades at rest.
  *
@@ -364,8 +406,10 @@ export function computePatchCp(p, lx, ly, speedFactor, modifiers = [], vortexCor
  * @param {string} type         — car type for the Cp tables
  * @param {object} anchors      — measured anchor map (frontWing/rearWing/floor/noseTip…)
  * @param {number} speedFactor  — [0, 1]
+ * @param {number} shadow       — upstream-shadowing factor ∈ (0, 1]; 1 = clean
+ *                                freestream, 0.35 = body part sits upstream
  */
-export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor) {
+export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor, shadow = 1) {
   if (!speedFactor) return 0;
 
   const floorY  = Number.isFinite(anchors?.floor?.y) ? anchors.floor.y : 0.03;
@@ -373,12 +417,76 @@ export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor
 
   let cp = lerpCpProfile(z, type, isUnder ? 'under' : 'top');
 
+  // ── Wing classification (chord-resolved, normal-gated) ──────────
+  const clamp01 = (v) => Math.min(1, Math.max(0, v));
+  const wingGeom = (anchor, fallbackHalfChord) => {
+    const bb = anchor.bbox;
+    if (bb && Number.isFinite(bb.minZ) && Number.isFinite(bb.maxZ) && bb.maxZ > bb.minZ) {
+      return { minZ: bb.minZ, maxZ: bb.maxZ, minY: bb.minY, maxY: bb.maxY };
+    }
+    return { minZ: anchor.z - fallbackHalfChord, maxZ: anchor.z + fallbackHalfChord, minY: null, maxY: null };
+  };
+
+  let leW = 0;            // leading-edge stripe blend weight
+  let wingSuction = 0;    // gaussian, gated suction contribution
+  let sGate = 0;          // strongest suction gate — suppresses the impact term
+  if (Math.abs(nx) <= 0.7) {   // endplates excluded from all wing treatment
+    const rw = anchors?.rearWing;
+    if (rw) {
+      const g = wingGeom(rw, 0.35);
+      const chord = g.maxZ - g.minZ;
+      const yOk = (g.minY != null)
+        ? (y >= g.minY - 0.10 && y <= g.maxY + 0.10)
+        : (y > rw.y - 0.30);
+      if (yOk && z >= g.minZ && z <= g.maxZ) {
+        if (z < g.minZ + 0.12 * chord && nz < -0.2) {
+          leW = Math.max(leW, clamp01((-nz - 0.2) / 0.4));
+        }
+        // Suction side of the inverted rear wing faces forward-and-down.
+        const gate = clamp01((0.6 * -ny + 0.8 * -nz - 0.2) / 0.4);
+        if (gate > 0) {
+          const zp = g.minZ + 0.25 * chord;
+          const sig = 0.35 * chord;
+          const w = Math.exp(-((z - zp) ** 2) / (2 * sig * sig));
+          wingSuction -= 0.95 * w * gate;
+          sGate = Math.max(sGate, gate * w);
+        }
+      }
+    }
+    const fw = anchors?.frontWing;
+    if (fw) {
+      const g = wingGeom(fw, 0.30);
+      const chord = g.maxZ - g.minZ;
+      const yOk = (g.minY != null)
+        ? (y >= g.minY - 0.10 && y <= g.maxY + 0.10)
+        : (y < fw.y + 0.25);
+      if (yOk && z >= g.minZ && z <= g.maxZ) {
+        // LE stripe on both cars — F1 front wing / GT splitter lip.
+        if (z < g.minZ + 0.12 * chord && nz < -0.2) {
+          leW = Math.max(leW, clamp01((-nz - 0.2) / 0.4));
+        }
+        if (type === 'F1') {
+          const gate = clamp01((-ny - 0.2) / 0.3);   // underside only
+          if (gate > 0) {
+            const zp = g.minZ + 0.25 * chord;
+            const sig = 0.35 * chord;
+            const w = Math.exp(-((z - zp) ** 2) / (2 * sig * sig));
+            wingSuction -= 1.10 * w * gate;
+            sGate = Math.max(sGate, gate * w);
+          }
+        }
+      }
+    }
+  }
+
   if (!isUnder) {
     // Newtonian impact: pull toward stagnation by how squarely the surface
-    // faces the flow. facing = −nz ∈ (0, 1]; impact = facing².
-    const facing = Math.max(0, -nz);
+    // faces the flow. facing = −nz ∈ (0, 1]; impact = facing². Scaled by
+    // `shadow` (upstream body ⇒ wake impingement, not clean stagnation) and
+    // suppressed on wing suction sides (accelerating flow, not blunt-body).
+    const facing = Math.max(0, -nz) * shadow;
     if (facing > 0) {
-      const t = Math.min(1, facing * facing * 1.4);
+      const t = Math.min(1, facing * facing * 1.4) * (1 - sGate);
       cp = cp + (0.95 - cp) * t;
     }
     // Leeward base/wake suction on rear-facing surfaces.
@@ -394,18 +502,44 @@ export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor
     }
   }
 
-  // Wing suction bands at the MEASURED anchor positions.
-  const rw = anchors?.rearWing;
-  if (rw && Math.abs(z - rw.z) < 0.35 && y > rw.y - 0.30) {
-    cp -= 0.95;
-  }
-  const fw = anchors?.frontWing;
-  if (type === 'F1' && fw && Math.abs(z - fw.z) < 0.30 && y < fw.y + 0.25) {
-    cp -= 1.10;
-  }
+  cp += wingSuction;
 
   if (isUnder) cp *= 1 + speedFactor * speedFactor * 0.30;
+
+  // LE stagnation stripe LAST — the true heat line on the wing wins over
+  // suction and the underbody ground-effect gain.
+  if (leW > 0) cp = cp + (0.90 - cp) * leW;
+
   return cp * speedFactor;
+}
+
+/**
+ * Cp readout for the hover probe. Converts a raycast hit on the overlay
+ * (world frame — the CFD group is lifted by baseY) into the car-local frame
+ * and evaluates the same surface model that painted the vertex colours.
+ * Pure — exported for tests.
+ *
+ * @param {object} hit    — raycast intersection ({ point, face })
+ * @param {string} type   — car type
+ * @param {object} anchors
+ * @param {number} sf     — speedFactor [0, 1]
+ * @param {number} baseY  — CFD group lift (world y = car-local y + baseY)
+ */
+export function probeCp(hit, type, anchors, sf, baseY = 0) {
+  const p = hit?.point ?? { x: 0, y: 0, z: 0 };
+  const n = hit?.face?.normal ?? { x: 0, y: 1, z: 0 };
+  return computeSurfaceCp(p.x, p.y - baseY, p.z, n.x, n.y, n.z, type, anchors, sf);
+}
+
+/**
+ * Toggle the DOM colorbar legend with the CFD env state. Tiny and DOM-shape
+ * agnostic so it is unit-testable without a browser.
+ * @returns {boolean} whether the legend is now shown
+ */
+export function syncCfdLegend(el, active) {
+  if (!el) return false;
+  el.classList.toggle('show', !!active);
+  return !!active;
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -426,6 +560,8 @@ export class CfdEffect {
     this._baseY          = 0;
     this._anchors        = null;   // set by setCarType(type, measure)
     this._modifiers      = [];     // Phase C: injected via setModifiers()
+    this._occupancy      = null;   // world-frame body SDF (setOccupancy)
+    this._occBaseY       = 0;      // world y = car-local y + occBaseY
 
     this._patchMeshes    = [];
     this._blobMeshes     = [];
@@ -510,9 +646,40 @@ export class CfdEffect {
     this._lastBuiltSpeed = -9999;
   }
 
+  /**
+   * Provide the world-frame body-occupancy SDF (buildOccupancy output) for
+   * upstream shadowing of the Newtonian impact term. The SDF is world-frame;
+   * overlay vertices are car-local, so samples go through y + baseY (the
+   * occupancy frame convention shared with AirflowEffect). Arrival forces a
+   * recolor on the next update() pass.
+   */
+  setOccupancy(occ, baseY = 0) {
+    this._occupancy = (occ && typeof occ.sample === 'function') ? occ : null;
+    this._occBaseY  = baseY || 0;
+    this._speedDirty     = true;
+    this._lastBuiltSpeed = -9999;   // force the recolor threshold
+  }
+
   setVisible(v) {
     this._visible      = v;
     this.group.visible = v;
+  }
+
+  /**
+   * Hover probe: raycast the body-surface overlay clones only (cheap — the
+   * caller throttles) and return the Cp at the hit, or null. Only answers
+   * while CFD is visible and the GLB overlay exists.
+   */
+  raycastCp(raycaster) {
+    if (!this._visible || this._surfaceMeshes.length === 0) return null;
+    const meshes = this._surfaceMeshes.map(s => s.mesh);
+    const hits = raycaster.intersectObjects(meshes, false);
+    if (!hits.length) return null;
+    const sf = Math.min(this._speed / 350, 1);
+    return {
+      cp:    probeCp(hits[0], this._type, this._anchors, sf, this._baseY),
+      point: hits[0].point,
+    };
   }
 
   update(dt, t) {
@@ -694,19 +861,35 @@ export class CfdEffect {
 
   /* ── Per-vertex Cp colouring of the body overlay ──────────────── */
   _updateSurfaceColors(speedFactor) {
+    const occ  = this._occupancy;
+    const occY = this._occBaseY;
     for (const { mesh } of this._surfaceMeshes) {
       const pos = mesh.geometry.attributes.position;
       const nrm = mesh.geometry.attributes.normal;
       const col = mesh.geometry.attributes.color;
       for (let i = 0; i < pos.count; i++) {
+        const px = pos.getX(i), py = pos.getY(i), pz = pos.getZ(i);
+        const vnx = nrm ? nrm.getX(i) : 0;
+        const vny = nrm ? nrm.getY(i) : 1;
+        const vnz = nrm ? nrm.getZ(i) : 0;
+        // Upstream shadowing: march 3 samples toward the nose (−z) through
+        // the world-frame body SDF. First sample starts 0.15 m out — beyond
+        // the 12 mm inflation + local part thickness, so a wing LE never
+        // self-shadows. Any hit ⇒ this face sits in another part's wake.
+        let shadow = 1;
+        if (occ && vnz < 0) {
+          const wy = py + occY;
+          if (occ.sample(px, wy, pz - 0.15) > 0.5 ||
+              occ.sample(px, wy, pz - 0.30) > 0.5 ||
+              occ.sample(px, wy, pz - 0.45) > 0.5) shadow = 0.35;
+        }
         const cp = computeSurfaceCp(
-          pos.getX(i), pos.getY(i), pos.getZ(i),
-          nrm ? nrm.getX(i) : 0,
-          nrm ? nrm.getY(i) : 1,
-          nrm ? nrm.getZ(i) : 0,
-          this._type, this._anchors, speedFactor,
+          px, py, pz, vnx, vny, vnz,
+          this._type, this._anchors, speedFactor, shadow,
         );
-        const c = cpToColor(cp);
+        // Emphasis map: cpRef scaled by the current speed's attainable peak
+        // so the heat-point pattern is legible at 100 km/h too.
+        const c = cpToEmphasisColor(cp, 0.9 * speedFactor, 2.2 * speedFactor);
         col.setXYZ(i, c.r, c.g, c.b);
       }
       col.needsUpdate = true;
@@ -809,7 +992,9 @@ export class CfdEffect {
         const lx = pos[vi * 3];
         const ly = pos[vi * 3 + 1];
         const cp = computePatchCp(p, lx, ly, speedFactor, this._modifiers, vortexCores, this._type);
-        const c  = cpToColor(cp);
+        // Same emphasis map as the body-surface overlay — the procedural
+        // fallback must stay visually consistent with the GLB path.
+        const c  = cpToEmphasisColor(cp, 0.9 * speedFactor, 2.2 * speedFactor);
         colors[vi * 3]     = c.r;
         colors[vi * 3 + 1] = c.g;
         colors[vi * 3 + 2] = c.b;
@@ -889,6 +1074,14 @@ export class CfdEffect {
       const m = new THREE.Mesh(geo, mat);
       const [x, y, z] = this._resolveBlobPos(blob.role, blob.pos);
       m.position.set(x, y, z);
+      m.userData.blobRole = blob.role;
+      // Declutter: when Cp is painted on the real body (GLB overlay path),
+      // the stagnation/cockpit glow spheres just duplicate the paint — hide
+      // them. Volumes the paint cannot show (diffuser/suction/vortices) and
+      // the procedural fallback keep every blob.
+      if (this._bodyMeshes && (blob.role === 'stagnation' || blob.role === 'cockpit')) {
+        m.visible = false;
+      }
       this.group.add(m);
       this._blobMeshes.push(m);
     }
