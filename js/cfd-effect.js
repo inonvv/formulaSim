@@ -61,6 +61,36 @@ const CP_TABLES = {
   },
 };
 
+/**
+ * Emphasis colour mapping for the CFD overlays (heat-point legibility).
+ *
+ * cpToColor always emits one full-luminance channel, so under additive
+ * blending the mid-range Cp band (−1…+0.5 ⇒ green/yellow) glowed as bright
+ * as the true stagnation/suction peaks — the whole shell washed uniform.
+ *
+ * Here the HUE still comes from cpToColor (which is shared with the venturi
+ * underfloor tint and must not change), but luminance is scaled by
+ *   w = smoothstep(0.25, 0.85, |cp| / cpRef)      (cpRef per sign)
+ * Zero luminance is invisible under additive blending: mid-range fades out,
+ * peaks glow. Callers normalise cpRef by the CURRENT speed's attainable
+ * peak (cpRef·sf) so the emphasis pattern survives at low speed.
+ *
+ * @param {number} cp
+ * @param {number} cpRefPos — reference positive peak (stagnation), default 0.9
+ * @param {number} cpRefNeg — reference negative peak (suction), default 2.2
+ * @returns {{r: number, g: number, b: number}}
+ */
+export function cpToEmphasisColor(cp, cpRefPos = 0.9, cpRefNeg = 2.2) {
+  const ref = cp >= 0 ? cpRefPos : cpRefNeg;
+  if (!(ref > 1e-6)) return { r: 0, g: 0, b: 0 };
+  const x = Math.abs(cp) / ref;
+  const t = Math.min(1, Math.max(0, (x - 0.25) / 0.60));
+  const w = t * t * (3 - 2 * t);                 // smoothstep(0.25, 0.85, x)
+  if (w <= 0) return { r: 0, g: 0, b: 0 };
+  const c = cpToColor(cp);
+  return { r: c.r * w, g: c.g * w, b: c.b * w };
+}
+
 export function lerpCpProfile(z, type = 'F1', surface = 'under') {
   const tables = CP_TABLES[type] || CP_TABLES.F1;
   const table  = tables[surface] || tables.under;
@@ -706,7 +736,9 @@ export class CfdEffect {
           nrm ? nrm.getZ(i) : 0,
           this._type, this._anchors, speedFactor,
         );
-        const c = cpToColor(cp);
+        // Emphasis map: cpRef scaled by the current speed's attainable peak
+        // so the heat-point pattern is legible at 100 km/h too.
+        const c = cpToEmphasisColor(cp, 0.9 * speedFactor, 2.2 * speedFactor);
         col.setXYZ(i, c.r, c.g, c.b);
       }
       col.needsUpdate = true;
@@ -809,7 +841,9 @@ export class CfdEffect {
         const lx = pos[vi * 3];
         const ly = pos[vi * 3 + 1];
         const cp = computePatchCp(p, lx, ly, speedFactor, this._modifiers, vortexCores, this._type);
-        const c  = cpToColor(cp);
+        // Same emphasis map as the body-surface overlay — the procedural
+        // fallback must stay visually consistent with the GLB path.
+        const c  = cpToEmphasisColor(cp, 0.9 * speedFactor, 2.2 * speedFactor);
         colors[vi * 3]     = c.r;
         colors[vi * 3 + 1] = c.g;
         colors[vi * 3 + 2] = c.b;
