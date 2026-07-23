@@ -328,14 +328,20 @@ describe('Rain realism — apparent headwind sweep', () => {
     expect(rain._dPos[0]).toBe(0);
   });
 
-  it('drops swept past the car (z > 7) recycle upstream', async () => {
+  it('drops swept past the car (z > 7) wrap upstream at the SAME height (keeps car-height density)', async () => {
+    // Deviation from the plan's sky respawn on z-exit: with a 30 m/s sweep
+    // vs 4–9 m/s fall, sky-only re-entry can never reach car height ahead
+    // of the car (diagonal slope vFall/W ≈ 0.22 ⇒ y < 2 only at z ≳ 1).
+    // Wrapping z − 15 with y kept restores uniform density — the plan's own
+    // R6 goal ("swept box stays filled around the car").
     const rain = await makeRain();
     rain.setSpeed(350);
-    rain._dPos[0] = 0; rain._dPos[1] = 5; rain._dPos[2] = 7.2;
+    rain._dPos[0] = 0.4; rain._dPos[1] = 1.0; rain._dPos[2] = 7.2;
     rain.update(DT, 0);
-    expect(rain._dPos[2]).toBeLessThanOrEqual(2);
-    expect(rain._dPos[2]).toBeGreaterThanOrEqual(-8);
-    expect(rain._dPos[1]).toBeGreaterThanOrEqual(4);
+    const zAfter = 7.2 + 30 * DT - 15;   // integrated then wrapped
+    expect(rain._dPos[2]).toBeCloseTo(zAfter, 4);
+    expect(rain._dPos[0]).toBeCloseTo(0.4, 5);                  // x kept
+    expect(rain._dPos[1]).toBeCloseTo(1.0 - rain._dVels[0] * DT, 4); // y kept
   });
 
   it('ground respawn is upstream-biased: x ∈ [−6,6], y ∈ [4,9], z ∈ [−8,2]', async () => {
@@ -370,5 +376,83 @@ describe('Rain realism — look', () => {
       expect(tail).toBeCloseTo(head * 0.35, 5);
       expect(head).toBeCloseTo(0.45 + 0.55 * rain._dSizes[i], 5);
     }
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Commit 2 — ground splashes
+ * ═══════════════════════════════════════════════════════════════════ */
+const SPLASH_LIFE = 0.25;
+const activeSplashes = rain =>
+  Array.from(rain._splashLife).filter(l => l < SPLASH_LIFE).length;
+
+describe('Rain realism — ground splashes', () => {
+  it('pool of 256 splash particles, all inactive at build', async () => {
+    const rain = await makeRain();
+    expect(rain._splashCount).toBe(256);
+    expect(activeSplashes(rain)).toBe(0);
+  });
+
+  it('a ground hit spawns a splash at the impact x/z (±0.01)', async () => {
+    const rain = await makeRain();
+    rain.setSpeed(0);   // no rearward sweep ⇒ impact z is deterministic
+    rain._dPos[0] = 1.5; rain._dPos[1] = -0.34; rain._dPos[2] = 0.5;
+    rain.update(DT, 0);   // y falls ≥ 4/60 ⇒ crosses −0.35
+    expect(activeSplashes(rain)).toBe(1);
+    expect(rain._splashLife[0]).toBeLessThan(SPLASH_LIFE);
+    expect(rain._splashPos[0]).toBeCloseTo(1.5, 2);
+    expect(rain._splashPos[1]).toBeCloseTo(-0.34, 2);
+    expect(rain._splashPos[2]).toBeCloseTo(0.5, 2);
+    // Upward launch velocity in [0.3, 1.0]
+    expect(rain._splashVy[0]).toBeGreaterThanOrEqual(0.3 - 9.8 * DT);
+    expect(rain._splashVy[0]).toBeLessThanOrEqual(1.0);
+  });
+
+  it('splash expires within 0.3 s and returns to the pool', async () => {
+    const rain = await makeRain();
+    rain.setSpeed(0);
+    rain._dPos[0] = 1.5; rain._dPos[1] = -0.34; rain._dPos[2] = 0.5;
+    rain.update(DT, 0);
+    expect(activeSplashes(rain)).toBe(1);
+    // Park every drop high so no NEW splashes spawn during the wait.
+    for (let i = 0; i < rain._dCount; i++) rain._dPos[i * 6 + 1] = 50;
+    for (let k = 0; k < 21; k++) rain.update(DT, 0);   // 0.35 s
+    expect(activeSplashes(rain)).toBe(0);
+  });
+
+  it('splash shrinks (0.05 → 0.02) and fades ((1 − u)·0.5) over its life', async () => {
+    const rain = await makeRain();
+    rain.setSpeed(0);
+    rain._dPos[0] = 1.5; rain._dPos[1] = -0.34; rain._dPos[2] = 0.5;
+    rain.update(DT, 0);
+    for (let i = 0; i < rain._dCount; i++) rain._dPos[i * 6 + 1] = 50;
+    rain.update(DT, 0);   // one aging step: u = DT / 0.25
+    const u = DT / SPLASH_LIFE;
+    expect(rain._splashSize[0]).toBeCloseTo(0.05 - 0.03 * u, 4);
+    expect(rain._splashFade[0]).toBeCloseTo((1 - u) * 0.5, 4);
+    rain.update(DT, 0);   // second step: strictly smaller/dimmer
+    const u2 = 2 * DT / SPLASH_LIFE;
+    expect(rain._splashSize[0]).toBeCloseTo(0.05 - 0.03 * u2, 4);
+    expect(rain._splashFade[0]).toBeCloseTo((1 - u2) * 0.5, 4);
+  });
+
+  it('body-splash respawns do NOT spawn ground splashes', async () => {
+    const rain = await makeRain();
+    rain.setSpeed(200);   // sf ≥ 0.15 coupling gate
+    const occupancy = { sample: (x, y, z) => (Math.abs(x) < 1 && y < 1 && Math.abs(z) < 2) ? 1 : 0 };
+    rain.setFlowCoupling(() => ({ vx: 0, vy: 0, vz: 0 }), occupancy, ENV);
+    rain._dPos[0] = 0.1; rain._dPos[1] = 0.6; rain._dPos[2] = 0.1;   // inside the body
+    rain.update(DT, 0);
+    expect(rain._dPos[1]).toBeGreaterThanOrEqual(4);   // body respawn happened
+    expect(activeSplashes(rain)).toBe(0);              // ...without a ground splash
+  });
+
+  it('pool never exceeds 256 active splashes (ring buffer wraps)', async () => {
+    const rain = await makeRain();
+    rain.setSpeed(0);
+    for (let i = 0; i < rain._dCount; i++) rain._dPos[i * 6 + 1] = -1;  // all hit
+    rain.update(DT, 0);
+    expect(activeSplashes(rain)).toBe(256);
+    expect(rain._splashNext).toBe(rain._dCount % 256);   // wrapped 1200 → 176
   });
 });
