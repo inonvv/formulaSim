@@ -64,6 +64,18 @@ body {
   z-index: 10;
 }
 
+/* Hairline top accent — echoes the panel-header underline */
+#hud::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 18px;
+  right: 18px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), var(--accent2), transparent);
+  opacity: 0.7;
+}
+
 #speed-display {
   display: flex;
   align-items: baseline;
@@ -102,7 +114,7 @@ body {
 
 #rpm-bar {
   width: 120px;
-  height: 6px;
+  height: 7px;
   background: rgba(255,255,255,0.1);
   border-radius: 3px;
   overflow: hidden;
@@ -209,7 +221,7 @@ body {
   position: fixed;
   left: 24px;
   bottom: 96px;
-  display: none;
+  display: flex;
   align-items: stretch;
   gap: 8px;
   padding: 10px 12px;
@@ -219,8 +231,16 @@ body {
   backdrop-filter: blur(6px);
   z-index: 10;
   pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity var(--ease), visibility var(--ease), transform var(--ease);
 }
-#cfd-legend.show { display: flex; }
+#cfd-legend.show {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
 
 .cfd-legend-title {
   align-self: flex-start;
@@ -261,7 +281,11 @@ body {
 /* ─── CFD hover probe tooltip ────────────────────────────────────── */
 #cfd-probe-tip {
   position: fixed;
-  display: none;
+  display: block;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity var(--ease), visibility var(--ease), transform var(--ease);
   padding: 3px 8px;
   border-radius: var(--radius);
   border: 1px solid color-mix(in srgb, var(--c-cfd) 40%, transparent);
@@ -272,7 +296,11 @@ body {
   pointer-events: none;
   z-index: 30;
 }
-#cfd-probe-tip.show { display: block; }
+#cfd-probe-tip.show {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
 
 /* ─── Panel ──────────────────────────────────────────────────────── */
 #panel {
@@ -297,6 +325,7 @@ body {
 #panel.collapsed #panel-toggle { transform: rotate(180deg); }
 
 #panel-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -304,6 +333,18 @@ body {
   border-bottom: 1px solid var(--panel-border);
   flex-shrink: 0;
   cursor: pointer;
+}
+
+/* Accent underline — the two brand accents, red into orange */
+#panel-header::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  opacity: 0.75;
 }
 
 .panel-title {
@@ -334,13 +375,19 @@ body {
   padding: 16px 14px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 22px;
   scrollbar-width: thin;
   scrollbar-color: var(--panel-border) transparent;
 }
 
 /* ─── Control groups ─────────────────────────────────────────────── */
 .ctrl-group { display: flex; flex-direction: column; gap: 8px; }
+
+/* Section separators — hairline between groups, first exempt */
+.ctrl-group + .ctrl-group {
+  border-top: 1px solid var(--panel-border);
+  padding-top: 14px;
+}
 
 .group-label {
   font-size: var(--label-fs);
@@ -544,6 +591,7 @@ button:focus-visible, input:focus-visible {
 #panel-body::-webkit-scrollbar { width: 4px; }
 #panel-body::-webkit-scrollbar-track { background: transparent; }
 #panel-body::-webkit-scrollbar-thumb { background: var(--panel-border); border-radius: 2px; }
+#panel-body::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
 
 /* ─── Responsive: tablet ≤ 900px ────────────────────────────────── */
 @media (max-width: 900px) {
@@ -587,6 +635,7 @@ button:focus-visible, input:focus-visible {
     justify-content: stretch;
     cursor: default;
   }
+  #panel-header::after { display: none; }
 
   .mobile-tabs {
     display: flex;
@@ -658,9 +707,10 @@ button:focus-visible, input:focus-visible {
   }
   #panel-body.open { display: flex; }
 
-  /* Only active section is shown */
+  /* Only active section is shown — no separators in the single-section popup */
   #panel-body .ctrl-group { display: none; }
   #panel-body .ctrl-group.active { display: flex; }
+  .ctrl-group + .ctrl-group { border-top: none; padding-top: 0; }
 
   /* ── HUD: above tab bar ── */
   #hud {
