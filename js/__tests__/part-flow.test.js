@@ -954,7 +954,7 @@ describe('Phase 5 — RainEffect flow coupling', () => {
     rain.setFlowCoupling(() => ({ vx: 0, vy: 0, vz: 0 }), occupancy, ENV);
     rain._dPos[0] = 0.1; rain._dPos[1] = 0.6; rain._dPos[2] = 0.1;   // inside the body
     rain.update(0.016, 0);
-    expect(rain._dPos[1]).toBeGreaterThan(5);   // respawned from the sky
+    expect(rain._dPos[1]).toBeGreaterThanOrEqual(4);   // respawned from the sky (y ∈ [4, 9])
     expect(rain._dVelX[0]).toBe(0);
   });
 
