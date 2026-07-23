@@ -325,43 +325,101 @@ function _seedEtaJitter(seedIdx, range = 0.3) {
 }
 
 /**
+ * Resolve the car-local ground plane Y. GLB frames are body-centered
+ * (McLaren ground contact at −0.6187), procedural frames are ground-based
+ * (ground at 0) — every seed height must be derived against THIS value,
+ * never against hardcoded ground-frame constants.
+ */
+function _groundYOf(measure) {
+  if (Number.isFinite(measure?.groundContactY)) return measure.groundContactY;
+  const bsBB = measure?.anchors?.bodyShell?.bbox;
+  if (bsBB && Number.isFinite(bsBB.minY)) return bsBB.minY - 0.15;
+  return 0;
+}
+
+/**
+ * Band-tagged seed heights, ALL derived from anchors / bboxes / measured
+ * axle geometry (plan airflow-part-precision Phase 1):
+ *   wing  ×2 — inside [frontWing.bbox.minY+0.05, maxY+0.03] (fallback fwY±0.05)
+ *   axle  ×1 — groundContactY + wheelRadius (fallback fwY+0.15)
+ *   pod   ×2 — bodyShell minY + 0.30h / 0.55h (fallback ground-frame 0.18/0.30)
+ *   halo  ×2 — haloY − 0.08 / + 0.02          (unchanged)
+ *   upper ×2 — haloY + 0.15 / + 0.30          (unchanged)
+ *   free  ×1 — haloY + 0.50                   (unchanged)
+ * Total 10 heights — within the side-view haze budget (per-line opacity
+ * caps unchanged). Band tags drive per-height cross-sections + modifier
+ * y-gating in later phases.
+ */
+function _seedHeightDefs(p, measure) {
+  const anchors = measure?.anchors ?? _fallbackAnchors(p);
+  const haloY = Number.isFinite(anchors.halo?.y)      ? anchors.halo.y      : p.halfH * 1.93;
+  const fwY   = Number.isFinite(anchors.frontWing?.y) ? anchors.frontWing.y : 0.04;
+  const fwBB  = anchors.frontWing?.bbox;
+  const bsBB  = anchors.bodyShell?.bbox;
+  const groundY = _groundYOf({ ...measure, anchors });
+
+  // Wing band — two heights inside the measured wing envelope.
+  let wingLo, wingHi;
+  if (fwBB && Number.isFinite(fwBB.minY) && Number.isFinite(fwBB.maxY)) {
+    wingLo = fwBB.minY + 0.05;
+    wingHi = fwBB.maxY + 0.03;
+  } else {
+    wingLo = Math.max(fwY - 0.05, groundY + 0.03);
+    wingHi = fwY + 0.05;
+  }
+  const wingSpan = Math.max(0, wingHi - wingLo);
+
+  // Tire/axle band — one height at the wheel axle.
+  const axleY = Number.isFinite(measure?.frontAxleY)
+    ? measure.frontAxleY
+    : (Number.isFinite(measure?.groundContactY) && Number.isFinite(measure?.wheelRadius))
+      ? measure.groundContactY + measure.wheelRadius
+      : fwY + 0.15;
+
+  // Sidepod flank band — two heights on the measured body shell flank.
+  let pod0, pod1;
+  if (bsBB && Number.isFinite(bsBB.minY) && Number.isFinite(bsBB.maxY)) {
+    const h = bsBB.maxY - bsBB.minY;
+    pod0 = bsBB.minY + 0.30 * h;
+    pod1 = bsBB.minY + 0.55 * h;
+  } else {
+    pod0 = 0.18;   // ground-frame fallback ONLY when no bodyShell bbox
+    pod1 = 0.30;
+  }
+
+  return [
+    { y: wingLo + wingSpan / 3,     band: 'wing'  },
+    { y: wingLo + wingSpan * 2 / 3, band: 'wing'  },
+    { y: axleY,                     band: 'axle'  },
+    { y: pod0,                      band: 'pod'   },
+    { y: pod1,                      band: 'pod'   },
+    { y: haloY - 0.08,              band: 'halo'  },   // halo underside
+    { y: haloY + 0.02,              band: 'halo'  },   // halo top
+    { y: haloY + 0.15,              band: 'upper' },   // airbox
+    { y: haloY + 0.30,              band: 'upper' },   // engine cover
+    { y: haloY + 0.50,              band: 'free'  },   // freestream reference
+  ].sort((a, b) => a.y - b.y);
+}
+
+/**
  * Build the streamline seed list as a wind-tunnel-style parallel ribbon
- * grid: 8 heights (floor → above halo) × 5 lateral positions, all seeded
- * far upstream at `seedEta ≈ -8`. Every seed produces one continuous line
- * from upstream entry, around the car body, out behind — reproducing the
- * "smoke ribbons" look in `fog.png` rather than isolated anchor chunks.
+ * grid: 10 band-tagged heights (wing band → above halo) × 7 lateral
+ * positions, all seeded far upstream at `seedEta ≈ -8`. Every seed produces
+ * one continuous line from upstream entry, around the car body, out behind.
  *
- * Anchors are still consumed, but only for vertical placement of the
- * ribbons (halo pins the upper half; floor/frontWing pin the lower half).
- * Flow bending at features (sidepod sinks, wing vortices) is handled by
- * `_buildModifiers`, not by the seed list.
+ * Heights are anchor-derived per-band (see _seedHeightDefs) so GLB
+ * body-centered frames and procedural ground frames both get ribbons ON
+ * the wing / sidepod flank / axle line instead of floating at ground-frame
+ * constants. Flow bending at features (sidepod sinks, wing vortices) is
+ * handled by `_buildModifiers`, not by the seed list.
  */
 function _buildSeedList(p, measure) {
   const anchors = measure?.anchors ?? _fallbackAnchors(p);
 
-  // Anchor-aware vertical extent: bottom = floor.y, top = halo.y + 0.40.
-  // Falls back to the profile's halfH ratio when anchors are missing.
+  // Anchor-aware vertical extent: bottom = floor.y (underfloor group).
   const floorY = Number.isFinite(anchors.floor?.y) ? anchors.floor.y : 0.02;
-  const haloY  = Number.isFinite(anchors.halo?.y)  ? anchors.halo.y  : p.halfH * 1.93;
-  const fwY    = Number.isFinite(anchors.frontWing?.y) ? anchors.frontWing.y : 0.04;
 
-  // 9 heights — dense enough to read as volumetric fog rather than a thin
-  // grid, with extra sampling around the cockpit / halo band where most of
-  // the visible flow action happens. Order low → high. (The former
-  // "underbody skim" height moved to the dedicated 'underfloor' group
-  // below — the cylinder flow diverted it around the body, which is wrong
-  // for floor flow.)
-  const heights = [
-    Math.max(fwY + 0.02, 0.08),    // wing-top / nose
-    0.18,                          // sidepod lower
-    0.30,                          // sidepod mid
-    Math.max(0.42, haloY - 0.18),  // sidepod upper / mirrors
-    haloY - 0.08,                  // halo underside
-    haloY + 0.02,                  // halo top
-    haloY + 0.15,                  // airbox
-    haloY + 0.30,                  // engine cover
-    haloY + 0.50,                  // freestream reference
-  ];
+  const heightDefs = _seedHeightDefs(p, measure);
 
   // 7 lateral positions — tighter spacing than before (min gap 0.45) so
   // the layered ribbons blur into a cloud front rather than reading as
@@ -369,7 +427,7 @@ function _buildSeedList(p, measure) {
   const xiLanes = [-1.4, -0.9, -0.45, 0, 0.45, 0.9, 1.4];
 
   const seeds = [];
-  for (const y of heights) {
+  for (const def of heightDefs) {
     for (const xi of xiLanes) {
       // Tiny deterministic jitter (±0.05) so ribbons don't advect in
       // perfect lockstep — keeps the flow from reading as a rigid grid.
@@ -377,7 +435,8 @@ function _buildSeedList(p, measure) {
       seeds.push({
         seedXi: xi,
         seedEta: -8 + etaJ,
-        y,
+        y: def.y,
+        band: def.band,
         group: 'ribbon',
         halfH: p.halfH,
       });
@@ -477,7 +536,15 @@ export class AirflowEffect {
     this._halfL = (Number.isFinite(a?.frontWing?.z) && Number.isFinite(a?.rearWing?.z))
       ? Math.max(Math.abs(a.frontWing.z), Math.abs(a.rearWing.z))
       : profile.halfL;
-    this._halfH = Number.isFinite(a?.halo?.y) ? a.halo.y / 1.93 : profile.halfH;
+    // halfH must be GROUND-referenced: on the body-centered GLB F1 frame
+    // halo.y/1.93 read 0.373/1.93 = 0.193 (2.7× too small) — the intended
+    // height is halo-peak-over-ground. groundY resolves per-frame (measured
+    // contact patch → bodyShell floor − 0.15 → 0 for procedural frames).
+    this._groundY = this._measure ? _groundYOf(this._measure) : 0;
+    this._haloY   = Number.isFinite(a?.halo?.y) ? a.halo.y : profile.halfH * 1.93;
+    this._halfH = Number.isFinite(a?.halo?.y)
+      ? (a.halo.y - this._groundY) / 1.93
+      : profile.halfH;
     this._vortexMaxRadius = profile.vortexMaxRadius;
     this._wakeWidthX      = profile.wakeWidthX;
     this._wakeHeightRange = profile.wakeHeightRange;

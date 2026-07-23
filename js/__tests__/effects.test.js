@@ -296,7 +296,10 @@ describe('AirflowEffect', () => {
     });
     expect(airflow._halfW).toBeCloseTo(1.01, 3);            // measured body half-width
     expect(airflow._halfL).toBeCloseTo(2.12, 3);            // max |wing z|
-    expect(airflow._halfH).toBeCloseTo(1.29 / 1.93, 3);     // halo height / standard ratio
+    // halfH is GROUND-referenced (plan airflow-part-precision Phase 1):
+    // groundY falls back to bodyShell.bbox.minY − 0.15 when the measure has
+    // no groundContactY → (1.29 − (0.10 − 0.15)) / 1.93.
+    expect(airflow._halfH).toBeCloseTo((1.29 + 0.05) / 1.93, 3);
   });
 
   it('AD2. without measure, profile dims are used (GT authored 1.05/2.40/0.65)', async () => {
@@ -321,7 +324,7 @@ describe('AirflowEffect', () => {
     for (const s of airflow._seeds) expect(['ribbon', 'underfloor']).toContain(s.group);
   });
 
-  it('ribbon model: 9 heights × 7 xiLanes + 5 underfloor lanes = 68 seeds on F1 + McLaren measure', async () => {
+  it('ribbon model: 10 band heights × 7 xiLanes + 5 underfloor lanes = 75 seeds on F1 + McLaren measure', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
     airflow.setCarType('F1', { anchors: {
@@ -331,8 +334,8 @@ describe('AirflowEffect', () => {
       sidepodTop: { x: 0, y: 0.28,  z:  0.0 },
       floor:      { x: 0, y: 0.014, z:  0.129 },
     } });
-    expect(airflow._seeds.length).toBe(68);
-    expect(airflow._seeds.filter(s => s.group === 'ribbon').length).toBe(63);
+    expect(airflow._seeds.length).toBe(75);
+    expect(airflow._seeds.filter(s => s.group === 'ribbon').length).toBe(70);
     expect(airflow._seeds.filter(s => s.group === 'underfloor').length).toBe(5);
   });
 
