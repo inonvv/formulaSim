@@ -454,17 +454,24 @@ describe('Phase 2 — per-band cross-section table (effects integration)', () =>
     // modifier y-gating stops ungated vents from tugging it.
   });
 
-  it('P2.9 halo-band traced path pinches inside the old whole-car bulge', async () => {
+  it('P2.9 some halo-band lane passes within 0.55 m of centreline at the cockpit throat (old model: ≥ 0.81 m)', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
     airflow.setCarType('F1', glbF1Measure());
-    const haloIdx = airflow._seeds.findIndex(s => s.band === 'halo' && Math.abs(s.seedXi - 0.45) < 1e-6);
-    expect(haloIdx).toBeGreaterThanOrEqual(0);
-    const path = airflow._paths[haloIdx];
-    // Max lateral excursion stays well inside the whole-car cylinder bulge
-    // (old model pushed |xi| beyond 1.0 at the body).
-    const maxAbsXi = Math.max(...path.map(p => Math.abs(p.xi)));
-    expect(maxAbsXi).toBeLessThan(0.95);
+    const sec = airflow._sections.halo;
+    // Closest lateral approach of any halo-band lane inside the throat
+    // window. With the whole-car cylinder every line bulged to ≥ halfW
+    // (0.8125 m); with the cockpit cross-section inner lanes skim the halo.
+    let closest = Infinity;
+    airflow._seeds.forEach((s, i) => {
+      if (s.band !== 'halo') return;
+      for (const p of airflow._paths[i]) {
+        if (Math.abs(p.eta - sec.etaC) > 0.4 * sec.rl) continue;
+        closest = Math.min(closest, Math.abs(p.xi) * airflow._halfW);
+      }
+    });
+    expect(closest).toBeLessThan(0.55);
+    expect(closest).toBeGreaterThanOrEqual(0.38);   // …but never clips the halo
   });
 
   it('P2.10 procedural (no bboxes) keeps the whole-car cylinder — sections all null', async () => {
@@ -494,5 +501,198 @@ describe('Phase 2 — per-band cross-section table (effects integration)', () =>
     expect(pod.rw * airflow._halfW).toBeGreaterThan(0.25);
     // wing band (y ≈ −0.25) is below the box → falls back to the wing bbox.
     expect(airflow._sections.wing.rw).toBeCloseTo((0.90 + 0.05) / airflow._halfW, 3);
+  });
+});
+
+/* ════════════════════════════════════════════════════════════════ */
+/*  Phase 3 — per-part modifier gating + tire doublets + tire wakes */
+/* ════════════════════════════════════════════════════════════════ */
+describe('Phase 3 — modifier y-band gating', () => {
+  it('P3.1 vent modifiers carry a yBand centred on their anchor height', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    const sinks = airflow._modifiers.filter(m => m.type === 'sink' || m.type === 'source');
+    expect(sinks.length).toBeGreaterThanOrEqual(6);
+    for (const m of sinks) {
+      expect(Array.isArray(m.yBand)).toBe(true);
+      expect(m.yBand[0]).toBeLessThan(m.yBand[1]);
+    }
+    // Sidepod inlet (anchor y 0.0142) → band [−0.2358, +0.1942].
+    const podSink = airflow._modifiers.find(m =>
+      m.type === 'sink' && Math.abs(m.x - (-0.70 / airflow._halfW)) < 1e-6);
+    expect(podSink.yBand[0]).toBeCloseTo(0.0142 - 0.25, 5);
+    expect(podSink.yBand[1]).toBeCloseTo(0.0142 + 0.18, 5);
+  });
+
+  it('P3.2 brake ducts are banded to the measured AXLE height, not their authored anchor y', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    const axleY = -0.6187 + 0.345;
+    // rear brake duct anchors are authored high (y −0.274 here matches axle
+    // in the fixture, but the CODE must bind to measured axleY).
+    const ducts = airflow._modifiers.filter(m =>
+      m.type === 'sink' && Math.abs(Math.abs(m.x) - 0.90 / airflow._halfW) < 1e-6);
+    expect(ducts.length).toBe(2);
+    for (const d of ducts) {
+      expect(d.yBand[0]).toBeCloseTo(axleY - 0.25, 5);
+      expect(d.yBand[1]).toBeCloseTo(axleY + 0.25, 5);
+    }
+  });
+
+  it('P3.3 wing vortices are banded to their bbox ± 0.1', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    const vorts = airflow._modifiers.filter(m => m.type === 'vortex');
+    expect(vorts.length).toBe(2);
+    const fw = vorts.find(v => v.e < 0);
+    expect(fw.yBand[0]).toBeCloseTo(-0.4163 - 0.1, 5);
+    expect(fw.yBand[1]).toBeCloseTo(-0.0524 + 0.1, 5);
+  });
+
+  it('P3.4 D7 fix: freestream reference ribbon (haloY+0.50) is unbent — deviation ≤ 0.02 m (was shared with all mods)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    const freeIdx = airflow._seeds.findIndex(s => s.band === 'free' && Math.abs(s.seedXi - 0.45) < 1e-6);
+    expect(freeIdx).toBeGreaterThanOrEqual(0);
+    const path = airflow._paths[freeIdx];
+    let maxDev = 0;
+    for (const p of path) maxDev = Math.max(maxDev, Math.abs(p.xi - 0.45) * airflow._halfW);
+    expect(maxDev).toBeLessThanOrEqual(0.02);
+  });
+
+  it('P3.5 four tire doublets at measured wheel x/z, R 0.28 / rc 0.08, gated y ≤ tire top', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    const tires = airflow._modifiers.filter(m => m.type === 'doublet');
+    expect(tires.length).toBe(4);
+    const tireTop = -0.6187 + 2 * 0.345;   // ≈ +0.0713
+    const expected = [
+      [-0.82, -1.47], [0.82, -1.47], [-0.80, 2.10], [0.80, 2.10],
+    ];
+    for (const [x, z] of expected) {
+      const t = tires.find(m =>
+        Math.abs(m.x - x / airflow._halfW) < 1e-6 && Math.abs(m.e - z / airflow._halfL) < 1e-6);
+      expect(t).toBeDefined();
+      expect(t.R).toBeCloseTo(0.28, 6);
+      expect(t.rc).toBeCloseTo(0.08, 6);
+      expect(t.yBand[1]).toBeCloseTo(tireTop, 4);
+      expect(t.yBand[0]).toBeCloseTo(-0.6187, 4);
+    }
+  });
+
+  it('P3.6 D4 fix: axle-height path near the wheel lane deviates ≥ 0.15 m and clears the wheel circle (was 0.00)', async () => {
+    const { traceStreamlinePath } = await import('../airflow-core.js');
+    const mods = [
+      { type: 'doublet', x:  0.82 / HALF_W, e: -1.47 / HALF_L, R: 0.28, rc: 0.08 },
+      { type: 'doublet', x: -0.82 / HALF_W, e: -1.47 / HALF_L, R: 0.28, rc: 0.08 },
+      { type: 'doublet', x:  0.80 / HALF_W, e:  2.10 / HALF_L, R: 0.28, rc: 0.08 },
+      { type: 'doublet', x: -0.80 / HALF_W, e:  2.10 / HALF_L, R: 0.28, rc: 0.08 },
+    ];
+    const seedX = 0.73;
+    const path = traceStreamlinePath(seedX / HALF_W, -3, 800, 0.03, {
+      body: { rw: 0, rl: 0, etaC: 0 },     // isolate the tire effect
+      modifiers: mods, halfW: HALF_W, halfL: HALF_L,
+    });
+    let maxDev = 0, minClear = Infinity;
+    for (const q of path) {
+      const x = q.xi * HALF_W, z = q.eta * HALF_L;
+      if (Math.abs(z + 1.47) <= 1.0) maxDev = Math.max(maxDev, Math.abs(x - seedX));
+      minClear = Math.min(minClear, Math.hypot(x - 0.82, z + 1.47));
+    }
+    console.info(`[part-flow] tire deflection: ${maxDev.toFixed(3)} m, wheel clearance ${minClear.toFixed(3)} m`);
+    expect(maxDev).toBeGreaterThanOrEqual(0.15);
+    expect(minClear).toBeGreaterThanOrEqual(0.24);   // wheel R 0.28, regularized skim
+  });
+
+  it('P3.7 doublets without physical dims (CFD path) are inert — sumVelocity skips them', async () => {
+    const { sumVelocity, topViewVelocity } = await import('../airflow-core.js');
+    const mods = [{ type: 'doublet', x: 1.0, e: -0.6, R: 0.28, rc: 0.08, yBand: [-0.6, 0.07] }];
+    const withD = sumVelocity(1.05, -0.61, topViewVelocity, mods);
+    const bare  = sumVelocity(1.05, -0.61, topViewVelocity, []);
+    expect(withD.vxi).toBe(bare.vxi);
+    expect(withD.veta).toBe(bare.veta);
+  });
+
+  it('P3.8 CFD patch Cp is unchanged by yBand fields + doublet entries (no-CFD-change guarantee)', async () => {
+    const { computePatchCp } = await import('../cfd-effect.js');
+    const patch = { role: 'sidepodTop', x: 0.5, y: 0.3, z: 0.1, w: 0.4, h: 0.4 };
+    const sinkPlain  = [{ type: 'sink', x: -0.78, e: -0.2, strength: 0.25, rc: 0.12 }];
+    const sinkTagged = [
+      { type: 'sink', x: -0.78, e: -0.2, strength: 0.25, rc: 0.12, yBand: [-0.25, 0.19] },
+      { type: 'doublet', x: 1.0, e: -0.61, R: 0.28, rc: 0.08, yBand: [-0.62, 0.07] },
+    ];
+    const a = computePatchCp(patch, 0.2, 0.1, 0.8, sinkPlain,  [], 'F1');
+    const b = computePatchCp(patch, 0.2, 0.1, 0.8, sinkTagged, [], 'F1');
+    expect(b).toBeCloseTo(a, 12);
+  });
+});
+
+describe('Phase 3 — tire-anchored wake emitters', () => {
+  it('P3.9 wake emitters sit at the 4 measured wheel positions + rear body', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    const em = airflow._wakeEmitters;
+    expect(em).toBeTruthy();
+    expect(em.length).toBe(5);
+    const axleY = -0.6187 + 0.345;
+    const wheels = [
+      [-0.82, -1.47], [0.82, -1.47], [-0.80, 2.10], [0.80, 2.10],
+    ];
+    for (const [x, z] of wheels) {
+      const hit = em.find(e => Math.abs(e.x - x) < 1e-6 && Math.abs(e.z - z) < 1e-6);
+      expect(hit).toBeDefined();
+      expect(hit.y).toBeCloseTo(axleY, 5);
+    }
+    // 5th emitter: rear body, centred.
+    const body = em.find(e => e.x === 0);
+    expect(body).toBeDefined();
+    expect(body.z).toBeGreaterThan(1.5);
+  });
+
+  it('P3.10 wake spread/length scale with speedFactor', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    expect(airflow._wakeSpread(1)).toBeGreaterThan(airflow._wakeSpread(0));
+    expect(airflow._wakeLength(1)).toBeGreaterThan(airflow._wakeLength(0));
+  });
+
+  it('P3.11 procedural cars without axle measure keep the legacy wake (no emitters)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1');   // no measure at all
+    expect(airflow._wakeEmitters).toBeNull();
+  });
+
+  it('P3.12 underfloor group provably unaffected: paths identical with and without part modifiers', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const withVents = glbF1Measure();
+    const noVents   = glbF1Measure();
+    for (const k of Object.keys(noVents.anchors)) {
+      if (noVents.anchors[k].role) delete noVents.anchors[k];
+    }
+    const a = new AirflowEffect(makeScene());
+    a.setCarType('F1', withVents);
+    const b = new AirflowEffect(makeScene());
+    b.setCarType('F1', noVents);
+    expect(a._modifiers.length).toBeGreaterThan(b._modifiers.length);
+    const ufA = a._seeds.map((s, i) => i).filter(i => a._seeds[i].group === 'underfloor');
+    const ufB = b._seeds.map((s, i) => i).filter(i => b._seeds[i].group === 'underfloor');
+    expect(ufA.length).toBe(5);
+    for (let k = 0; k < 5; k++) {
+      const pa = a._paths[ufA[k]];
+      const pb = b._paths[ufB[k]];
+      expect(pa.length).toBe(pb.length);
+      for (let i = 0; i < pa.length; i++) {
+        expect(pa[i].xi).toBe(pb[i].xi);
+        expect(pa[i].eta).toBe(pb[i].eta);
+      }
+    }
   });
 });

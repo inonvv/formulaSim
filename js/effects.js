@@ -579,7 +579,14 @@ export class AirflowEffect {
         opts.occupancy = occ;
         opts.toWorld = (xi, eta) => ({ x: xi * halfW, y: s.y, z: eta * halfL });
       }
-      if (mods && mods.length > 0) opts.modifiers = mods;
+      if (mods && mods.length > 0) {
+        opts.modifiers = mods;
+        // Per-part locality (Phase 3): the seed height gates yBand-tagged
+        // modifiers; physical dims let tire doublets evaluate in real xz.
+        opts.seedY = s.y;
+        opts.halfW = halfW;
+        opts.halfL = halfL;
+      }
       // Height-aware body: null section ⇒ default whole-car cylinder
       // (procedural fallback), {rw:0} ⇒ no body at this height.
       const body = this._bodyForBand(s.band);
@@ -589,8 +596,39 @@ export class AirflowEffect {
     this._vortexDefs      = this._resolveVortexDefs(profile, this._measure);
     this._buildRibbonLines();
     this._buildVortexSpirals(this._vortexDefs);
+    // Tire-anchored wake emitters (Phase 3) — must exist before the wake
+    // particle pool spawns from them.
+    this._wakeEmitters    = this._buildWakeEmitters();
     this._buildWakeParticles(profile.wakeCount);
   }
+
+  /**
+   * Phase 3 (part-precision): wake emitter anchors — the 4 measured wheel
+   * contact regions + the rear body centre. Null when the measure carries
+   * no axle data (procedural fallback keeps the legacy authored wake).
+   */
+  _buildWakeEmitters() {
+    const m = this._measure;
+    if (!m
+        || !Number.isFinite(m.frontAxleX) || !Number.isFinite(m.frontAxleZ)
+        || !Number.isFinite(m.rearAxleX)  || !Number.isFinite(m.rearAxleZ)) return null;
+    const axleY = (Number.isFinite(m.groundContactY) && Number.isFinite(m.wheelRadius))
+      ? m.groundContactY + m.wheelRadius
+      : 0.25;
+    return [
+      { x: -m.frontAxleX, y: axleY, z: m.frontAxleZ },
+      { x:  m.frontAxleX, y: axleY, z: m.frontAxleZ },
+      { x: -m.rearAxleX,  y: axleY, z: m.rearAxleZ },
+      { x:  m.rearAxleX,  y: axleY, z: m.rearAxleZ },
+      { x: 0, y: axleY + 0.45, z: this._halfL * 0.9 },   // rear body wake
+    ];
+  }
+
+  /** Lateral wake spawn spread (m) — scales with speed. */
+  _wakeSpread(speedFactor) { return 0.10 + 0.25 * speedFactor; }
+
+  /** Downstream wake extent behind each emitter (m) — scales with speed. */
+  _wakeLength(speedFactor) { return 4 + 3 * speedFactor; }
 
   /**
    * Resolve vortex wz from measure anchors by role. Returns a NEW array —
@@ -637,7 +675,16 @@ export class AirflowEffect {
     const halfW = this._halfW || profile.halfW || DEFAULT_HALF_W;
     const anchors = measure.anchors;
 
-    const add = (anchor, type, cfg) => {
+    // Phase 3 (part-precision): per-part locality. Every modifier carries a
+    // yBand [lo, hi] in car-local metres; sumVelocity skips it for seeds
+    // outside the band, so sidepod sinks stop tugging the freestream
+    // reference row. Brake ducts bind to the MEASURED axle height (their
+    // authored anchors ride wing offsets); wing vortices to their bbox.
+    const axleY = (Number.isFinite(measure.groundContactY) && Number.isFinite(measure.wheelRadius))
+      ? measure.groundContactY + measure.wheelRadius
+      : null;
+
+    const add = (anchor, type, cfg, yBand) => {
       if (!anchor) return;
       const entry = {
         type,
@@ -647,43 +694,68 @@ export class AirflowEffect {
       };
       if (type === 'vortex') entry.gamma    = cfg.gamma;
       else                    entry.strength = cfg.strength;
+      if (yBand) entry.yBand = yBand;
+      else if (Number.isFinite(anchor.y)) entry.yBand = [anchor.y - 0.25, anchor.y + 0.18];
       out.push(entry);
     };
 
     // Iterate role-tagged vent anchors. Keyed lookup by known anchor names
-    // keeps the mapping explicit (no fuzzy name-matching).
+    // keeps the mapping explicit (no fuzzy name-matching). `axleBand: true`
+    // rows are re-banded onto the measured axle height when available.
     const ventTable = [
-      ['sidepodInletL',   'sink',   MOD_STR.SIDEPOD_INLET,   'inlet'  ],
-      ['sidepodInletR',   'sink',   MOD_STR.SIDEPOD_INLET,   'inlet'  ],
-      ['sidepodExhaustL', 'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet' ],
-      ['sidepodExhaustR', 'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet' ],
-      ['airboxIntake',    'sink',   MOD_STR.AIRBOX_INTAKE,   'inlet'  ],
-      ['exhaustPipe',     'source', MOD_STR.EXHAUST_PIPE,    'outlet' ],
-      ['frontBrakeDuctL', 'sink',   MOD_STR.BRAKE_DUCT,      'inlet'  ],
-      ['frontBrakeDuctR', 'sink',   MOD_STR.BRAKE_DUCT,      'inlet'  ],
-      ['rearBrakeDuctL',  'sink',   MOD_STR.BRAKE_DUCT,      'inlet'  ],
-      ['rearBrakeDuctR',  'sink',   MOD_STR.BRAKE_DUCT,      'inlet'  ],
+      ['sidepodInletL',   'sink',   MOD_STR.SIDEPOD_INLET,   'inlet',  false],
+      ['sidepodInletR',   'sink',   MOD_STR.SIDEPOD_INLET,   'inlet',  false],
+      ['sidepodExhaustL', 'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet', false],
+      ['sidepodExhaustR', 'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet', false],
+      ['airboxIntake',    'sink',   MOD_STR.AIRBOX_INTAKE,   'inlet',  false],
+      ['exhaustPipe',     'source', MOD_STR.EXHAUST_PIPE,    'outlet', false],
+      ['frontBrakeDuctL', 'sink',   MOD_STR.BRAKE_DUCT,      'inlet',  true ],
+      ['frontBrakeDuctR', 'sink',   MOD_STR.BRAKE_DUCT,      'inlet',  true ],
+      ['rearBrakeDuctL',  'sink',   MOD_STR.BRAKE_DUCT,      'inlet',  true ],
+      ['rearBrakeDuctR',  'sink',   MOD_STR.BRAKE_DUCT,      'inlet',  true ],
       // GT (992 GT3 RS) vent layout — measured via manifest anchorSources.
-      ['frontIntake',     'sink',   MOD_STR.SIDEPOD_INLET,   'inlet'  ],
-      ['engineIntake',    'sink',   MOD_STR.AIRBOX_INTAKE,   'inlet'  ],
-      ['fenderVentL',     'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet' ],
-      ['fenderVentR',     'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet' ],
+      ['frontIntake',     'sink',   MOD_STR.SIDEPOD_INLET,   'inlet',  false],
+      ['engineIntake',    'sink',   MOD_STR.AIRBOX_INTAKE,   'inlet',  false],
+      ['fenderVentL',     'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet', false],
+      ['fenderVentR',     'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet', false],
     ];
-    for (const [key, type, cfg, expectedRole] of ventTable) {
+    for (const [key, type, cfg, expectedRole, axleBand] of ventTable) {
       const a = anchors[key];
       if (!a) continue;
       // Honour anchor role if present (safety net against manifest drift);
       // unrolled anchors without `.role` still resolve to the table's intent.
       if (a.role && a.role !== expectedRole) continue;
-      add(a, type, cfg);
+      const band = (axleBand && axleY !== null) ? [axleY - 0.25, axleY + 0.25] : null;
+      add(a, type, cfg, band);
     }
 
     // Wing dipole surrogates — placed slightly under each wing (anchor's xi/
     // eta read directly; the gamma sign follows the downforce convention used
     // by profile.vortexDefs so a clockwise vortex under the wing pulls the
-    // underside into suction).
-    if (anchors.frontWing) add(anchors.frontWing, 'vortex', MOD_STR.FRONT_WING_VORT);
-    if (anchors.rearWing)  add(anchors.rearWing,  'vortex', MOD_STR.REAR_WING_VORT);
+    // underside into suction). Banded to the wing bbox ± 0.1 when measured.
+    const wingBand = (a) => (a?.bbox && Number.isFinite(a.bbox.minY) && Number.isFinite(a.bbox.maxY))
+      ? [a.bbox.minY - 0.1, a.bbox.maxY + 0.1]
+      : (Number.isFinite(a?.y) ? [a.y - 0.15, a.y + 0.15] : null);
+    if (anchors.frontWing) add(anchors.frontWing, 'vortex', MOD_STR.FRONT_WING_VORT, wingBand(anchors.frontWing));
+    if (anchors.rearWing)  add(anchors.rearWing,  'vortex', MOD_STR.REAR_WING_VORT,  wingBand(anchors.rearWing));
+
+    // Tire bluff bodies — ideal-cylinder doublets in PHYSICAL car-local xz
+    // (wheels must stay circular under the anisotropic ξ/η mapping), gated
+    // to y ≤ tire top. Evaluated by sumVelocity only when the caller passes
+    // halfW/halfL — CFD's opts-less path skips them entirely.
+    const tireBand = (Number.isFinite(measure.groundContactY) && Number.isFinite(measure.wheelRadius))
+      ? [measure.groundContactY, measure.groundContactY + 2 * measure.wheelRadius]
+      : null;
+    const addTires = (ax, az) => {
+      if (!Number.isFinite(ax) || !Number.isFinite(az)) return;
+      for (const side of [-1, 1]) {
+        const entry = { type: 'doublet', x: side * ax / halfW, e: az / halfL, R: 0.28, rc: 0.08 };
+        if (tireBand) entry.yBand = tireBand;
+        out.push(entry);
+      }
+    };
+    addTires(measure.frontAxleX, measure.frontAxleZ);
+    addTires(measure.rearAxleX,  measure.rearAxleZ);
 
     return out;
   }
@@ -971,13 +1043,26 @@ export class AirflowEffect {
     const positions  = new Float32Array(count * 3);
     const velocities = new Float32Array(count * 4); // vx vy vz vortexPhase
     const [hMin, hMax] = this._wakeHeightRange;
+    const emitters   = this._wakeEmitters;
+    const emitterIdx = new Uint8Array(count);
 
     for (let i = 0; i < count; i++) {
-      // Spread in Z from 2 to 8 behind car
-      const z = rnd(2.2, 8.0);
-      positions[i * 3]     = rnd(-this._wakeWidthX, this._wakeWidthX);
-      positions[i * 3 + 1] = rnd(hMin, hMax);
-      positions[i * 3 + 2] = z;
+      if (emitters) {
+        // Tire-anchored: each particle belongs to one of the 4 wheel
+        // emitters + rear body, trailing downstream of it.
+        const ei = i % emitters.length;
+        emitterIdx[i] = ei;
+        const em = emitters[ei];
+        const spread = this._wakeSpread(0.5);
+        positions[i * 3]     = em.x + rnd(-spread, spread);
+        positions[i * 3 + 1] = em.y + rnd(-spread * 0.5, spread);
+        positions[i * 3 + 2] = em.z + rnd(0.05, this._wakeLength(0.5));
+      } else {
+        // Legacy authored wake: spread in Z from 2 to 8 behind car.
+        positions[i * 3]     = rnd(-this._wakeWidthX, this._wakeWidthX);
+        positions[i * 3 + 1] = rnd(hMin, hMax);
+        positions[i * 3 + 2] = rnd(2.2, 8.0);
+      }
       // Lateral velocity with vortex phase offset (Kármán pattern)
       const side = i % 2 === 0 ? 1 : -1;
       velocities[i * 4]     = side * rnd(0.2, 0.9);       // vx — lateral drift
@@ -985,6 +1070,7 @@ export class AirflowEffect {
       velocities[i * 4 + 2] = rnd(0.6, 2.8);              // vz — downstream
       velocities[i * 4 + 3] = rnd(0, Math.PI * 2);        // phase
     }
+    this._wakeEmitterIdx = emitterIdx;
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -1252,7 +1338,17 @@ export class AirflowEffect {
       wp[i * 3 + 1] += wv[i * 4 + 1] * dt * speedFactor;
       wp[i * 3 + 2] += wv[i * 4 + 2] * dt * speedFactor;
 
-      if (wp[i * 3 + 2] > 9.0 || wp[i * 3 + 2] < 2.0) {
+      if (this._wakeEmitters) {
+        // Tire-anchored recycle: respawn AT the particle's emitter once it
+        // drifts past the speed-scaled wake length. Spread widens with sf.
+        const em = this._wakeEmitters[this._wakeEmitterIdx[i]];
+        if (wp[i * 3 + 2] > em.z + this._wakeLength(speedFactor)) {
+          const spread = this._wakeSpread(speedFactor);
+          wp[i * 3]     = em.x + rnd(-spread, spread);
+          wp[i * 3 + 1] = em.y + rnd(-spread * 0.5, spread);
+          wp[i * 3 + 2] = em.z + rnd(0.05, 0.5);
+        }
+      } else if (wp[i * 3 + 2] > 9.0 || wp[i * 3 + 2] < 2.0) {
         const side = i % 2 === 0 ? 1 : -1;
         wp[i * 3]     = side * rnd(0.1, this._wakeWidthX * 0.7);
         wp[i * 3 + 1] = rnd(hMin, hMax);
