@@ -550,6 +550,10 @@ export class AirflowEffect {
     this._wakeHeightRange = profile.wakeHeightRange;
     this._strouhal        = profile.strouhal || 0.20;
     this._seeds           = _buildSeedList(profile, this._measure);
+    // Phase 2 (part-precision): per-band body cross-sections — the halo
+    // band pinches to the cockpit, the wing band to the wing planform,
+    // rows above the bodywork see no body at all.
+    this._sections        = this._buildCrossSections();
     // Surface the ribbon count on rebuild so a stale browser cache is easy to
     // detect in DevTools — expected output is `{ ribbon: 40 } (total 40)`.
     if (typeof console !== 'undefined' && console.info) {
@@ -576,6 +580,10 @@ export class AirflowEffect {
         opts.toWorld = (xi, eta) => ({ x: xi * halfW, y: s.y, z: eta * halfL });
       }
       if (mods && mods.length > 0) opts.modifiers = mods;
+      // Height-aware body: null section ⇒ default whole-car cylinder
+      // (procedural fallback), {rw:0} ⇒ no body at this height.
+      const body = this._bodyForBand(s.band);
+      if (body) opts.body = body;
       return traceStreamlinePath(s.seedXi, s.seedEta, STEPS, STEP_SIZE, opts);
     });
     this._vortexDefs      = this._resolveVortexDefs(profile, this._measure);
@@ -687,6 +695,109 @@ export class AirflowEffect {
    */
   getModifiers() {
     return this._modifiers || [];
+  }
+
+  /**
+   * Phase 2 (part-precision): per-band body cross-sections `{rw, rl, etaC}`
+   * consumed by `topViewVelocity(xi, eta, body)`.
+   *
+   * Primary source: occupancy slice scan at the band's mean height (one-time
+   * per build; occupancy arrival already triggers a rebuild). Fallback:
+   * piecewise anchor bboxes — wing band → frontWing bbox, axle/pod bands →
+   * bodyShell bbox, halo band → halo bbox, upper/free bands → EMPTY section
+   * (no body above the halo). When the measure carries no bboxes at all
+   * (procedural cars) every band maps to null ⇒ the default whole-car
+   * cylinder, exactly the pre-plan behavior.
+   */
+  _buildCrossSections() {
+    const a = this._measure?.anchors;
+    const halfW = this._halfW, halfL = this._halfL;
+
+    // +0.05 m lateral inflation so ribbons skim the surface, not clip it.
+    const bboxSection = (bb) => {
+      if (!bb
+          || !Number.isFinite(bb.minX) || !Number.isFinite(bb.maxX)
+          || !Number.isFinite(bb.minZ) || !Number.isFinite(bb.maxZ)) return null;
+      return {
+        rw:   Math.min(1.4, ((bb.maxX - bb.minX) / 2 + 0.05) / halfW),
+        rl:   Math.max(0.05, Math.min(1.2, (bb.maxZ - bb.minZ) / 2 / halfL)),
+        etaC: ((bb.minZ + bb.maxZ) / 2) / halfL,
+      };
+    };
+
+    const fwSec   = bboxSection(a?.frontWing?.bbox);
+    const bodySec = bboxSection(a?.bodyShell?.bbox);
+    const haloSec = bboxSection(a?.halo?.bbox);
+    const anyBbox = !!(fwSec || bodySec || haloSec);
+    const NONE = { rw: 0, rl: 0, etaC: 0 };
+
+    const fallbackFor = (band) => {
+      switch (band) {
+        case 'wing':  return fwSec || bodySec || null;
+        case 'axle':
+        case 'pod':   return bodySec || null;
+        case 'halo':  return haloSec || (anyBbox ? bodySec : null);
+        case 'upper':
+        case 'free':  return anyBbox ? NONE : null;
+        default:      return null;
+      }
+    };
+
+    // Mean height per band from the seed list.
+    const bandYs = {};
+    for (const s of this._seeds) {
+      if (s.group !== 'ribbon' || !s.band) continue;
+      (bandYs[s.band] ||= []).push(s.y);
+    }
+
+    const sections = {};
+    for (const [band, ys] of Object.entries(bandYs)) {
+      const y = ys.reduce((sum, v) => sum + v, 0) / ys.length;
+      sections[band] = this._occupancySection(y) ?? fallbackFor(band);
+    }
+    return sections;
+  }
+
+  /**
+   * Scan one horizontal occupancy slice (32 × 48 xz samples over the flow
+   * plane) and fit a cross-section cylinder to the occupied extent.
+   * Returns null when the slice is (near-)empty — caller falls back to the
+   * anchor-bbox table. The occupancy field is built in WORLD space (the car
+   * group is lifted by baseY before voxelization), so the car-local slice
+   * height is shifted by +baseY for the lookup.
+   */
+  _occupancySection(y) {
+    const occ = this._occupancy;
+    if (!occ || typeof occ.sample !== 'function') return null;
+    const halfW = this._halfW, halfL = this._halfL;
+    const yW = y + (this._baseY || 0);
+    const NX = 32, NZ = 48;
+    let maxAbsX = 0, minZ = Infinity, maxZ = -Infinity, hits = 0;
+    for (let iz = 0; iz < NZ; iz++) {
+      const z = -halfL + (2 * halfL * iz) / (NZ - 1);
+      for (let ix = 0; ix < NX; ix++) {
+        const x = -halfW * 1.3 + (2.6 * halfW * ix) / (NX - 1);
+        if (occ.sample(x, yW, z) > 0.5) {
+          hits++;
+          const ax = Math.abs(x);
+          if (ax > maxAbsX) maxAbsX = ax;
+          if (z < minZ) minZ = z;
+          if (z > maxZ) maxZ = z;
+        }
+      }
+    }
+    if (hits < 4 || maxZ <= minZ) return null;
+    return {
+      rw:   Math.min(1.4, (maxAbsX + 0.05) / halfW),
+      rl:   Math.max(0.05, Math.min(1.2, (maxZ - minZ) / 2 / halfL)),
+      etaC: ((minZ + maxZ) / 2) / halfL,
+    };
+  }
+
+  /** Cross-section for a seed band. null ⇒ default whole-car cylinder. */
+  _bodyForBand(band) {
+    if (!band || !this._sections) return null;
+    return this._sections[band] ?? null;
   }
 
   /* ── Convert potential-flow (xi, eta) + y → world XYZ ── */

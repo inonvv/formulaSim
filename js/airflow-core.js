@@ -17,11 +17,36 @@
  * vxi  = -2·xi·eta / r⁴
  * veta = 1 − (eta²−xi²) / r⁴
  *
+ * Optional height-aware body (plan airflow-part-precision Phase 2):
+ * `body = { rw, rl, etaC }` evaluates the same doublet at the scaled,
+ * z-offset coordinates xi' = xi/rw, eta' = (eta − etaC)/rl — a per-height
+ * cross-section cylinder (halo band pinches to the cockpit, wing band to
+ * the wing planform). `{rw:1, rl:1, etaC:0}` ≡ default unit cylinder.
+ * A non-positive rw/rl means NO body at this height → pure freestream.
+ *
  * @param {number} xi
  * @param {number} eta
+ * @param {{rw:number, rl:number, etaC:number}} [body]
  * @returns {{vxi: number, veta: number}}
  */
-export function topViewVelocity(xi, eta) {
+export function topViewVelocity(xi, eta, body) {
+  if (body) {
+    if (!(body.rw > 0) || !(body.rl > 0)) return { vxi: 0, veta: 1 };
+    const xs = xi / body.rw;
+    const es = (eta - (body.etaC || 0)) / body.rl;
+    const r2 = xs * xs + es * es;
+    if (r2 <= 1) return { vxi: 0, veta: 0 };
+    const r4 = r2 * r2;
+    // Streamlines of the scaled field map back through the scaling:
+    // (dxi, deta) ∝ (rw·vxs, rl·ves), normalized so freestream veta = 1
+    // ⇒ vxi picks up the aspect factor rw/rl. Without it the integration
+    // distorts the direction and paths stagnate INTO short bodies instead
+    // of diverting around them.
+    return {
+      vxi:  (-2 * xs * es / r4) * (body.rw / body.rl),
+      veta:  1 - (es * es - xs * xs) / r4,
+    };
+  }
   const r2 = xi * xi + eta * eta;
   if (r2 <= 1) return { vxi: 0, veta: 0 };
   const r4 = r2 * r2;
@@ -130,6 +155,14 @@ export function cpToColor(cp) {
  *          (sinks / sources / vortices) summed on top of `topViewVelocity`
  *          via `sumVelocity`. Omitted or empty ⇒ identical to the pure
  *          cylinder flow (zero-regression path).
+ * @param {{rw:number, rl:number, etaC:number}} [opts.body] - height-aware
+ *          body cross-section forwarded to `topViewVelocity` (and, through
+ *          `sumVelocity` opts, to the base field under modifiers). Omitted
+ *          ⇒ the default whole-car unit cylinder.
+ * @param {number} [opts.seedY]  - seed height (m, car-local) for modifier
+ *          y-band gating in `sumVelocity`.
+ * @param {number} [opts.halfW]  - physical flow-plane half-dims, needed by
+ * @param {number} [opts.halfL]    physical-space modifiers (tire doublets).
  * @returns {Array<{xi: number, eta: number, vxi: number, veta: number}>}
  */
 export function traceStreamlinePath(seedXi, seedEta, steps = 200, stepSize = 0.14, opts = {}) {
@@ -140,11 +173,25 @@ export function traceStreamlinePath(seedXi, seedEta, steps = 200, stepSize = 0.1
   const toWorld   = opts.toWorld   || ((xi_, eta_) => ({ x: 0, y: eta_, z: xi_ }));
   const modifiers = opts.modifiers || null;
   const hasMods   = Array.isArray(modifiers) && modifiers.length > 0;
+  const body      = opts.body || null;
+  const flowOpts  = (body || opts.seedY !== undefined || opts.halfW !== undefined)
+    ? { body, y: opts.seedY, halfW: opts.halfW, halfL: opts.halfL }
+    : undefined;
+
+  function insideBody(x, e) {
+    if (body) {
+      if (!(body.rw > 0) || !(body.rl > 0)) return false;   // no body at this height
+      const xs = x / body.rw;
+      const es = (e - (body.etaC || 0)) / body.rl;
+      return xs * xs + es * es <= 1;
+    }
+    return x * x + e * e <= 1;
+  }
 
   function normalizedDir(x, e) {
     const { vxi, veta } = hasMods
-      ? sumVelocity(x, e, topViewVelocity, modifiers)
-      : topViewVelocity(x, e);
+      ? sumVelocity(x, e, topViewVelocity, modifiers, flowOpts)
+      : topViewVelocity(x, e, body);
     const spd = Math.sqrt(vxi * vxi + veta * veta);
     if (spd < 1e-6) return { dxi: 0, deta: 0, vxi, veta, spd: 0 };
     return { dxi: vxi / spd, deta: veta / spd, vxi, veta, spd };
@@ -218,7 +265,7 @@ export function traceStreamlinePath(seedXi, seedEta, steps = 200, stepSize = 0.1
     xi  = nextXi;
     eta = nextEta;
 
-    if (xi * xi + eta * eta <= 1) break;
+    if (insideBody(xi, eta)) break;
   }
 
   return path;
@@ -318,17 +365,33 @@ export function sourceVelocity(xi, eta, x0, e0, strength = 0.2, rc = 0.12) {
  *
  * Empty or missing modifier list ⇒ identical to `baseFn(xi, eta)`.
  *
+ * Optional `opts` (plan airflow-part-precision Phases 2-3):
+ *   opts.body  — height-aware cross-section forwarded to `baseFn`.
+ *   opts.y     — evaluation height (m, car-local). Modifiers carrying a
+ *                `yBand: [lo, hi]` are SKIPPED when y falls outside it
+ *                (per-part locality). No opts.y ⇒ no gating (CFD path).
+ *   opts.halfW/opts.halfL — physical flow-plane half-dims. Required by
+ *                'doublet' modifiers (tire bluff bodies), which evaluate in
+ *                physical car-local xz so wheels stay circular; doublets
+ *                are skipped when the dims are absent.
+ *
  * @param {number} xi
  * @param {number} eta
- * @param {(xi:number, eta:number)=>{vxi:number, veta:number}} baseFn
+ * @param {(xi:number, eta:number, body?:object)=>{vxi:number, veta:number}} baseFn
  * @param {Array<object>} [modifiers=[]]
+ * @param {{body?:object, y?:number, halfW?:number, halfL?:number}} [opts]
  * @returns {{vxi: number, veta: number}}
  */
-export function sumVelocity(xi, eta, baseFn, modifiers = []) {
-  const base = baseFn(xi, eta);
+export function sumVelocity(xi, eta, baseFn, modifiers = [], opts) {
+  const base = baseFn(xi, eta, opts?.body);
   let vxi = base.vxi, veta = base.veta;
   if (!modifiers || modifiers.length === 0) return { vxi, veta };
+  const gateY = opts && Number.isFinite(opts.y);
+  const hasDims = opts && Number.isFinite(opts.halfW) && Number.isFinite(opts.halfL);
   for (const m of modifiers) {
+    if (gateY && Array.isArray(m.yBand) && (opts.y < m.yBand[0] || opts.y > m.yBand[1])) {
+      continue;   // part-local modifier — this height doesn't see it
+    }
     let c;
     if (m.type === 'sink') {
       c = sinkVelocity(xi, eta, m.x, m.e, m.strength, m.rc);
@@ -336,6 +399,17 @@ export function sumVelocity(xi, eta, baseFn, modifiers = []) {
       c = sourceVelocity(xi, eta, m.x, m.e, m.strength, m.rc);
     } else if (m.type === 'vortex') {
       c = vortexVelocity(xi, eta, m.x, m.e, m.gamma, m.rc);
+    } else if (m.type === 'doublet') {
+      if (!hasDims) continue;   // physical-space modifier needs real dims
+      const p = doubletVelocity(
+        xi * opts.halfW, eta * opts.halfL,
+        m.x * opts.halfW, m.e * opts.halfL,
+        m.R, m.rc
+      );
+      // Physical→(xi,eta): freestream (veta=1) maps to a physical speed of
+      // halfL per unit parameter, so a dimensionless physical perturbation
+      // (freestream=1) contributes vxi += pvx·halfL/halfW, veta += pvz.
+      c = { vxi: p.vx * (opts.halfL / opts.halfW), veta: p.vz };
     } else {
       continue;
     }
@@ -343,6 +417,37 @@ export function sumVelocity(xi, eta, baseFn, modifiers = []) {
     veta += c.veta;
   }
   return { vxi, veta };
+}
+
+/**
+ * Ideal-cylinder (doublet) bluff-body perturbation in PHYSICAL 2-D
+ * coordinates — used for tires, which must stay circular regardless of the
+ * anisotropic (xi, eta) normalization. Uniform flow of speed 1 in +z past
+ * a cylinder of radius R centred at (x0, z0); returns the PERTURBATION
+ * only (freestream excluded), Rankine-regularized with core radius rc:
+ *
+ *   r²  = dx² + dz² + rc²
+ *   vx  = −2·R²·dx·dz / r⁴
+ *   vz  = −R²·(dz² − dx²) / r⁴
+ *
+ * @param {number} x    - sample x (m)
+ * @param {number} z    - sample z (m)
+ * @param {number} x0   - cylinder centre x (m)
+ * @param {number} z0   - cylinder centre z (m)
+ * @param {number} [R=0.28]   - cylinder radius (m)
+ * @param {number} [rc=0.08]  - regularization core radius (m)
+ * @returns {{vx: number, vz: number}}
+ */
+export function doubletVelocity(x, z, x0, z0, R = 0.28, rc = 0.08) {
+  const dx = x - x0;
+  const dz = z - z0;
+  const r2 = dx * dx + dz * dz + rc * rc;
+  const r4 = r2 * r2;
+  const R2 = R * R;
+  return {
+    vx: -2 * R2 * dx * dz / r4,
+    vz: -R2 * (dz * dz - dx * dx) / r4,
+  };
 }
 
 /**

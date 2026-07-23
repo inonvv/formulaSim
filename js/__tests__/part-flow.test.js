@@ -327,3 +327,172 @@ describe('Phase 1 — anchor-derived seed heights (GLB F1 body-centered frame)',
     expect(uniqueRibbonHeights(airflow).length).toBeLessThanOrEqual(10);
   });
 });
+
+/* ════════════════════════════════════════════════════════════════ */
+/*  Phase 2 — height-aware body cross-section (halo engagement)     */
+/* ════════════════════════════════════════════════════════════════ */
+
+// GLB F1 flow-plane dims (bodyShell half-width / max wing |z|).
+const HALF_W = 0.8125;
+const HALF_L = 2.412;
+
+// Halo cross-section per plan: halfwidth 0.38 m, z −0.47…0.65, +0.05 skim
+// inflation on rw.
+const HALO_BODY = {
+  rw:   (0.38 + 0.05) / HALF_W,
+  rl:   ((0.65 + 0.47) / 2) / HALF_L,
+  etaC: ((0.65 - 0.47) / 2) / HALF_L,
+};
+
+describe('Phase 2 — topViewVelocity height-aware body (pure math)', () => {
+  it('P2.1 default args are bit-identical to the closed-form unit cylinder', async () => {
+    const { topViewVelocity } = await import('../airflow-core.js');
+    for (let xi = -2; xi <= 2; xi += 0.23) {
+      for (let eta = -3; eta <= 3; eta += 0.31) {
+        const v  = topViewVelocity(xi, eta);
+        const r2 = xi * xi + eta * eta;
+        if (r2 <= 1) {
+          expect(v.vxi).toBe(0);
+          expect(v.veta).toBe(0);
+        } else {
+          const r4 = r2 * r2;
+          expect(v.vxi).toBe(-2 * xi * eta / r4);
+          expect(v.veta).toBe(1 - (eta * eta - xi * xi) / r4);
+        }
+      }
+    }
+  });
+
+  it('P2.2 body {rw:1, rl:1, etaC:0} reproduces the default exactly', async () => {
+    const { topViewVelocity } = await import('../airflow-core.js');
+    for (const [xi, eta] of [[0.5, -2], [1.2, 0.3], [-0.8, 1.7], [0.1, -0.4]]) {
+      const a = topViewVelocity(xi, eta);
+      const b = topViewVelocity(xi, eta, { rw: 1, rl: 1, etaC: 0 });
+      expect(b.vxi).toBe(a.vxi);
+      expect(b.veta).toBe(a.veta);
+    }
+  });
+
+  it('P2.3 empty body ({rw:0}) means NO body: pure freestream everywhere', async () => {
+    const { topViewVelocity } = await import('../airflow-core.js');
+    const v = topViewVelocity(0.1, 0.0, { rw: 0, rl: 0, etaC: 0 });
+    expect(v.vxi).toBe(0);
+    expect(v.veta).toBe(1);
+  });
+
+  it('P2.4 D1 fix: halo-band streamline skims the 0.38 m cockpit — clearance ∈ [0, 0.12] m (was 0.43)', async () => {
+    const { traceStreamlinePath } = await import('../airflow-core.js');
+    const seedXi = 0.1;
+
+    // Clearance is measured at the THROAT (|eta − etaC| ≤ 0.4·rl) where the
+    // halo body really is 0.38 m wide — the flow body is a lens, so window
+    // ends legitimately taper below the bbox halfwidth.
+    const clearOf = (path) => {
+      let minClear = Infinity;
+      for (const p of path) {
+        if (Math.abs(p.eta - HALO_BODY.etaC) > 0.4 * HALO_BODY.rl) continue;
+        const c = Math.abs(p.xi) * HALF_W - 0.38;
+        if (c < minClear) minClear = c;
+      }
+      return minClear;
+    };
+
+    // OLD whole-car cylinder: line bulges around halfW (0.8125), leaving a
+    // ≈0.43 m air gap to the halo surface.
+    const oldClear = clearOf(traceStreamlinePath(seedXi, -3, 400, 0.05));
+    expect(oldClear).toBeGreaterThan(0.30);   // documents defect D1
+
+    // NEW per-height scaled cylinder: line pinches to the cockpit and skims.
+    const newClear = clearOf(traceStreamlinePath(seedXi, -3, 400, 0.05, { body: HALO_BODY }));
+    console.info(`[part-flow] halo clearance: old ${oldClear.toFixed(3)} m -> new ${newClear.toFixed(3)} m`);
+    expect(newClear).toBeGreaterThanOrEqual(0);
+    expect(newClear).toBeLessThanOrEqual(0.12);
+  });
+
+  it('P2.5 streamline never enters the scaled body core', async () => {
+    const { traceStreamlinePath } = await import('../airflow-core.js');
+    const path = traceStreamlinePath(0.05, -3, 400, 0.05, { body: HALO_BODY });
+    for (const p of path) {
+      const xs = p.xi / HALO_BODY.rw;
+      const es = (p.eta - HALO_BODY.etaC) / HALO_BODY.rl;
+      expect(xs * xs + es * es).toBeGreaterThan(0.98);
+    }
+  });
+});
+
+describe('Phase 2 — per-band cross-section table (effects integration)', () => {
+  it('P2.6 halo band section derives from the halo bbox (rw ≈ 0.53, rl ≈ 0.23)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    const sec = airflow._sections.halo;
+    expect(sec).toBeTruthy();
+    expect(sec.rw).toBeCloseTo((0.38 + 0.05) / airflow._halfW, 3);
+    expect(sec.rl).toBeCloseTo(0.56 / airflow._halfL, 3);
+    expect(sec.etaC).toBeCloseTo(0.09 / airflow._halfL, 3);
+  });
+
+  it('P2.7 wing band section spans the frontWing bbox; pod/axle bands use the bodyShell bbox', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    const wing = airflow._sections.wing;
+    expect(wing.rw).toBeCloseTo((0.90 + 0.05) / airflow._halfW, 3);
+    expect(wing.etaC).toBeCloseTo(((-2.55 - 2.04) / 2) / airflow._halfL, 3);
+    const pod = airflow._sections.pod;
+    expect(pod.rw).toBeCloseTo((0.8125 + 0.05) / airflow._halfW, 3);
+    expect(airflow._sections.axle).toEqual(pod);
+  });
+
+  it('P2.8 free/upper bands above the bodywork get an EMPTY section (no body bulge)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    expect(airflow._sections.free.rw).toBe(0);
+    expect(airflow._sections.upper.rw).toBe(0);
+    // Straightness of the freestream line is asserted in Phase 3 (D7) once
+    // modifier y-gating stops ungated vents from tugging it.
+  });
+
+  it('P2.9 halo-band traced path pinches inside the old whole-car bulge', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    const haloIdx = airflow._seeds.findIndex(s => s.band === 'halo' && Math.abs(s.seedXi - 0.45) < 1e-6);
+    expect(haloIdx).toBeGreaterThanOrEqual(0);
+    const path = airflow._paths[haloIdx];
+    // Max lateral excursion stays well inside the whole-car cylinder bulge
+    // (old model pushed |xi| beyond 1.0 at the body).
+    const maxAbsXi = Math.max(...path.map(p => Math.abs(p.xi)));
+    expect(maxAbsXi).toBeLessThan(0.95);
+  });
+
+  it('P2.10 procedural (no bboxes) keeps the whole-car cylinder — sections all null', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1');   // fallback anchors carry no bboxes
+    for (const band of ['wing', 'axle', 'pod', 'halo', 'upper', 'free']) {
+      expect(airflow._sections[band] ?? null).toBeNull();
+    }
+  });
+
+  it('P2.11 occupancy slice scan wins over bbox fallback where the slice is occupied', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    // Fake occupancy: a 0.30 m half-width box spanning y ∈ [−0.10, 0.20],
+    // z ∈ [−1.0, 1.0] (narrower than the bodyShell bbox in x and z).
+    const occupancy = {
+      sample: (x, y, z) =>
+        (Math.abs(x) <= 0.30 && y >= -0.10 && y <= 0.20 && Math.abs(z) <= 1.0) ? 1 : 0,
+      gradient: () => ({ x: 0, y: 1, z: 0 }),
+    };
+    airflow.setCarType('F1', glbF1Measure(), occupancy);
+    // pod band (mean y ≈ −0.058) intersects the box → occupancy-derived rw
+    // (0.30 box − ≤1 grid step + 0.05 inflation), far under the 0.86 bbox rw.
+    const pod = airflow._sections.pod;
+    expect(pod.rw * airflow._halfW).toBeLessThan(0.40);
+    expect(pod.rw * airflow._halfW).toBeGreaterThan(0.25);
+    // wing band (y ≈ −0.25) is below the box → falls back to the wing bbox.
+    expect(airflow._sections.wing.rw).toBeCloseTo((0.90 + 0.05) / airflow._halfW, 3);
+  });
+});
