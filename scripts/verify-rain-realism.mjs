@@ -70,12 +70,24 @@ await page.waitForTimeout(1200);
 console.log(`shot r3 @ ${await kmh()} km/h (expect ≈180 — streaks lean back)`);
 await shoot(`${OUT}/r3-rain-180-side.png`);
 
+// Rear-¾ — spray + rooster tails read as soft round mist (no square sprites).
+await setCam([3.5, 1.6, 5.5], [0, 0.4, 1.4]);
+await page.waitForTimeout(1200);
+console.log(`shot r3b @ ${await kmh()} km/h (rear-¾ — spray/rooster soft mist)`);
+await shoot(`${OUT}/r3b-mist-180-rear34.png`);
+
 await page.click('[data-speed="350"]');
 await waitForSpeed(345);
 await setCam([6.0, 1.2, 0], [0, 0.6, 0]);
 await page.waitForTimeout(1200);
 console.log(`shot r4 @ ${await kmh()} km/h (expect ≈350 — near-horizontal streaks)`);
 await shoot(`${OUT}/r4-rain-350-side.png`);
+
+// Rear-¾ at top speed — full rooster plume, mist must not wash out the car.
+await setCam([3.5, 1.6, 5.5], [0, 0.4, 1.4]);
+await page.waitForTimeout(1200);
+console.log(`shot r4b @ ${await kmh()} km/h (rear-¾ — rooster plume growth)`);
+await shoot(`${OUT}/r4b-mist-350-rear34.png`);
 
 // Density check around the car under full sweep (upstream-biased respawn).
 await setCam([0, 1.4, -7.5], [0, 0.6, 0]);
