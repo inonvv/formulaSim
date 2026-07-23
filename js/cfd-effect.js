@@ -559,6 +559,7 @@ export class CfdEffect {
     this._lastBuiltSpeed = -1;
     this._baseY          = 0;
     this._anchors        = null;   // set by setCarType(type, measure)
+    this._measure        = null;   // full measure (axle fields → tire proxies)
     this._modifiers      = [];     // Phase C: injected via setModifiers()
     this._occupancy      = null;   // world-frame body SDF (setOccupancy)
     this._occBaseY       = 0;      // world y = car-local y + occBaseY
@@ -569,6 +570,7 @@ export class CfdEffect {
     this._vortexDefs     = [];
     this._streamlines    = [];
     this._surfaceMeshes  = [];   // body-surface overlay (GLB cars)
+    this._tireMeshes     = [];   // torus tire proxies (measure-gated)
     this._bodyMeshes     = null; // source meshes for the overlay
     this._bodyFrame      = null; // car group whose frame the overlay rebases into
     this._surfaceDirty   = false;
@@ -610,12 +612,16 @@ export class CfdEffect {
     const newAnchors = (measure && measure.anchors) ? measure.anchors : null;
     const anchorsChanged = newAnchors && newAnchors !== this._anchors;
     if (newAnchors) this._anchors = newAnchors;
+    // Keep the full measure too — the tire proxies key off its axle fields.
+    // Same keep-prior convention as anchors for single-arg callers.
+    const measureChanged = measure && measure !== this._measure;
+    if (measure) this._measure = measure;
 
     // Rebuild when the type changes OR when the anchor set refreshes (so the
     // initial F1 spawn — same type, but anchors arriving for the first time —
     // re-anchors blobs to the measured positions instead of authored ones)
-    // OR when a new body surface arrived via setBodySurface.
-    if (this._type === type && !anchorsChanged && !this._surfaceDirty) return;
+    // OR when a new measure / body surface arrived.
+    if (this._type === type && !anchorsChanged && !measureChanged && !this._surfaceDirty) return;
     this._surfaceDirty = false;
     this._type = type;
     this._disposeAll();
@@ -785,6 +791,7 @@ export class CfdEffect {
     this._vortexLines   = [];
     this._streamlines   = [];
     this._surfaceMeshes = [];
+    this._tireMeshes    = [];
   }
 
   _build(type) {
@@ -799,6 +806,7 @@ export class CfdEffect {
     } else {
       this._buildPatches(type);
     }
+    this._buildTireProxies(type);
     this._buildBlobs(type);
     this._buildVortexCores(type);
     this._buildStreamlines(type);
@@ -859,11 +867,71 @@ export class CfdEffect {
     }
   }
 
-  /* ── Per-vertex Cp colouring of the body overlay ──────────────── */
+  /* ── Tire proxies: static tori painted like the body overlay ───── */
+  /**
+   * Four TorusGeometry proxies at the measured hub positions. Tires are
+   * rotationally symmetric, so STATIC meshes are spin-correct — stagnation
+   * stays on the front tread regardless of wheel rotation (never parent
+   * these to the spinning corner groups). Positions are baked into the
+   * geometry (car-local, group lifted by baseY) so the shared recolor loop
+   * and the raycast probe read them exactly like the body overlay clones.
+   * Gated to measures that carry the full axle field set; procedural and
+   * GLB paths both publish one, mocked-three suites don't.
+   */
+  _buildTireProxies(type) {
+    const m = this._measure;
+    if (!m) return;
+    const fields = [m.groundContactY, m.frontAxleZ, m.rearAxleZ,
+                    m.frontAxleX, m.rearAxleX, m.wheelRadius];
+    if (!fields.every(Number.isFinite)) return;
+
+    // Tread width from the measure when present (gt.glb: 0.33), else the
+    // measured per-type fallback (F1 0.34 / GT 0.33).
+    const width  = Number.isFinite(m.wheelWidth) ? m.wheelWidth
+                 : (type === 'GT' ? 0.33 : 0.34);
+    const tubeR  = Math.min(width / 2, 0.12);
+    const majorR = m.wheelRadius - tubeR;   // outer extent = tread surface
+    if (!(majorR > 0)) return;
+
+    const hubY = m.groundContactY + m.wheelRadius;
+    const hubs = [
+      { name: 'FL', x: -m.frontAxleX, z: m.frontAxleZ },
+      { name: 'FR', x:  m.frontAxleX, z: m.frontAxleZ },
+      { name: 'RL', x: -m.rearAxleX,  z: m.rearAxleZ  },
+      { name: 'RR', x:  m.rearAxleX,  z: m.rearAxleZ  },
+    ];
+    const c0 = cpToColor(0);
+    for (const h of hubs) {
+      const geo = new THREE.TorusGeometry(majorR, tubeR, 16, 24);
+      geo.rotateY(Math.PI / 2);        // torus axis z → x (the wheel spin axis)
+      geo.translate(h.x, hubY, h.z);   // bake the car-local hub position
+
+      const count  = geo.attributes.position.count;
+      const colors = new Float32Array(count * 3);
+      for (let i = 0; i < count; i++) {
+        colors[i * 3] = c0.r; colors[i * 3 + 1] = c0.g; colors[i * 3 + 2] = c0.b;
+      }
+      geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+      const mat = new THREE.MeshBasicMaterial({
+        vertexColors: true,
+        transparent:  true,
+        opacity:      0,
+        depthWrite:   false,
+        blending:     THREE.AdditiveBlending,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.name = `cfdTire_${h.name}`;
+      this.group.add(mesh);
+      this._tireMeshes.push({ mesh });
+    }
+  }
+
+  /* ── Per-vertex Cp colouring of the body overlay + tire proxies ── */
   _updateSurfaceColors(speedFactor) {
     const occ  = this._occupancy;
     const occY = this._occBaseY;
-    for (const { mesh } of this._surfaceMeshes) {
+    for (const { mesh } of [...this._surfaceMeshes, ...this._tireMeshes]) {
       const pos = mesh.geometry.attributes.position;
       const nrm = mesh.geometry.attributes.normal;
       const col = mesh.geometry.attributes.color;

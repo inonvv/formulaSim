@@ -123,6 +123,153 @@ function extractTriangles(mesh) {
 }
 
 /**
+ * Möller–Trumbore evaluated ONCE per (triangle, row) at the row anchor —
+ * identical direction / epsilon semantics to rayPlusXHitsTri, but returns
+ * u, v, t WITHOUT the u/v early exits (the scanline needs the raw values to
+ * decide constant-pass / constant-fail across the row), plus the EXACT
+ * affine slopes of u, v, t with respect to the ray origin's x:
+ *   O' = O + (δ,0,0)  ⇒  u' = u + δ·su,  v' = v + δ·sv,  t' = t + δ·st.
+ * (tvec is the only origin-dependent term, and it enters u/v/t linearly.)
+ * Because RAY_DIR has tiny y/z components, su and sv are O(1e-5) and st is
+ * ≈ −1: the u/v gates are near-constant along the row and the t gate is a
+ * single x boundary — which is what makes the row-scanline fill valid.
+ */
+const MT = { valid: false, u: 0, v: 0, t: 0, su: 0, sv: 0, st: 0 };
+function mollerRowAt(ox, oy, oz, tri) {
+  const dx = RAY_DIR.x, dy = RAY_DIR.y, dz = RAY_DIR.z;
+  const e1x = tri.bx - tri.ax, e1y = tri.by - tri.ay, e1z = tri.bz - tri.az;
+  const e2x = tri.cx - tri.ax, e2y = tri.cy - tri.ay, e2z = tri.cz - tri.az;
+
+  const px = dy * e2z - dz * e2y;
+  const py = dz * e2x - dx * e2z;
+  const pz = dx * e2y - dy * e2x;
+
+  const det = e1x * px + e1y * py + e1z * pz;
+  if (det > -1e-12 && det < 1e-12) { MT.valid = false; return MT; }  // parallel —
+  // origin-independent, so this reject is identical for every voxel.
+  const invDet = 1 / det;
+
+  const tx = ox - tri.ax;
+  const ty = oy - tri.ay;
+  const tz = oz - tri.az;
+
+  const qx = ty * e1z - tz * e1y;
+  const qy = tz * e1x - tx * e1z;
+  const qz = tx * e1y - ty * e1x;
+
+  MT.u  = (tx * px + ty * py + tz * pz) * invDet;
+  MT.v  = (dx * qx + dy * qy + dz * qz) * invDet;
+  MT.t  = (e2x * qx + e2y * qy + e2z * qz) * invDet;
+  MT.su = px * invDet;                              // du/d(ox)
+  MT.sv = (dz * e1y - dy * e1z) * invDet;           // dv/d(ox)
+  MT.st = (e2z * e1y - e2y * e1z) * invDet;         // dt/d(ox), ≈ −1
+  MT.valid = true;
+  return MT;
+}
+
+/**
+ * SCANLINE row fill (production path). For each row-triangle, ONE Möller
+ * evaluation at the row anchor (first voxel centre) instead of nx of them:
+ *   • u/v gates: near-constant along the row (slopes are O(1e-5) from the
+ *     perturbed RAY_DIR) ⇒ the anchor's accept/reject holds for every voxel;
+ *   • t > 1e-9 gate: a single x boundary at x* = anchor + t (RAY_DIR.x = 1)
+ *     ⇒ the crossing toggles the parity of the prefix [0 .. last voxel
+ *     before x* − 1e-9], accumulated in a diff-domain toggle buffer.
+ * Byte-equality guard: per-voxel rays share (y,z) but are parallel, NOT
+ * collinear — u/v/t drift by |slope|·rowWidth between voxels. Any triangle
+ * whose anchor u/v/t sits within 4× that drift (+1e-12 cushion) of a gate
+ * threshold — grazing/tangent hits, shared edges, near-parallel slivers —
+ * falls back to the reference per-voxel test FOR THAT TRIANGLE ONLY, so the
+ * result is voxel-for-voxel identical to _internal.buildOccupancyReference
+ * (see body-sdf-scanline.test.js). Fallbacks are rare; the dominant term
+ * drops from nx × |row| Möller tests per row to |row|.
+ */
+function fillRowScanline(row, y, z, iy, iz, data, nx, ny, bx0, dx) {
+  const ox0     = bx0 + 0.5 * dx;      // row anchor: first voxel centre
+  const W       = (nx - 1) * dx;       // max origin offset along the row
+  const CUSH    = 1e-12;               // float-eval cushion on the drift bands
+  const toggles = new Uint8Array(nx + 1);
+  const rowBase = iy * nx + iz * nx * ny;
+
+  for (let ti = 0; ti < row.length; ti++) {
+    const tri = row[ti];
+    const m = mollerRowAt(ox0, y, z, tri);
+    if (!m.valid) continue;
+
+    const mU  = 4 * Math.abs(m.su) * W + CUSH;
+    const mV  = 4 * Math.abs(m.sv) * W + CUSH;
+    const mX  = 4 * Math.abs(1 + m.st) * W + CUSH;
+
+    let risky =
+      Math.abs(m.u) <= mU || Math.abs(m.u - 1) <= mU ||
+      Math.abs(m.v) <= mV ||
+      Math.abs(m.u + m.v - 1) <= mU + mV;
+
+    let iLast = -2;   // last voxel index that counts this crossing
+    if (!risky) {
+      if (m.u < 0 || m.u > 1 || m.v < 0 || m.u + m.v > 1) continue;  // fails everywhere
+      const xb = ox0 + m.t - 1e-9;     // voxel counts the crossing ⟺ x < xb
+      iLast = Math.floor((xb - bx0) / dx - 0.5);
+      if (iLast >= nx) iLast = nx - 1;
+      if (iLast >= -1) {
+        // Voxel centres adjacent to the boundary must clear the drift band,
+        // else their own-ray t gate could disagree with the shared boundary.
+        const xL = bx0 + (iLast + 0.5) * dx;
+        if ((iLast >= 0      && xb - xL        <= mX) ||
+            (iLast < nx - 1  && (xL + dx) - xb <= mX)) risky = true;
+      }
+    }
+
+    if (risky) {
+      // Exact fallback for THIS triangle: the reference per-voxel test.
+      for (let ix = 0; ix < nx; ix++) {
+        const x = bx0 + (ix + 0.5) * dx;
+        if (rayPlusXHitsTri(x, y, z,
+                            tri.ax, tri.ay, tri.az,
+                            tri.bx, tri.by, tri.bz,
+                            tri.cx, tri.cy, tri.cz)) {
+          toggles[ix] ^= 1;
+          toggles[ix + 1] ^= 1;
+        }
+      }
+    } else if (iLast >= 0) {
+      toggles[0] ^= 1;                 // crossing is ahead of voxels [0..iLast]
+      toggles[iLast + 1] ^= 1;
+    }
+  }
+
+  let parity = 0;
+  for (let ix = 0; ix < nx; ix++) {
+    parity ^= toggles[ix];
+    if (parity) data[ix + rowBase] = 1;
+  }
+}
+
+/**
+ * PER-VOXEL row fill — the original O(nx × |row|) loop, kept verbatim as the
+ * equivalence reference for body-sdf-scanline.test.js (byte-identical `data`
+ * on every fixture is the contract of the scanline rewrite).
+ */
+function fillRowPerVoxel(row, y, z, iy, iz, data, nx, ny, bx0, dx) {
+  for (let ix = 0; ix < nx; ix++) {
+    const x = bx0 + (ix + 0.5) * dx;
+    let hits = 0;
+    for (let t = 0; t < row.length; t++) {
+      const tri = row[t];
+      if (rayPlusXHitsTri(x, y, z,
+                          tri.ax, tri.ay, tri.az,
+                          tri.bx, tri.by, tri.bz,
+                          tri.cx, tri.cy, tri.cz)) {
+        hits++;
+      }
+    }
+    if ((hits & 1) === 1) {
+      data[ix + iy * nx + iz * nx * ny] = 1;
+    }
+  }
+}
+
+/**
  * Build a binary occupancy field over the given world-space AABB.
  *
  * @param {Array} meshes — objects with {geometry, matrixWorld?} (three.js
@@ -139,6 +286,15 @@ function extractTriangles(mesh) {
  * }}
  */
 export function buildOccupancy(meshes, opts = {}) {
+  return buildOccupancyWith(fillRowScanline, meshes, opts);
+}
+
+/** Old per-voxel build — test-only equivalence reference (see _internal). */
+function buildOccupancyReference(meshes, opts = {}) {
+  return buildOccupancyWith(fillRowPerVoxel, meshes, opts);
+}
+
+function buildOccupancyWith(fillRow, meshes, opts = {}) {
   const res    = opts.resolution || DEFAULT_RES;
   const bounds = opts.bounds     || DEFAULT_BOUNDS;
   const nx = res.x, ny = res.y, nz = res.z;
@@ -159,11 +315,9 @@ export function buildOccupancy(meshes, opts = {}) {
   }
 
   // For each (y, z) row, pre-filter triangles whose Y/Z bbox straddles that
-  // row, then for each voxel in +X count intersections (parity → inside).
-  // We ray-cast from bx0 - 1 along +X so every ray starts OUTSIDE the domain,
-  // independent of voxel x — parity at each voxel is then derived from the
-  // sorted t-list, but that's slower; simpler: cast per-voxel. The per-tri
-  // Y/Z bbox prune already cuts most rejections.
+  // row, then fill the row's nx voxels (parity → inside) via the injected
+  // strategy: fillRowScanline in production, fillRowPerVoxel as the
+  // equivalence reference.
   for (let iy = 0; iy < ny; iy++) {
     const y = by0 + (iy + 0.5) * dy;
     // First Y-band prune
@@ -184,22 +338,7 @@ export function buildOccupancy(meshes, opts = {}) {
       }
       if (row.length === 0) continue;
 
-      for (let ix = 0; ix < nx; ix++) {
-        const x = bx0 + (ix + 0.5) * dx;
-        let hits = 0;
-        for (let t = 0; t < row.length; t++) {
-          const tri = row[t];
-          if (rayPlusXHitsTri(x, y, z,
-                              tri.ax, tri.ay, tri.az,
-                              tri.bx, tri.by, tri.bz,
-                              tri.cx, tri.cy, tri.cz)) {
-            hits++;
-          }
-        }
-        if ((hits & 1) === 1) {
-          data[ix + iy * nx + iz * nx * ny] = 1;
-        }
-      }
+      fillRow(row, y, z, iy, iz, data, nx, ny, bx0, dx);
     }
   }
 
@@ -231,4 +370,4 @@ export function buildOccupancy(meshes, opts = {}) {
   return { data, bounds, res, sample, gradient };
 }
 
-export const _internal = { rayPlusXHitsTri, extractTriangles };
+export const _internal = { rayPlusXHitsTri, extractTriangles, buildOccupancyReference };

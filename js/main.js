@@ -22,6 +22,7 @@ import { VentEmitterSystem } from './vent-emitters.js';
 import { buildOccupancy } from './body-sdf.js';
 import { collectOccupancyMeshes } from './car-loader.js';
 import { createSwapGuard } from './swap-guard.js';
+import { EffectStub } from './effect-stub.js';
 import { gearFromSpeed, wheelRotationRate, aeroSquishFactor, rpmRatio, lerpSpeed } from './physics.js';
 import {
   BACKGROUND_COLOR, AMBIENT_COLOR, AMBIENT_INTENSITY,
@@ -294,10 +295,9 @@ async function spawnCar(type) {
 /* ══════════════════════════════════════════════════════════════════
    EFFECTS
 ══════════════════════════════════════════════════════════════════ */
-// Stub used if an effect fails to construct, so animate() always runs
-class EffectStub {
-  setSpeed() {} setVisible() {} setCarType(_t, _m) {} setBaseY() {} update() {} dispose() {}
-}
+// Stub used if an effect fails to construct, so animate() always runs.
+// Lives in effect-stub.js (node-testable — main.js can't load outside the
+// browser); effect-stub.test.js source-scans this file to keep it complete.
 
 let airflow, rain, cfd, vents;
 try { airflow = new AirflowEffect(scene); }
