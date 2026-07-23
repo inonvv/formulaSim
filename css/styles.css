@@ -140,6 +140,29 @@ body {
   text-shadow: 0 0 18px color-mix(in srgb, var(--accent) 80%, transparent);
 }
 
+#turn-counter-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+}
+
+#turn-counter-label {
+  font-size: var(--label-fs);
+  letter-spacing: var(--label-track);
+  color: var(--dim);
+}
+
+#turn-counter {
+  font-family: var(--mono);
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #fff;
+  min-width: 2ch;
+  text-align: center;
+  line-height: 1;
+}
+
 /* ─── Car badge (top-left) ───────────────────────────────────────── */
 #car-badge {
   position: fixed;

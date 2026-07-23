@@ -387,3 +387,20 @@ const RIBBON_EXAG = 6;  // real apparent drift is cm-scale — exaggerated for l
 export function ribbonDrift(omega, z) {
   return -omega * z * RIBBON_EXAG + 0; // +0 normalises −0
 }
+
+/* ── Turn counter (HUD) ──────────────────────────────────────────── */
+
+const TURN_COUNT_ON  = 1e-4;   // |κ| rising past this = a new turn
+const TURN_COUNT_OFF = 5e-5;   // rearm only once |κ| drops below this (hysteresis)
+
+/* Rising-edge turn counter with hysteresis. Pure: feed the previous state
+   ({inTurn, count} or null to bootstrap) and the current path curvature;
+   returns the next state. The on/off gap keeps curvature-ramp jitter around
+   a single threshold from double-counting one corner. */
+export function turnEdgeCounter(prev, kappa) {
+  const st = prev ?? { inTurn: false, count: 0 };
+  const a = Math.abs(kappa);
+  if (!st.inTurn && a > TURN_COUNT_ON)  return { inTurn: true,  count: st.count + 1 };
+  if (st.inTurn  && a < TURN_COUNT_OFF) return { inTurn: false, count: st.count };
+  return st;
+}

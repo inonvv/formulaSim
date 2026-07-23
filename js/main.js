@@ -16,7 +16,7 @@ import { buildCar, getCarMeta, WHEEL_NAMES } from './cars.js';
 import { CAR_MANIFEST } from './car-manifest.js';
 import { createDebugOverlay } from './debug-overlay.js';
 import { buildTrack, buildSkyline } from './track.js';
-import { TrackPath, TURN_CFG, steerAngleRad, rollAngleRad, smoothAngle, cameraBankRad, pathBendTable } from './track-path.js';
+import { TrackPath, TURN_CFG, steerAngleRad, rollAngleRad, smoothAngle, cameraBankRad, pathBendTable, turnEdgeCounter } from './track-path.js';
 import { AirflowEffect, RainEffect } from './effects.js';
 import { RainLensShader, rainLensIntensity, lensActive } from './rain-lens.js';
 import { CfdEffect, syncCfdLegend } from './cfd-effect.js';
@@ -176,7 +176,13 @@ const state = {
   brakes:     {},
   camT:       0,          // camera path parameter for trackside/drone
   camBank:    0,          // smoothed cinematic camera roll (rad)
+  turnCount:  0,          // completed-turn tally shown in the HUD
+  _turnEdge:  null,       // turnEdgeCounter state {inTurn, count}
 };
+
+// Verify-script hook: headless scripts read sim state (turn count, steering
+// wheel pose, measured anchors) without faking DOM interactions.
+window.__fsim.state = state;
 
 /* ══════════════════════════════════════════════════════════════════
    CAR MANAGEMENT
@@ -654,6 +660,14 @@ function updateTrack(dt) {
 
   // Recycle furniture rows through the sliding window.
   track.update(trackPath);
+
+  // Turn counter: rising edge of |κ| under the car, with hysteresis so one
+  // corner's curvature ramp can't double-count (pure helper, unit-tested).
+  state._turnEdge = turnEdgeCounter(state._turnEdge, trackPath.curvatureAt(trackPath.pose.s));
+  if (state._turnEdge.count !== state.turnCount) {
+    state.turnCount = state._turnEdge.count;
+    document.getElementById('turn-counter').textContent = state.turnCount;
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -860,6 +874,10 @@ document.getElementById('reset-btn').addEventListener('click', () => {
   });
   // Back to the default turn schedule — reset means the full selection resets
   applyTurnMode('auto');
+  // Zero the turn tally with the rest of the session state.
+  state.turnCount = 0;
+  state._turnEdge = null;
+  document.getElementById('turn-counter').textContent = '0';
   updateChips();
   syncEffects();
 });

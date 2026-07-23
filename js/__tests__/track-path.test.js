@@ -25,6 +25,7 @@ import {
   rowWindow,
   poolSize,
   poolIndex,
+  turnEdgeCounter,
 } from '../track-path.js';
 
 /* Deterministic RNG (LCG) so turn schedules are reproducible. */
@@ -587,5 +588,39 @@ describe('Effect coupling helpers', () => {
     expect(ribbonDrift(0.14, 3)).toBeCloseTo(-0.14 * 3 * 6, 6);
     expect(ribbonDrift(-0.14, 3)).toBeCloseTo(0.14 * 3 * 6, 6);
     expect(ribbonDrift(0.14, 0)).toBe(0);
+  });
+});
+
+describe('turnEdgeCounter — rising-edge turn counter with hysteresis', () => {
+  it('rising edge (|κ| > 1e-4 from idle) increments the count once', () => {
+    let st = turnEdgeCounter(null, 0);            // null prev bootstraps {inTurn:false, count:0}
+    expect(st).toEqual({ inTurn: false, count: 0 });
+    st = turnEdgeCounter(st, 2e-4);
+    expect(st).toEqual({ inTurn: true, count: 1 });
+  });
+
+  it('no double-count while κ stays above the on-threshold', () => {
+    let st = { inTurn: false, count: 0 };
+    for (const k of [2e-4, 5e-3, 1e-2, 2e-4]) st = turnEdgeCounter(st, k);
+    expect(st.count).toBe(1);
+    expect(st.inTurn).toBe(true);
+  });
+
+  it('hysteresis: rearm requires |κ| < 5e-5 — mid-band κ neither counts nor rearms', () => {
+    let st = { inTurn: true, count: 1 };
+    st = turnEdgeCounter(st, 7e-5);               // between 5e-5 and 1e-4: still in turn
+    expect(st).toEqual({ inTurn: true, count: 1 });
+    st = turnEdgeCounter(st, 1e-5);               // below off-threshold: rearms
+    expect(st).toEqual({ inTurn: false, count: 1 });
+    st = turnEdgeCounter(st, 7e-5);               // mid-band while off: does NOT count
+    expect(st).toEqual({ inTurn: false, count: 1 });
+    st = turnEdgeCounter(st, -3e-4);              // right turn counts too (|κ|)
+    expect(st).toEqual({ inTurn: true, count: 2 });
+  });
+
+  it('two separated turns count as two', () => {
+    let st = { inTurn: false, count: 0 };
+    for (const k of [0, 2e-4, 3e-4, 1e-5, 0, -2e-4, 0]) st = turnEdgeCounter(st, k);
+    expect(st.count).toBe(2);
   });
 });
