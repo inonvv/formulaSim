@@ -1586,6 +1586,10 @@ const RAIN_POS = {
   GT: { sprayX: 0.85, sprayZ: 1.55, roosterX: 0.93, roosterZ: 1.72 },
 };
 
+/* Ground-splash lifetime (s) — a drop hitting the road kicks up a short
+ * crown of secondary droplets. */
+const SPLASH_LIFE = 0.25;
+
 export class RainEffect {
   constructor(scene) {
     this.scene = scene;
@@ -1603,28 +1607,108 @@ export class RainEffect {
     this._buildSpray();
     this._buildWetGround();
     this._buildRoosterTails();
+    this._buildSplashes();
     this.group.visible = false;
+  }
+
+  _buildSplashes() {
+    const COUNT = 256;
+    const positions = new Float32Array(COUNT * 3);
+    const sizes     = new Float32Array(COUNT);
+    const fades     = new Float32Array(COUNT);
+    const life      = new Float32Array(COUNT).fill(SPLASH_LIFE);  // start expired
+    const vy        = new Float32Array(COUNT);
+    for (let i = 0; i < COUNT; i++) positions[i * 3 + 1] = -999;  // parked off-scene
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+    geo.setAttribute('aFade', new THREE.BufferAttribute(fades, 1));
+
+    // Per-particle size/opacity needs a shader — PointsMaterial is global.
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { uColor: { value: new THREE.Color(0xbfd8e8) } },
+      vertexShader: /* glsl */ `
+        attribute float aSize;
+        attribute float aFade;
+        varying float vFade;
+        void main() {
+          vFade = aFade;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = aSize * (300.0 / -mv.z);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: /* glsl */ `
+        uniform vec3 uColor;
+        varying float vFade;
+        void main() {
+          vec2 d = gl_PointCoord - vec2(0.5);
+          float r = length(d);
+          if (r > 0.5) discard;
+          float soft = smoothstep(0.5, 0.15, r);
+          gl_FragColor = vec4(uColor, vFade * soft);
+        }`,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+
+    this._splashPoints = new THREE.Points(geo, mat);
+    this.group.add(this._splashPoints);
+
+    this._splashPos   = positions;
+    this._splashSize  = sizes;
+    this._splashFade  = fades;
+    this._splashLife  = life;
+    this._splashVy    = vy;
+    this._splashCount = COUNT;
+    this._splashNext  = 0;   // ring-buffer cursor — oldest slot is recycled
+  }
+
+  /** Activate the next ring-buffer slot at a ground-impact point. */
+  _spawnSplash(x, z) {
+    const i = this._splashNext;
+    this._splashNext = (i + 1) % this._splashCount;
+    this._splashPos[i * 3]     = x;
+    this._splashPos[i * 3 + 1] = -0.34;
+    this._splashPos[i * 3 + 2] = z;
+    this._splashLife[i] = 0;
+    this._splashVy[i]   = rnd(0.3, 1.0);
+    this._splashSize[i] = 0.05;
+    this._splashFade[i] = 0.5;
   }
 
   _buildDroplets() {
     const COUNT = 1200;
     // Buffer stores tail + head per droplet (2 vertices × 3 floats = 6 per droplet)
     const positions = new Float32Array(COUNT * 2 * 3);
+    const colors    = new Float32Array(COUNT * 2 * 3);
     const vels      = new Float32Array(COUNT);
+    const sizes     = new Float32Array(COUNT);
 
     for (let i = 0; i < COUNT; i++) {
       const x = rnd(-5, 5), y = rnd(0.5, 8), z = rnd(-6, 6);
       positions.set([x, y, z, x, y, z], i * 6);
-      vels[i] = rnd(6, 14);
+      // Drop-size distribution: rnd² skews small (drizzle dominates real
+      // rain). Terminal velocity 4–9 m/s and brightness both follow size.
+      const s = 0.25 + 0.75 * Math.pow(rnd(0, 1), 2);
+      sizes[i] = s;
+      vels[i]  = 4 + 5 * s;
+      const b  = 0.45 + 0.55 * s;
+      // Vertex order per droplet: [tail, head]. Tail = oldest position of
+      // the motion-blur streak ⇒ dimmest (0.35× head).
+      colors.set([b * 0.35, b * 0.35, b * 0.35, b, b, b], i * 6);
     }
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
     const mat = new THREE.LineBasicMaterial({
-      color: 0x88ccff,
+      color: 0xbfd8e8,
       transparent: true,
-      opacity: 0.7,
+      opacity: 0.55,
+      vertexColors: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
@@ -1634,6 +1718,7 @@ export class RainEffect {
 
     this._dPos   = positions;
     this._dVels  = vels;
+    this._dSizes = sizes;
     this._dCount = COUNT;
     this._dMat   = mat;
     // Phase 5: per-droplet coupled velocities — written ONLY while airflow
@@ -1818,20 +1903,30 @@ export class RainEffect {
     this.group.visible = v;
   }
 
+  /** Upstream-biased respawn — with the real rearward sweep the spawn box
+   *  would otherwise empty past the car. */
+  _respawnDrop(i) {
+    const dp = this._dPos;
+    dp[i * 6]     = rnd(-6, 6);
+    dp[i * 6 + 1] = rnd(4, 9);
+    dp[i * 6 + 2] = rnd(-8, 2);
+  }
+
   update(dt, _t) {
     if (!this._visible) return;
 
     const speedFactor = Math.min(this._speed / 350, 1);
-    const windTilt = speedFactor * 1.5;
+    // Apparent headwind sweeping drops rearward. Physical value at 350 km/h
+    // is ~97 m/s; capped at 30 m/s (≈⅓) for legibility — at 80 km/h ≈ 6.9,
+    // still subtle.
+    const windRear = speedFactor * 30;
 
-    // Change 5: streak rendering — update tail position then compute head
+    // Streak rendering — update tail position then compute head
     const dp = this._dPos;
-    const streakLen = 0.04 + speedFactor * 0.10;
     // Turn coupling: falling drops pick up lateral speed ≈ a_lat × mean fall
-    // time (~0.4 s); the streak head leans outward by the accel ratio.
+    // time (~0.4 s); the streak leans outward because vel.x ≠ 0.
     const aLat = this._turnALat;
     const turnDrift = aLat * 0.4;
-    const turnLean  = (aLat / 9.8) * streakLen;
     // Phase 5: airflow coupling — only above the sf gate, and only inside
     // the envelope. With coupling off this loop is byte-identical to the
     // uncoupled baseline (the coupled-velocity arrays are never touched).
@@ -1839,9 +1934,25 @@ export class RainEffect {
     const coupleOn = !!(cpl && speedFactor >= 0.15);
     const K_COUPLE = 0.6;
     for (let i = 0; i < this._dCount; i++) {
+      // Splash pool piggybacks on the first 256 iterations (no extra pass).
+      // Aging runs BEFORE this drop's ground check so a splash spawned this
+      // frame keeps life 0 until the next frame.
+      if (i < this._splashCount && this._splashLife[i] < SPLASH_LIFE) {
+        this._splashLife[i] += dt;
+        if (this._splashLife[i] >= SPLASH_LIFE) {
+          this._splashPos[i * 3 + 1] = -999;   // expired — park off-scene
+          this._splashFade[i] = 0;
+        } else {
+          this._splashVy[i]          -= 9.8 * dt;
+          this._splashPos[i * 3 + 1] += this._splashVy[i] * dt;
+          const u = this._splashLife[i] / SPLASH_LIFE;
+          this._splashSize[i] = 0.05 - 0.03 * u;    // 0.05 → 0.02 shrink
+          this._splashFade[i] = (1 - u) * 0.5;
+        }
+      }
       dp[i * 6]     += dt * turnDrift;
       dp[i * 6 + 1] -= dt * this._dVels[i];
-      dp[i * 6 + 2] += dt * windTilt;
+      dp[i * 6 + 2] += dt * windRear;
       if (coupleOn) {
         const x = dp[i * 6], y = dp[i * 6 + 1], z = dp[i * 6 + 2];
         const env = cpl.env;
@@ -1854,25 +1965,44 @@ export class RainEffect {
         dp[i * 6 + 2] += this._dVelZ[i] * dt;
         // Body splash — a drop that reaches the body respawns from the sky.
         if (cpl.occupancy && cpl.occupancy.sample(dp[i * 6], dp[i * 6 + 1], dp[i * 6 + 2]) > 0.5) {
-          dp[i * 6]     = rnd(-5, 5);
-          dp[i * 6 + 1] = 8;
-          dp[i * 6 + 2] = rnd(-6, 6);
+          this._respawnDrop(i);
           this._dVelX[i] = 0;
           this._dVelZ[i] = 0;
         }
       }
       if (dp[i * 6 + 1] < -0.35) {
-        dp[i * 6]     = rnd(-5, 5);
-        dp[i * 6 + 1] = 8;
-        dp[i * 6 + 2] = rnd(-6, 6);
+        // Ground hit — kick up a splash at the impact point.
+        this._spawnSplash(dp[i * 6], dp[i * 6 + 2]);
+        this._respawnDrop(i);
+        if (coupleOn) { this._dVelX[i] = 0; this._dVelZ[i] = 0; }
+      } else if (dp[i * 6 + 2] > 7) {
+        // Swept past the car — wrap upstream at the SAME height. A sky
+        // respawn here would empty the box at car height (fall 4–9 m/s vs
+        // sweep 30 m/s ⇒ drops re-entering at y 4–9 stay above the car all
+        // the way across); the z-wrap keeps density uniform.
+        dp[i * 6 + 2] -= 15;
         if (coupleOn) { this._dVelX[i] = 0; this._dVelZ[i] = 0; }
       }
-      // Head = tail + streak offset
-      dp[i * 6 + 3] = dp[i * 6] + turnLean;
-      dp[i * 6 + 4] = dp[i * 6 + 1] + streakLen;
-      dp[i * 6 + 5] = dp[i * 6 + 2] + windTilt * 0.15;
+      // Velocity-aligned streak: head = tail + v̂·L (≈12 ms exposure).
+      // Coupled velocities are always zero while coupling is off, so the
+      // uncoupled streak is exactly (turnDrift, −vFall, windRear).
+      const vx = turnDrift + this._dVelX[i];
+      const vy = -this._dVels[i];
+      const vz = windRear + this._dVelZ[i];
+      const vm = Math.sqrt(vx * vx + vy * vy + vz * vz);
+      const L  = Math.min(Math.max(vm * 0.012, 0.05), 0.9);
+      const k  = L / vm;
+      dp[i * 6 + 3] = dp[i * 6]     + vx * k;
+      dp[i * 6 + 4] = dp[i * 6 + 1] + vy * k;
+      dp[i * 6 + 5] = dp[i * 6 + 2] + vz * k;
     }
     this.droplets.geometry.attributes.position.needsUpdate = true;
+    {
+      const sa = this._splashPoints.geometry.attributes;
+      sa.position.needsUpdate = true;
+      sa.aSize.needsUpdate    = true;
+      sa.aFade.needsUpdate    = true;
+    }
 
     // Change 4: proper gravity accumulation (9.8 m/s²) for spray
     const sp = this._sPos, sv = this._sVels;

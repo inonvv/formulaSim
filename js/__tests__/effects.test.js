@@ -206,12 +206,14 @@ describe('RainEffect', () => {
     expect(rain._sCount).toBeGreaterThan(0);
   });
 
-  it('droplet vels are in range [6, 14]', async () => {
+  it('droplet vels are terminal velocities in [4, 9], correlated with drop size', async () => {
     const { RainEffect } = await import('../effects.js');
     const rain = new RainEffect(makeScene());
-    for (const v of rain._dVels) {
-      expect(v).toBeGreaterThanOrEqual(6);
-      expect(v).toBeLessThanOrEqual(14);
+    for (let i = 0; i < rain._dCount; i++) {
+      const v = rain._dVels[i];
+      expect(v).toBeGreaterThanOrEqual(4);
+      expect(v).toBeLessThanOrEqual(9);
+      expect(v).toBeCloseTo(4 + 5 * rain._dSizes[i], 5);   // bigger ⇒ faster
     }
   });
 

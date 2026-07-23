@@ -424,6 +424,10 @@ function applyOrbitTarget() {
   orbit.target.copy(t);
 }
 
+// Cockpit helmet-cam downward pitch (~7°): frames the nose + front wheels.
+const _cockpitPitch = new THREE.Quaternion()
+  .setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.12);
+
 const CAM_CONFIGS = {
   orbit: {
     label: 'ORBIT',
@@ -460,17 +464,22 @@ const CAM_CONFIGS = {
     enter() { orbit.enabled = false; },
     update(_dt) {
       if (!state.carGroup) return;
-      // Position inside cockpit (above tub centre) — use measured anchor.
+      // Helmet-cam: RIGIDLY attached to the chassis. The camera inherits the
+      // car's FULL orientation (yaw + roll + pitch), so in a turn the body
+      // stays fixed in frame and the horizon banks — real onboard feel. The
+      // old lookAt() kept camera-up world-vertical, so the ±7° body roll
+      // rocked the car around a level camera ("tilting like a boat").
       const a = state.carMeasure?.anchors?.cockpit;
       const cockpitLocal = a
-        ? new THREE.Vector3(a.x, a.y, a.z)
-        : new THREE.Vector3(0, 0.55, 0.3);
+        ? new THREE.Vector3(a.x, a.y + 0.14, a.z - 0.10)   // eye above headrest, nudged forward
+        : new THREE.Vector3(0, 0.69, 0.20);
       const worldPos = cockpitLocal.applyMatrix4(state.carGroup.matrixWorld);
       camera.position.copy(worldPos);
-      // Look forward along car's -Z
-      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(state.carGroup.quaternion);
-      const lookAt  = worldPos.clone().add(forward.multiplyScalar(8));
-      camera.lookAt(lookAt);
+      // Car forward is -Z = camera default view axis: copy the quaternion,
+      // then pitch down ~7° in the CAR frame so the nose and both steering
+      // front wheels sit in the lower third of the frame.
+      camera.quaternion.copy(state.carGroup.quaternion);
+      camera.quaternion.multiply(_cockpitPitch);
     },
   },
 
@@ -656,9 +665,13 @@ function animate() {
   // Cinematic bank — roll into the turn AFTER lookAt/orbit set the
   // orientation (they reset roll every frame). Smoothed ~0.35 s so the
   // horizon eases over rather than snapping with the curvature profile.
-  const bankTarget = state.paused ? 0 : cameraBankRad(trackPath.yawRate(state.speed / 3.6));
+  // Cockpit is rigidly chassis-mounted — its roll comes from the car body
+  // itself; stacking the cinematic bank on top fought the (opposite-signed)
+  // outward body roll and read as a drunken wobble.
+  const bankTarget = (state.paused || state.camMode === 'cockpit')
+    ? 0 : cameraBankRad(trackPath.yawRate(state.speed / 3.6));
   state.camBank += (bankTarget - state.camBank) * Math.min(1, dt / 0.35);
-  if (state.camBank !== 0) camera.rotateZ(state.camBank);
+  if (state.camBank !== 0 && state.camMode !== 'cockpit') camera.rotateZ(state.camBank);
 
   // Car animation + track motion
   if (!state.paused) animateCar(dt);
