@@ -6,7 +6,7 @@ const base = process.env.GITHUB_ACTIONS ? '/formulaSim/' : '/';
 export default defineConfig({
   root: '.',
   base,
-  server: { port: 3000, open: true },
+  server: { port: 3000, open: true, allowedHosts: ['.trycloudflare.com'] },
   build: { outDir: 'dist' },
   plugins: [
     VitePWA({

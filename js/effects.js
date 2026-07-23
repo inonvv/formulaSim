@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import {
   traceStreamlinePath, topViewVelocity,
   vortexVelocity, sideViewVelocity,
-  venturiSpeedRatio, cpToColor,
+  venturiSpeedRatio, cpToColor, sumVelocity,
 } from './airflow-core.js';
 import { lerpCpProfile } from './cfd-effect.js';
 import { bendLookup, rainLateralAccel } from './track-path.js';
@@ -216,6 +216,31 @@ export function fogEnvelope(eta) {
 }
 
 /**
+ * Uniformly resample a traced path to exactly `n` vertices (linear interp).
+ * Used on speed-bucket retrace so the new shape fits the ribbon's existing
+ * Float32 buffers (allocated once per build).
+ */
+function _resamplePath(path, n) {
+  if (path.length === n || path.length === 0 || n <= 0) return path;
+  if (path.length === 1) return new Array(n).fill(path[0]);
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const t  = (path.length - 1) * (n === 1 ? 0 : i / (n - 1));
+    const i0 = Math.floor(t);
+    const i1 = Math.min(path.length - 1, i0 + 1);
+    const f  = t - i0;
+    const a = path[i0], b = path[i1];
+    out[i] = {
+      xi:   a.xi   + (b.xi   - a.xi)   * f,
+      eta:  a.eta  + (b.eta  - a.eta)  * f,
+      vxi:  a.vxi  + (b.vxi  - a.vxi)  * f,
+      veta: a.veta + (b.veta - a.veta) * f,
+    };
+  }
+  return out;
+}
+
+/**
  * Straight-through channel path for an underfloor seed — constant xi
  * (venturi tunnels are longitudinal), uniform eta sampling. Speed and
  * pressure are expressed per-vertex in the update loop (puff advection
@@ -325,43 +350,101 @@ function _seedEtaJitter(seedIdx, range = 0.3) {
 }
 
 /**
+ * Resolve the car-local ground plane Y. GLB frames are body-centered
+ * (McLaren ground contact at −0.6187), procedural frames are ground-based
+ * (ground at 0) — every seed height must be derived against THIS value,
+ * never against hardcoded ground-frame constants.
+ */
+function _groundYOf(measure) {
+  if (Number.isFinite(measure?.groundContactY)) return measure.groundContactY;
+  const bsBB = measure?.anchors?.bodyShell?.bbox;
+  if (bsBB && Number.isFinite(bsBB.minY)) return bsBB.minY - 0.15;
+  return 0;
+}
+
+/**
+ * Band-tagged seed heights, ALL derived from anchors / bboxes / measured
+ * axle geometry (plan airflow-part-precision Phase 1):
+ *   wing  ×2 — inside [frontWing.bbox.minY+0.05, maxY+0.03] (fallback fwY±0.05)
+ *   axle  ×1 — groundContactY + wheelRadius (fallback fwY+0.15)
+ *   pod   ×2 — bodyShell minY + 0.30h / 0.55h (fallback ground-frame 0.18/0.30)
+ *   halo  ×2 — haloY − 0.08 / + 0.02          (unchanged)
+ *   upper ×2 — haloY + 0.15 / + 0.30          (unchanged)
+ *   free  ×1 — haloY + 0.50                   (unchanged)
+ * Total 10 heights — within the side-view haze budget (per-line opacity
+ * caps unchanged). Band tags drive per-height cross-sections + modifier
+ * y-gating in later phases.
+ */
+function _seedHeightDefs(p, measure) {
+  const anchors = measure?.anchors ?? _fallbackAnchors(p);
+  const haloY = Number.isFinite(anchors.halo?.y)      ? anchors.halo.y      : p.halfH * 1.93;
+  const fwY   = Number.isFinite(anchors.frontWing?.y) ? anchors.frontWing.y : 0.04;
+  const fwBB  = anchors.frontWing?.bbox;
+  const bsBB  = anchors.bodyShell?.bbox;
+  const groundY = _groundYOf({ ...measure, anchors });
+
+  // Wing band — two heights inside the measured wing envelope.
+  let wingLo, wingHi;
+  if (fwBB && Number.isFinite(fwBB.minY) && Number.isFinite(fwBB.maxY)) {
+    wingLo = fwBB.minY + 0.05;
+    wingHi = fwBB.maxY + 0.03;
+  } else {
+    wingLo = Math.max(fwY - 0.05, groundY + 0.03);
+    wingHi = fwY + 0.05;
+  }
+  const wingSpan = Math.max(0, wingHi - wingLo);
+
+  // Tire/axle band — one height at the wheel axle.
+  const axleY = Number.isFinite(measure?.frontAxleY)
+    ? measure.frontAxleY
+    : (Number.isFinite(measure?.groundContactY) && Number.isFinite(measure?.wheelRadius))
+      ? measure.groundContactY + measure.wheelRadius
+      : fwY + 0.15;
+
+  // Sidepod flank band — two heights on the measured body shell flank.
+  let pod0, pod1;
+  if (bsBB && Number.isFinite(bsBB.minY) && Number.isFinite(bsBB.maxY)) {
+    const h = bsBB.maxY - bsBB.minY;
+    pod0 = bsBB.minY + 0.30 * h;
+    pod1 = bsBB.minY + 0.55 * h;
+  } else {
+    pod0 = 0.18;   // ground-frame fallback ONLY when no bodyShell bbox
+    pod1 = 0.30;
+  }
+
+  return [
+    { y: wingLo + wingSpan / 3,     band: 'wing'  },
+    { y: wingLo + wingSpan * 2 / 3, band: 'wing'  },
+    { y: axleY,                     band: 'axle'  },
+    { y: pod0,                      band: 'pod'   },
+    { y: pod1,                      band: 'pod'   },
+    { y: haloY - 0.08,              band: 'halo'  },   // halo underside
+    { y: haloY + 0.02,              band: 'halo'  },   // halo top
+    { y: haloY + 0.15,              band: 'upper' },   // airbox
+    { y: haloY + 0.30,              band: 'upper' },   // engine cover
+    { y: haloY + 0.50,              band: 'free'  },   // freestream reference
+  ].sort((a, b) => a.y - b.y);
+}
+
+/**
  * Build the streamline seed list as a wind-tunnel-style parallel ribbon
- * grid: 8 heights (floor → above halo) × 5 lateral positions, all seeded
- * far upstream at `seedEta ≈ -8`. Every seed produces one continuous line
- * from upstream entry, around the car body, out behind — reproducing the
- * "smoke ribbons" look in `fog.png` rather than isolated anchor chunks.
+ * grid: 10 band-tagged heights (wing band → above halo) × 7 lateral
+ * positions, all seeded far upstream at `seedEta ≈ -8`. Every seed produces
+ * one continuous line from upstream entry, around the car body, out behind.
  *
- * Anchors are still consumed, but only for vertical placement of the
- * ribbons (halo pins the upper half; floor/frontWing pin the lower half).
- * Flow bending at features (sidepod sinks, wing vortices) is handled by
- * `_buildModifiers`, not by the seed list.
+ * Heights are anchor-derived per-band (see _seedHeightDefs) so GLB
+ * body-centered frames and procedural ground frames both get ribbons ON
+ * the wing / sidepod flank / axle line instead of floating at ground-frame
+ * constants. Flow bending at features (sidepod sinks, wing vortices) is
+ * handled by `_buildModifiers`, not by the seed list.
  */
 function _buildSeedList(p, measure) {
   const anchors = measure?.anchors ?? _fallbackAnchors(p);
 
-  // Anchor-aware vertical extent: bottom = floor.y, top = halo.y + 0.40.
-  // Falls back to the profile's halfH ratio when anchors are missing.
+  // Anchor-aware vertical extent: bottom = floor.y (underfloor group).
   const floorY = Number.isFinite(anchors.floor?.y) ? anchors.floor.y : 0.02;
-  const haloY  = Number.isFinite(anchors.halo?.y)  ? anchors.halo.y  : p.halfH * 1.93;
-  const fwY    = Number.isFinite(anchors.frontWing?.y) ? anchors.frontWing.y : 0.04;
 
-  // 9 heights — dense enough to read as volumetric fog rather than a thin
-  // grid, with extra sampling around the cockpit / halo band where most of
-  // the visible flow action happens. Order low → high. (The former
-  // "underbody skim" height moved to the dedicated 'underfloor' group
-  // below — the cylinder flow diverted it around the body, which is wrong
-  // for floor flow.)
-  const heights = [
-    Math.max(fwY + 0.02, 0.08),    // wing-top / nose
-    0.18,                          // sidepod lower
-    0.30,                          // sidepod mid
-    Math.max(0.42, haloY - 0.18),  // sidepod upper / mirrors
-    haloY - 0.08,                  // halo underside
-    haloY + 0.02,                  // halo top
-    haloY + 0.15,                  // airbox
-    haloY + 0.30,                  // engine cover
-    haloY + 0.50,                  // freestream reference
-  ];
+  const heightDefs = _seedHeightDefs(p, measure);
 
   // 7 lateral positions — tighter spacing than before (min gap 0.45) so
   // the layered ribbons blur into a cloud front rather than reading as
@@ -369,7 +452,7 @@ function _buildSeedList(p, measure) {
   const xiLanes = [-1.4, -0.9, -0.45, 0, 0.45, 0.9, 1.4];
 
   const seeds = [];
-  for (const y of heights) {
+  for (const def of heightDefs) {
     for (const xi of xiLanes) {
       // Tiny deterministic jitter (±0.05) so ribbons don't advect in
       // perfect lockstep — keeps the flow from reading as a rigid grid.
@@ -377,7 +460,8 @@ function _buildSeedList(p, measure) {
       seeds.push({
         seedXi: xi,
         seedEta: -8 + etaJ,
-        y,
+        y: def.y,
+        band: def.band,
         group: 'ribbon',
         halfH: p.halfH,
       });
@@ -429,8 +513,21 @@ export class AirflowEffect {
    * follow the variant's true ride height instead of floating at y=0.
    */
   setBaseY(y) {
-    this._baseY = y || 0;
+    const next = y || 0;
+    const changed = next !== this._baseY;
+    this._baseY = next;
     this.group.position.y = this._baseY;
+    // Frame hardening (plan occupancy-frame-offset O3): the occupancy SDF is
+    // world-voxelized, so traced slides baked with a stale baseY would be
+    // wrong. Current main.js call order sets baseY before occupancy arrives
+    // (never hit in practice) — rebuild mirrors the occupancy-arrival path
+    // in setCarType.
+    if (changed && this._occupancy) {
+      this._disposeAll();
+      this._build(getProfile(this._type), this._measure);
+      this.group.visible = this._visible;
+      this.group.position.y = this._baseY;
+    }
   }
 
   setCarType(type, measure, bodyOccupancy) {
@@ -477,12 +574,24 @@ export class AirflowEffect {
     this._halfL = (Number.isFinite(a?.frontWing?.z) && Number.isFinite(a?.rearWing?.z))
       ? Math.max(Math.abs(a.frontWing.z), Math.abs(a.rearWing.z))
       : profile.halfL;
-    this._halfH = Number.isFinite(a?.halo?.y) ? a.halo.y / 1.93 : profile.halfH;
+    // halfH must be GROUND-referenced: on the body-centered GLB F1 frame
+    // halo.y/1.93 read 0.373/1.93 = 0.193 (2.7× too small) — the intended
+    // height is halo-peak-over-ground. groundY resolves per-frame (measured
+    // contact patch → bodyShell floor − 0.15 → 0 for procedural frames).
+    this._groundY = this._measure ? _groundYOf(this._measure) : 0;
+    this._haloY   = Number.isFinite(a?.halo?.y) ? a.halo.y : profile.halfH * 1.93;
+    this._halfH = Number.isFinite(a?.halo?.y)
+      ? (a.halo.y - this._groundY) / 1.93
+      : profile.halfH;
     this._vortexMaxRadius = profile.vortexMaxRadius;
     this._wakeWidthX      = profile.wakeWidthX;
     this._wakeHeightRange = profile.wakeHeightRange;
     this._strouhal        = profile.strouhal || 0.20;
     this._seeds           = _buildSeedList(profile, this._measure);
+    // Phase 2 (part-precision): per-band body cross-sections — the halo
+    // band pinches to the cockpit, the wing band to the wing planform,
+    // rows above the bodywork see no body at all.
+    this._sections        = this._buildCrossSections();
     // Surface the ribbon count on rebuild so a stale browser cache is easy to
     // detect in DevTools — expected output is `{ ribbon: 40 } (total 40)`.
     if (typeof console !== 'undefined' && console.info) {
@@ -494,28 +603,51 @@ export class AirflowEffect {
     // Procedural fallbacks (no measure.anchors) get an empty list ⇒ the
     // potential-flow baseline is preserved.
     this._modifiers       = this._buildModifiers(profile, this._measure);
-    // When a body-occupancy field is attached, pass it per-path with a
-    // toWorld closure that lifts the seed's Y into the lookup (xi→X, eta→Z).
-    const occ = this._occupancy || null;
-    const halfW = this._halfW, halfL = this._halfL;
-    const mods = this._modifiers;
-    this._paths = this._seeds.map(s => {
-      // Underfloor seeds run straight through the floor gap — the cylinder
-      // potential flow would stagnate/divert them at the nose (r² ≤ 1).
-      if (s.group === 'underfloor') return _traceUnderfloorPath(s.seedXi, s.seedEta, halfL);
-      const opts = {};
-      if (occ) {
-        opts.occupancy = occ;
-        opts.toWorld = (xi, eta) => ({ x: xi * halfW, y: s.y, z: eta * halfL });
-      }
-      if (mods && mods.length > 0) opts.modifiers = mods;
-      return traceStreamlinePath(s.seedXi, s.seedEta, STEPS, STEP_SIZE, opts);
-    });
+    // Phase 4 (part-precision): halo shed-vortex pair — speed-proportional
+    // action at the halo, trace-time only (never exposed to CFD).
+    this._shedVortices    = this._buildShedVortices();
+    // Trace at the CURRENT quantized speed bucket; setSpeed retraces when
+    // the bucket changes (≤ 6 shapes, deterministic within a bucket).
+    this._tracedBucket    = this._sfBucket();
+    this._activeModifiers = this._traceModifiersFor(this._tracedBucket);
+    this._paths = this._seeds.map(s => this._traceSeedPath(s, this._activeModifiers));
+    this._traceCount      = (this._traceCount || 0) + 1;
     this._vortexDefs      = this._resolveVortexDefs(profile, this._measure);
     this._buildRibbonLines();
     this._buildVortexSpirals(this._vortexDefs);
+    // Tire-anchored wake emitters (Phase 3) — must exist before the wake
+    // particle pool spawns from them.
+    this._wakeEmitters    = this._buildWakeEmitters();
     this._buildWakeParticles(profile.wakeCount);
   }
+
+  /**
+   * Phase 3 (part-precision): wake emitter anchors — the 4 measured wheel
+   * contact regions + the rear body centre. Null when the measure carries
+   * no axle data (procedural fallback keeps the legacy authored wake).
+   */
+  _buildWakeEmitters() {
+    const m = this._measure;
+    if (!m
+        || !Number.isFinite(m.frontAxleX) || !Number.isFinite(m.frontAxleZ)
+        || !Number.isFinite(m.rearAxleX)  || !Number.isFinite(m.rearAxleZ)) return null;
+    const axleY = (Number.isFinite(m.groundContactY) && Number.isFinite(m.wheelRadius))
+      ? m.groundContactY + m.wheelRadius
+      : 0.25;
+    return [
+      { x: -m.frontAxleX, y: axleY, z: m.frontAxleZ },
+      { x:  m.frontAxleX, y: axleY, z: m.frontAxleZ },
+      { x: -m.rearAxleX,  y: axleY, z: m.rearAxleZ },
+      { x:  m.rearAxleX,  y: axleY, z: m.rearAxleZ },
+      { x: 0, y: axleY + 0.45, z: this._halfL * 0.9 },   // rear body wake
+    ];
+  }
+
+  /** Lateral wake spawn spread (m) — scales with speed. */
+  _wakeSpread(speedFactor) { return 0.10 + 0.25 * speedFactor; }
+
+  /** Downstream wake extent behind each emitter (m) — scales with speed. */
+  _wakeLength(speedFactor) { return 4 + 3 * speedFactor; }
 
   /**
    * Resolve vortex wz from measure anchors by role. Returns a NEW array —
@@ -562,7 +694,16 @@ export class AirflowEffect {
     const halfW = this._halfW || profile.halfW || DEFAULT_HALF_W;
     const anchors = measure.anchors;
 
-    const add = (anchor, type, cfg) => {
+    // Phase 3 (part-precision): per-part locality. Every modifier carries a
+    // yBand [lo, hi] in car-local metres; sumVelocity skips it for seeds
+    // outside the band, so sidepod sinks stop tugging the freestream
+    // reference row. Brake ducts bind to the MEASURED axle height (their
+    // authored anchors ride wing offsets); wing vortices to their bbox.
+    const axleY = (Number.isFinite(measure.groundContactY) && Number.isFinite(measure.wheelRadius))
+      ? measure.groundContactY + measure.wheelRadius
+      : null;
+
+    const add = (anchor, type, cfg, yBand) => {
       if (!anchor) return;
       const entry = {
         type,
@@ -572,43 +713,68 @@ export class AirflowEffect {
       };
       if (type === 'vortex') entry.gamma    = cfg.gamma;
       else                    entry.strength = cfg.strength;
+      if (yBand) entry.yBand = yBand;
+      else if (Number.isFinite(anchor.y)) entry.yBand = [anchor.y - 0.25, anchor.y + 0.18];
       out.push(entry);
     };
 
     // Iterate role-tagged vent anchors. Keyed lookup by known anchor names
-    // keeps the mapping explicit (no fuzzy name-matching).
+    // keeps the mapping explicit (no fuzzy name-matching). `axleBand: true`
+    // rows are re-banded onto the measured axle height when available.
     const ventTable = [
-      ['sidepodInletL',   'sink',   MOD_STR.SIDEPOD_INLET,   'inlet'  ],
-      ['sidepodInletR',   'sink',   MOD_STR.SIDEPOD_INLET,   'inlet'  ],
-      ['sidepodExhaustL', 'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet' ],
-      ['sidepodExhaustR', 'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet' ],
-      ['airboxIntake',    'sink',   MOD_STR.AIRBOX_INTAKE,   'inlet'  ],
-      ['exhaustPipe',     'source', MOD_STR.EXHAUST_PIPE,    'outlet' ],
-      ['frontBrakeDuctL', 'sink',   MOD_STR.BRAKE_DUCT,      'inlet'  ],
-      ['frontBrakeDuctR', 'sink',   MOD_STR.BRAKE_DUCT,      'inlet'  ],
-      ['rearBrakeDuctL',  'sink',   MOD_STR.BRAKE_DUCT,      'inlet'  ],
-      ['rearBrakeDuctR',  'sink',   MOD_STR.BRAKE_DUCT,      'inlet'  ],
+      ['sidepodInletL',   'sink',   MOD_STR.SIDEPOD_INLET,   'inlet',  false],
+      ['sidepodInletR',   'sink',   MOD_STR.SIDEPOD_INLET,   'inlet',  false],
+      ['sidepodExhaustL', 'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet', false],
+      ['sidepodExhaustR', 'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet', false],
+      ['airboxIntake',    'sink',   MOD_STR.AIRBOX_INTAKE,   'inlet',  false],
+      ['exhaustPipe',     'source', MOD_STR.EXHAUST_PIPE,    'outlet', false],
+      ['frontBrakeDuctL', 'sink',   MOD_STR.BRAKE_DUCT,      'inlet',  true ],
+      ['frontBrakeDuctR', 'sink',   MOD_STR.BRAKE_DUCT,      'inlet',  true ],
+      ['rearBrakeDuctL',  'sink',   MOD_STR.BRAKE_DUCT,      'inlet',  true ],
+      ['rearBrakeDuctR',  'sink',   MOD_STR.BRAKE_DUCT,      'inlet',  true ],
       // GT (992 GT3 RS) vent layout — measured via manifest anchorSources.
-      ['frontIntake',     'sink',   MOD_STR.SIDEPOD_INLET,   'inlet'  ],
-      ['engineIntake',    'sink',   MOD_STR.AIRBOX_INTAKE,   'inlet'  ],
-      ['fenderVentL',     'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet' ],
-      ['fenderVentR',     'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet' ],
+      ['frontIntake',     'sink',   MOD_STR.SIDEPOD_INLET,   'inlet',  false],
+      ['engineIntake',    'sink',   MOD_STR.AIRBOX_INTAKE,   'inlet',  false],
+      ['fenderVentL',     'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet', false],
+      ['fenderVentR',     'source', MOD_STR.SIDEPOD_EXHAUST, 'outlet', false],
     ];
-    for (const [key, type, cfg, expectedRole] of ventTable) {
+    for (const [key, type, cfg, expectedRole, axleBand] of ventTable) {
       const a = anchors[key];
       if (!a) continue;
       // Honour anchor role if present (safety net against manifest drift);
       // unrolled anchors without `.role` still resolve to the table's intent.
       if (a.role && a.role !== expectedRole) continue;
-      add(a, type, cfg);
+      const band = (axleBand && axleY !== null) ? [axleY - 0.25, axleY + 0.25] : null;
+      add(a, type, cfg, band);
     }
 
     // Wing dipole surrogates — placed slightly under each wing (anchor's xi/
     // eta read directly; the gamma sign follows the downforce convention used
     // by profile.vortexDefs so a clockwise vortex under the wing pulls the
-    // underside into suction).
-    if (anchors.frontWing) add(anchors.frontWing, 'vortex', MOD_STR.FRONT_WING_VORT);
-    if (anchors.rearWing)  add(anchors.rearWing,  'vortex', MOD_STR.REAR_WING_VORT);
+    // underside into suction). Banded to the wing bbox ± 0.1 when measured.
+    const wingBand = (a) => (a?.bbox && Number.isFinite(a.bbox.minY) && Number.isFinite(a.bbox.maxY))
+      ? [a.bbox.minY - 0.1, a.bbox.maxY + 0.1]
+      : (Number.isFinite(a?.y) ? [a.y - 0.15, a.y + 0.15] : null);
+    if (anchors.frontWing) add(anchors.frontWing, 'vortex', MOD_STR.FRONT_WING_VORT, wingBand(anchors.frontWing));
+    if (anchors.rearWing)  add(anchors.rearWing,  'vortex', MOD_STR.REAR_WING_VORT,  wingBand(anchors.rearWing));
+
+    // Tire bluff bodies — ideal-cylinder doublets in PHYSICAL car-local xz
+    // (wheels must stay circular under the anisotropic ξ/η mapping), gated
+    // to y ≤ tire top. Evaluated by sumVelocity only when the caller passes
+    // halfW/halfL — CFD's opts-less path skips them entirely.
+    const tireBand = (Number.isFinite(measure.groundContactY) && Number.isFinite(measure.wheelRadius))
+      ? [measure.groundContactY, measure.groundContactY + 2 * measure.wheelRadius]
+      : null;
+    const addTires = (ax, az) => {
+      if (!Number.isFinite(ax) || !Number.isFinite(az)) return;
+      for (const side of [-1, 1]) {
+        const entry = { type: 'doublet', x: side * ax / halfW, e: az / halfL, R: 0.28, rc: 0.08 };
+        if (tireBand) entry.yBand = tireBand;
+        out.push(entry);
+      }
+    };
+    addTires(measure.frontAxleX, measure.frontAxleZ);
+    addTires(measure.rearAxleX,  measure.rearAxleZ);
 
     return out;
   }
@@ -620,6 +786,254 @@ export class AirflowEffect {
    */
   getModifiers() {
     return this._modifiers || [];
+  }
+
+  /**
+   * Phase 2 (part-precision): per-band body cross-sections `{rw, rl, etaC}`
+   * consumed by `topViewVelocity(xi, eta, body)`.
+   *
+   * Primary source: occupancy slice scan at the band's mean height (one-time
+   * per build; occupancy arrival already triggers a rebuild). Fallback:
+   * piecewise anchor bboxes — wing band → frontWing bbox, axle/pod bands →
+   * bodyShell bbox, halo band → halo bbox, upper/free bands → EMPTY section
+   * (no body above the halo). When the measure carries no bboxes at all
+   * (procedural cars) every band maps to null ⇒ the default whole-car
+   * cylinder, exactly the pre-plan behavior.
+   */
+  _buildCrossSections() {
+    const a = this._measure?.anchors;
+    const halfW = this._halfW, halfL = this._halfL;
+
+    // +0.05 m lateral inflation so ribbons skim the surface, not clip it.
+    const bboxSection = (bb) => {
+      if (!bb
+          || !Number.isFinite(bb.minX) || !Number.isFinite(bb.maxX)
+          || !Number.isFinite(bb.minZ) || !Number.isFinite(bb.maxZ)) return null;
+      return {
+        rw:   Math.min(1.4, ((bb.maxX - bb.minX) / 2 + 0.05) / halfW),
+        rl:   Math.max(0.05, Math.min(1.2, (bb.maxZ - bb.minZ) / 2 / halfL)),
+        etaC: ((bb.minZ + bb.maxZ) / 2) / halfL,
+      };
+    };
+
+    const fwSec   = bboxSection(a?.frontWing?.bbox);
+    const bodySec = bboxSection(a?.bodyShell?.bbox);
+    const haloSec = bboxSection(a?.halo?.bbox);
+    const anyBbox = !!(fwSec || bodySec || haloSec);
+    const NONE = { rw: 0, rl: 0, etaC: 0 };
+
+    const fallbackFor = (band) => {
+      switch (band) {
+        case 'wing':  return fwSec || bodySec || null;
+        case 'axle':
+        case 'pod':   return bodySec || null;
+        case 'halo':  return haloSec || (anyBbox ? bodySec : null);
+        case 'upper':
+        case 'free':  return anyBbox ? NONE : null;
+        default:      return null;
+      }
+    };
+
+    // Mean height per band from the seed list.
+    const bandYs = {};
+    for (const s of this._seeds) {
+      if (s.group !== 'ribbon' || !s.band) continue;
+      (bandYs[s.band] ||= []).push(s.y);
+    }
+
+    const sections = {};
+    for (const [band, ys] of Object.entries(bandYs)) {
+      const y = ys.reduce((sum, v) => sum + v, 0) / ys.length;
+      sections[band] = this._occupancySection(y) ?? fallbackFor(band);
+    }
+    return sections;
+  }
+
+  /**
+   * Scan one horizontal occupancy slice (32 × 48 xz samples over the flow
+   * plane) and fit a cross-section cylinder to the occupied extent.
+   * Returns null when the slice is (near-)empty — caller falls back to the
+   * anchor-bbox table. The occupancy field is built in WORLD space (the car
+   * group is lifted by baseY before voxelization), so the car-local slice
+   * height is shifted by +baseY for the lookup.
+   */
+  _occupancySection(y) {
+    const occ = this._occupancy;
+    if (!occ || typeof occ.sample !== 'function') return null;
+    const halfW = this._halfW, halfL = this._halfL;
+    const yW = y + (this._baseY || 0);
+    const NX = 32, NZ = 48;
+    let maxAbsX = 0, minZ = Infinity, maxZ = -Infinity, hits = 0;
+    for (let iz = 0; iz < NZ; iz++) {
+      const z = -halfL + (2 * halfL * iz) / (NZ - 1);
+      for (let ix = 0; ix < NX; ix++) {
+        const x = -halfW * 1.3 + (2.6 * halfW * ix) / (NX - 1);
+        if (occ.sample(x, yW, z) > 0.5) {
+          hits++;
+          const ax = Math.abs(x);
+          if (ax > maxAbsX) maxAbsX = ax;
+          if (z < minZ) minZ = z;
+          if (z > maxZ) maxZ = z;
+        }
+      }
+    }
+    if (hits < 4 || maxZ <= minZ) return null;
+    return {
+      rw:   Math.min(1.4, (maxAbsX + 0.05) / halfW),
+      rl:   Math.max(0.05, Math.min(1.2, (maxZ - minZ) / 2 / halfL)),
+      etaC: ((minZ + maxZ) / 2) / halfL,
+    };
+  }
+
+  /** Cross-section for a seed band. null ⇒ default whole-car cylinder. */
+  _bodyForBand(band) {
+    if (!band || !this._sections) return null;
+    return this._sections[band] ?? null;
+  }
+
+  /** Cross-section for an arbitrary height: nearest band by mean seed y. */
+  _bodyForY(y) {
+    if (!this._sections || !this._seeds) return null;
+    let bestBand = null, bestD = Infinity;
+    const seen = new Set();
+    for (const s of this._seeds) {
+      if (s.group !== 'ribbon' || !s.band || seen.has(s.band + s.y)) continue;
+      seen.add(s.band + s.y);
+      const d = Math.abs(s.y - y);
+      if (d < bestD) { bestD = d; bestBand = s.band; }
+    }
+    return this._bodyForBand(bestBand);
+  }
+
+  /**
+   * Phase 5 (part-precision): analytic car-local flow velocity (m/s) at a
+   * point — freestream (car speed) + the SAME y-gated, height-aware,
+   * speed-scaled perturbation field the ribbons are traced through. Pure
+   * function of existing state; consumed by RainEffect for drop coupling.
+   */
+  sampleFlowAt(x, y, z) {
+    const V = (this._speed || 0) / 3.6;
+    if (V <= 0) return { vx: 0, vy: 0, vz: 0 };
+    const halfW = this._halfW || DEFAULT_HALF_W;
+    const halfL = this._halfL || DEFAULT_HALF_L;
+    const xi = x / halfW, eta = z / halfL;
+    const body = this._bodyForY(y);
+    const opts = { y, halfW, halfL };
+    if (body) opts.body = body;
+    const { vxi, veta } = sumVelocity(xi, eta, topViewVelocity, this._activeModifiers || [], opts);
+    // Physical mapping: veta = 1 is the freestream (V); lateral picks up
+    // the halfW/halfL aspect (same convention as the doublet conversion).
+    // Vertical: side-view potential-flow rise over the nose, mild weight.
+    const yN = (y - (this._groundY || 0)) / Math.max(this._halfH, 0.1);
+    const sv = sideViewVelocity(eta, yN);
+    return {
+      vx: vxi * (halfW / halfL) * V,
+      vy: sv.vy * V * 0.4,
+      vz: veta * V,
+    };
+  }
+
+  /** Envelope for rain coupling (car-local): flow-plane dims + halo top. */
+  getFlowEnvelope() {
+    return {
+      halfW: this._halfW,
+      halfL: this._halfL,
+      topY: (this._haloY ?? (this._halfH * 1.93)) + 0.6,
+    };
+  }
+
+  /** Quantized speedFactor bucket (0.2 steps ⇒ ≤ 6 flow shapes). */
+  _sfBucket() {
+    const sf = Math.min((this._speed || 0) / 350, 1);
+    return Math.min(1, Math.round(sf * 5) / 5);
+  }
+
+  /**
+   * Phase 4 (part-precision): halo shed-vortex defs — a counter-rotating
+   * pair just behind the cockpit, banded to the halo/engine-cover rows.
+   * gamma ∝ speedFactor bucket (0 at rest), applied at trace time only.
+   */
+  _buildShedVortices() {
+    const halo = this._measure?.anchors?.halo;
+    if (!halo || !Number.isFinite(halo.y) || !Number.isFinite(halo.z)) return null;
+    const e = (halo.z + 0.85) / this._halfL;
+    const yBand = [halo.y - 0.15, halo.y + 0.45];
+    return [
+      { type: 'vortex', x: -0.28 / this._halfW, e, rc: 0.12, yBand, gammaBase: 0.5, sign:  1 },
+      { type: 'vortex', x:  0.28 / this._halfW, e, rc: 0.12, yBand, gammaBase: 0.5, sign: -1 },
+    ];
+  }
+
+  /**
+   * Concrete modifier list for a speed bucket: sink/source strengths and
+   * wing-vortex gammas scale with (0.35 + 0.65·sf) — the flow picture
+   * strengthens with speed; tire doublets stay geometric (bluff bodies).
+   * The halo shed pair joins with gamma ∝ sf. The BASE table
+   * (this._modifiers / getModifiers) is never mutated — CFD keeps its
+   * regression-locked inputs.
+   */
+  _traceModifiersFor(bucket) {
+    const scale = 0.35 + 0.65 * bucket;
+    const out = (this._modifiers || []).map(m => {
+      if (m.type === 'sink' || m.type === 'source') return { ...m, strength: m.strength * scale };
+      if (m.type === 'vortex') return { ...m, gamma: m.gamma * scale };
+      return m;
+    });
+    if (bucket > 0 && this._shedVortices) {
+      for (const sv of this._shedVortices) {
+        out.push({ ...sv, gamma: sv.gammaBase * bucket * sv.sign });
+      }
+    }
+    return out;
+  }
+
+  /** Trace one seed's path with the given (speed-scaled) modifier list. */
+  _traceSeedPath(s, mods) {
+    const halfW = this._halfW, halfL = this._halfL;
+    // Underfloor seeds run straight through the floor gap — the cylinder
+    // potential flow would stagnate/divert them at the nose (r² ≤ 1).
+    if (s.group === 'underfloor') return _traceUnderfloorPath(s.seedXi, s.seedEta, halfL);
+    const opts = {};
+    if (this._occupancy) {
+      // toWorld closure lifts the seed's Y into the lookup (xi→X, eta→Z).
+      // FRAME: the occupancy SDF is voxelized in WORLD space (main.js lifts
+      // the car by baseY before sampling), while seed y is CAR-LOCAL — so
+      // the lookup adds _baseY. Safe because setBaseY() rebuilds when the
+      // value changes with occupancy present. The slice scan in
+      // _occupancySection applies the SAME +baseY — never offset twice.
+      opts.occupancy = this._occupancy;
+      const baseYOff = this._baseY || 0;
+      opts.toWorld = (xi, eta) => ({ x: xi * halfW, y: s.y + baseYOff, z: eta * halfL });
+    }
+    if (mods && mods.length > 0) {
+      opts.modifiers = mods;
+      // Per-part locality (Phase 3): the seed height gates yBand-tagged
+      // modifiers; physical dims let tire doublets evaluate in real xz.
+      opts.seedY = s.y;
+      opts.halfW = halfW;
+      opts.halfL = halfL;
+    }
+    // Height-aware body: null section ⇒ default whole-car cylinder
+    // (procedural fallback), {rw:0} ⇒ no body at this height.
+    const body = this._bodyForBand(s.band);
+    if (body) opts.body = body;
+    return traceStreamlinePath(s.seedXi, s.seedEta, STEPS, STEP_SIZE, opts);
+  }
+
+  /**
+   * Retrace all ribbon paths for the current bucket, resampled onto each
+   * ribbon's existing vertex count (buffers are allocated once). Underfloor
+   * paths are speed-independent by construction and are left untouched.
+   */
+  _retracePaths() {
+    this._activeModifiers = this._traceModifiersFor(this._tracedBucket);
+    for (let i = 0; i < this._seeds.length; i++) {
+      const s = this._seeds[i];
+      if (s.group === 'underfloor') continue;
+      const traced = this._traceSeedPath(s, this._activeModifiers);
+      this._paths[i] = _resamplePath(traced, this._paths[i].length);
+    }
+    this._traceCount = (this._traceCount || 0) + 1;
   }
 
   /* ── Convert potential-flow (xi, eta) + y → world XYZ ── */
@@ -793,13 +1207,26 @@ export class AirflowEffect {
     const positions  = new Float32Array(count * 3);
     const velocities = new Float32Array(count * 4); // vx vy vz vortexPhase
     const [hMin, hMax] = this._wakeHeightRange;
+    const emitters   = this._wakeEmitters;
+    const emitterIdx = new Uint8Array(count);
 
     for (let i = 0; i < count; i++) {
-      // Spread in Z from 2 to 8 behind car
-      const z = rnd(2.2, 8.0);
-      positions[i * 3]     = rnd(-this._wakeWidthX, this._wakeWidthX);
-      positions[i * 3 + 1] = rnd(hMin, hMax);
-      positions[i * 3 + 2] = z;
+      if (emitters) {
+        // Tire-anchored: each particle belongs to one of the 4 wheel
+        // emitters + rear body, trailing downstream of it.
+        const ei = i % emitters.length;
+        emitterIdx[i] = ei;
+        const em = emitters[ei];
+        const spread = this._wakeSpread(0.5);
+        positions[i * 3]     = em.x + rnd(-spread, spread);
+        positions[i * 3 + 1] = em.y + rnd(-spread * 0.5, spread);
+        positions[i * 3 + 2] = em.z + rnd(0.05, this._wakeLength(0.5));
+      } else {
+        // Legacy authored wake: spread in Z from 2 to 8 behind car.
+        positions[i * 3]     = rnd(-this._wakeWidthX, this._wakeWidthX);
+        positions[i * 3 + 1] = rnd(hMin, hMax);
+        positions[i * 3 + 2] = rnd(2.2, 8.0);
+      }
       // Lateral velocity with vortex phase offset (Kármán pattern)
       const side = i % 2 === 0 ? 1 : -1;
       velocities[i * 4]     = side * rnd(0.2, 0.9);       // vx — lateral drift
@@ -807,6 +1234,7 @@ export class AirflowEffect {
       velocities[i * 4 + 2] = rnd(0.6, 2.8);              // vz — downstream
       velocities[i * 4 + 3] = rnd(0, Math.PI * 2);        // phase
     }
+    this._wakeEmitterIdx = emitterIdx;
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -828,7 +1256,19 @@ export class AirflowEffect {
     this.group.add(this._wakePoints);
   }
 
-  setSpeed(speed) { this._speed = speed; }
+  /**
+   * Store speed and retrace the flow shape when the QUANTIZED speedFactor
+   * bucket changes (Phase 4). Within a bucket this is a plain setter —
+   * zero per-frame cost.
+   */
+  setSpeed(speed) {
+    this._speed = speed;
+    const b = this._sfBucket();
+    if (this._paths && b !== this._tracedBucket) {
+      this._tracedBucket = b;
+      this._retracePaths();
+    }
+  }
 
   /* Turn coupling — ribbons sweep with the apparent rotation of the air mass
    * around the turning car frame. ω is stored for future cues; the ribbon
@@ -927,9 +1367,14 @@ export class AirflowEffect {
         // instead of cutting through it. Underfloor ribbons skip this: they
         // sit below the underside by construction, and voxel blur at the
         // floor plane would wrongly eject them upward through the body.
-        if (this._occupancy && !isUnderfloor && this._occupancy.sample(wx, wy, wz) > 0.5) {
+        // FRAME: the SDF is world-voxelized; wy is car-local (group lifted
+        // by baseY), so sample/gradient look up at wy + _baseY. The nudge
+        // itself stays in car-local wy — gradient direction is
+        // frame-independent.
+        const wyWorld = wy + (this._baseY || 0);
+        if (this._occupancy && !isUnderfloor && this._occupancy.sample(wx, wyWorld, wz) > 0.5) {
           const g = this._occupancy.gradient
-            ? this._occupancy.gradient(wx, wy, wz)
+            ? this._occupancy.gradient(wx, wyWorld, wz)
             : { x: 0, y: 1, z: 0 };
           const mag = Math.hypot(g.x, g.y, g.z) || 1;
           const lift = 0.12;
@@ -1074,7 +1519,17 @@ export class AirflowEffect {
       wp[i * 3 + 1] += wv[i * 4 + 1] * dt * speedFactor;
       wp[i * 3 + 2] += wv[i * 4 + 2] * dt * speedFactor;
 
-      if (wp[i * 3 + 2] > 9.0 || wp[i * 3 + 2] < 2.0) {
+      if (this._wakeEmitters) {
+        // Tire-anchored recycle: respawn AT the particle's emitter once it
+        // drifts past the speed-scaled wake length. Spread widens with sf.
+        const em = this._wakeEmitters[this._wakeEmitterIdx[i]];
+        if (wp[i * 3 + 2] > em.z + this._wakeLength(speedFactor)) {
+          const spread = this._wakeSpread(speedFactor);
+          wp[i * 3]     = em.x + rnd(-spread, spread);
+          wp[i * 3 + 1] = em.y + rnd(-spread * 0.5, spread);
+          wp[i * 3 + 2] = em.z + rnd(0.05, 0.5);
+        }
+      } else if (wp[i * 3 + 2] > 9.0 || wp[i * 3 + 2] < 2.0) {
         const side = i % 2 === 0 ? 1 : -1;
         wp[i * 3]     = side * rnd(0.1, this._wakeWidthX * 0.7);
         wp[i * 3 + 1] = rnd(hMin, hMax);
@@ -1110,6 +1565,7 @@ export class RainEffect {
     this._visible  = false;
     this._rainPos  = RAIN_POS.F1;
     this._turnALat = 0;   // centrifugal accel v·ω while turning (m/s²)
+    this._flowCoupling = null;   // Phase 5: airflow sampler wiring (main.js)
 
     this._buildDroplets();
     this._buildSpray();
@@ -1148,6 +1604,10 @@ export class RainEffect {
     this._dVels  = vels;
     this._dCount = COUNT;
     this._dMat   = mat;
+    // Phase 5: per-droplet coupled velocities — written ONLY while airflow
+    // coupling is active, so the uncoupled update path stays byte-identical.
+    this._dVelX  = new Float32Array(COUNT);
+    this._dVelZ  = new Float32Array(COUNT);
   }
 
   _buildSpray() {
@@ -1164,6 +1624,15 @@ export class RainEffect {
       vels[i * 3]     = (side < 0 ? -1 : 1) * rnd(0.2, 0.8);
       vels[i * 3 + 1] = rnd(1.0, 3.0);
       vels[i * 3 + 2] = rnd(1.0, rnd(1.5, 4.5));
+      // Phase 5: bias the launch by the airflow at the emitter (gated like
+      // droplet coupling so behavior is unchanged with airflow off).
+      const cpl = this._flowCoupling;
+      if (cpl && Math.min(this._speed / 350, 1) >= 0.15) {
+        const f = cpl.sampler(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+        vels[i * 3]     += f.vx * 0.15;
+        vels[i * 3 + 1] += f.vy * 0.15;
+        vels[i * 3 + 2] += f.vz * 0.15;
+      }
     };
 
     for (let i = 0; i < COUNT; i++) spawnSpray(i);
@@ -1250,6 +1719,27 @@ export class RainEffect {
    * Free water (spray, rooster tails) accumulates it; falling streaks lean. */
   setTurnState(omega, v) { this._turnALat = rainLateralAccel(v, omega); }
 
+  /**
+   * Phase 5 (part-precision): attach the airflow field. `sampler(x,y,z)`
+   * returns car-frame flow velocity (m/s); `occupancy` (optional) triggers
+   * body-splash respawns; `env` bounds the coupling region
+   * (|x| ≤ 1.6·halfW, |z| ≤ 1.5·halfL, y ≤ topY). Passing null disarms the
+   * coupling entirely — rain behavior reverts to the uncoupled baseline.
+   */
+  setFlowCoupling(sampler, occupancy, env) {
+    if (typeof sampler !== 'function') {
+      this._flowCoupling = null;
+      this._dVelX?.fill(0);
+      this._dVelZ?.fill(0);
+      return;
+    }
+    this._flowCoupling = {
+      sampler,
+      occupancy: occupancy || null,
+      env: env || { halfW: 0.9, halfL: 2.4, topY: 1.6 },
+    };
+  }
+
   setCarType(type, measure) {
     // Prefer measured rear-axle position when the car builder exposed it.
     // Falls back to the per-type RAIN_POS table for procedural cars that
@@ -1310,14 +1800,40 @@ export class RainEffect {
     const aLat = this._turnALat;
     const turnDrift = aLat * 0.4;
     const turnLean  = (aLat / 9.8) * streakLen;
+    // Phase 5: airflow coupling — only above the sf gate, and only inside
+    // the envelope. With coupling off this loop is byte-identical to the
+    // uncoupled baseline (the coupled-velocity arrays are never touched).
+    const cpl = this._flowCoupling;
+    const coupleOn = !!(cpl && speedFactor >= 0.15);
+    const K_COUPLE = 0.6;
     for (let i = 0; i < this._dCount; i++) {
       dp[i * 6]     += dt * turnDrift;
       dp[i * 6 + 1] -= dt * this._dVels[i];
       dp[i * 6 + 2] += dt * windTilt;
+      if (coupleOn) {
+        const x = dp[i * 6], y = dp[i * 6 + 1], z = dp[i * 6 + 2];
+        const env = cpl.env;
+        if (Math.abs(x) <= 1.6 * env.halfW && Math.abs(z) <= 1.5 * env.halfL && y <= env.topY) {
+          const f = cpl.sampler(x, y, z);
+          this._dVelX[i] += f.vx * K_COUPLE * dt;
+          this._dVelZ[i] += f.vz * K_COUPLE * dt;
+        }
+        dp[i * 6]     += this._dVelX[i] * dt;
+        dp[i * 6 + 2] += this._dVelZ[i] * dt;
+        // Body splash — a drop that reaches the body respawns from the sky.
+        if (cpl.occupancy && cpl.occupancy.sample(dp[i * 6], dp[i * 6 + 1], dp[i * 6 + 2]) > 0.5) {
+          dp[i * 6]     = rnd(-5, 5);
+          dp[i * 6 + 1] = 8;
+          dp[i * 6 + 2] = rnd(-6, 6);
+          this._dVelX[i] = 0;
+          this._dVelZ[i] = 0;
+        }
+      }
       if (dp[i * 6 + 1] < -0.35) {
         dp[i * 6]     = rnd(-5, 5);
         dp[i * 6 + 1] = 8;
         dp[i * 6 + 2] = rnd(-6, 6);
+        if (coupleOn) { this._dVelX[i] = 0; this._dVelZ[i] = 0; }
       }
       // Head = tail + streak offset
       dp[i * 6 + 3] = dp[i * 6] + turnLean;
@@ -1373,6 +1889,14 @@ export class RainEffect {
         rv[i * 3]     = side * rnd(0.5, 2);
         rv[i * 3 + 1] = rnd(1.0, 3.0);  // reset vy so gravity accumulation restarts
         rv[i * 3 + 2] = rnd(2, 5);
+        // Phase 5: bias the relaunch by the airflow at the emitter.
+        const cpl = this._flowCoupling;
+        if (cpl && speedFactor >= 0.15) {
+          const f = cpl.sampler(rp[i * 3], rp[i * 3 + 1], rp[i * 3 + 2]);
+          rv[i * 3]     += f.vx * 0.15;
+          rv[i * 3 + 1] += f.vy * 0.15;
+          rv[i * 3 + 2] += f.vz * 0.15;
+        }
       }
     }
 

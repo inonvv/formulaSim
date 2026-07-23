@@ -251,6 +251,7 @@ async function spawnCar(type) {
     if (!carSpawnGuard.isCurrent(myToken)) return;
     state.bodyOccupancy = buildBodyOccupancyFor(grp, carKey);
     if (state.bodyOccupancy) airflow.setCarType(type, state.carMeasure, state.bodyOccupancy);
+    wireRainCoupling();   // rain body-splash gains the occupancy once it lands
   });
 
   airflow.setCarType(type, state.carMeasure, state.bodyOccupancy);
@@ -308,6 +309,26 @@ catch (e) { console.error('[VentEmitterSystem] constructor failed:', e); vents =
 // this safe against an early user click on a different car-btn.
 spawnCar('F1').catch(e => console.error('[init] spawnCar failed:', e));
 
+/**
+ * Phase 5 (part-precision): wire rain to the airflow field when BOTH envs
+ * are active. The sampler translates rain's world-frame coords into
+ * airflow's car-local frame (− baseY); occupancy is world-frame already.
+ */
+function wireRainCoupling() {
+  const both = state.activeEnvs.has('airflow') && state.activeEnvs.has('rain');
+  if (both && typeof airflow.sampleFlowAt === 'function' && typeof rain.setFlowCoupling === 'function') {
+    const baseY = state.carGroup?.userData?.baseY ?? 0;
+    const env = airflow.getFlowEnvelope();
+    rain.setFlowCoupling(
+      (x, y, z) => airflow.sampleFlowAt(x, y - baseY, z),
+      state.bodyOccupancy || null,
+      { ...env, topY: env.topY + baseY }
+    );
+  } else {
+    rain.setFlowCoupling?.(null, null, null);
+  }
+}
+
 function syncEffects() {
   const sp = state.speed;
   airflow.setSpeed(sp);
@@ -317,6 +338,7 @@ function syncEffects() {
   airflow.setVisible(state.activeEnvs.has('airflow'));
   rain.setVisible(state.activeEnvs.has('rain'));
   cfd.setVisible(state.activeEnvs.has('cfd'));
+  wireRainCoupling();
   // Vents are visible whenever the user is viewing the airflow or CFD picture —
   // the vent stream is part of the flow visualisation, not a standalone env.
   vents.setVisible(state.activeEnvs.has('airflow') || state.activeEnvs.has('cfd'));
@@ -588,6 +610,12 @@ function animate() {
     // Rain keeps the ω-based centrifugal accel, clamped ±0.6 rad/s — its
     // gains were tuned near MAX_YAW_RATE and the REAL_CORNER reaches ~0.9.
     const turnOmega = Math.max(-0.6, Math.min(0.6, trackPath.yawRate(state.speed / 3.6)));
+    // Per-frame speed propagation: state.speed lerps toward the target every
+    // frame, but syncEffects only fires on UI events — without this the flow
+    // picture (and the Phase-4 speed-bucket retrace) would freeze at the
+    // speed captured when the user last clicked.
+    airflow.setSpeed(state.speed);
+    rain.setSpeed(state.speed);
     airflow.setPathBend?.(pathBendTable(trackPath));
     airflow.setTurnState?.(turnOmega, state.speed / 3.6);
     rain.setTurnState?.(turnOmega, state.speed / 3.6);
