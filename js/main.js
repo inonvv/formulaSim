@@ -314,6 +314,10 @@ catch (e) { console.error('[VentEmitterSystem] constructor failed:', e); vents =
 // this safe against an early user click on a different car-btn.
 spawnCar('F1').catch(e => console.error('[init] spawnCar failed:', e));
 
+// Verify-script hook (scripts/verify-cfd-emphasis.mjs): lets Playwright
+// inspect the CFD overlay state (mesh counts, colour buffers) headlessly.
+window.__fsim.cfd = cfd;
+
 /**
  * Phase 5 (part-precision): wire rain to the airflow field when BOTH envs
  * are active. The sampler translates rain's world-frame coords into
@@ -655,6 +659,11 @@ function animate() {
     // speed captured when the user last clicked.
     airflow.setSpeed(state.speed);
     rain.setSpeed(state.speed);
+    // CFD too — its overlay opacity and recolor threshold read _speed; the
+    // >5 km/h rebake trigger keeps the per-frame call amortized. Without
+    // this, a single preset click left the overlay at the click-instant
+    // speed (≈0) forever — CFD invisible in any deterministic session.
+    cfd.setSpeed(state.speed);
     airflow.setPathBend?.(pathBendTable(trackPath));
     airflow.setTurnState?.(turnOmega, state.speed / 3.6);
     rain.setTurnState?.(turnOmega, state.speed / 3.6);
