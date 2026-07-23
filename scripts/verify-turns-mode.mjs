@@ -59,6 +59,16 @@ console.log(`t10 over 60 sim-s: turns encountered ${drive.encountered}, emitted 
 await page.waitForTimeout(1500);                       // let rows recycle
 await page.screenshot({ path: `${OUT}/turns-t10-mode.png` });
 
+// Reset must restore the default schedule: AUTO active, no TURNS chip.
+await page.click('#reset-btn');
+const afterReset = await page.evaluate(() => ({
+  activeMode: document.querySelector('.turn-btn.active')?.dataset.turnMode,
+  pathMode: window.__fsim.trackPath.turnMode,
+  turnsChip: [...document.querySelectorAll('#effects-chips .chip')]
+    .some(c => c.textContent.includes('TURNS')),
+}));
+console.log('after reset:', JSON.stringify(afterReset));
+
 await browser.close();
 
 const failures = [];
@@ -67,6 +77,9 @@ if (ui.activeCount !== 1) failures.push(`${ui.activeCount} active turn buttons, 
 if (ui.pathMode !== 't10') failures.push(`trackPath.turnMode is ${ui.pathMode}, want t10`);
 if (!ui.chips.some(c => c.includes('TURNS 10/30s'))) failures.push(`no TURNS chip: ${ui.chips}`);
 if (drive.encountered < 2) failures.push(`only ${drive.encountered} turns encountered in 60 s, want ≥ 2`);
+if (afterReset.activeMode !== 'auto') failures.push(`after reset active button is ${afterReset.activeMode}, want auto`);
+if (afterReset.pathMode !== 'auto') failures.push(`after reset trackPath.turnMode is ${afterReset.pathMode}, want auto`);
+if (afterReset.turnsChip) failures.push('TURNS chip still shown after reset');
 
 if (failures.length) {
   console.error('FAIL:', failures.join('; '));

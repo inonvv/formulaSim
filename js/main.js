@@ -732,15 +732,19 @@ document.querySelectorAll('#speed-presets .preset-btn').forEach(btn => {
 });
 
 /* ── TURNS frequency ────────────────────────────────────────────── */
+function applyTurnMode(mode) {
+  state.turnMode = mode;
+  trackPath.setTurnMode(mode);
+  document.querySelectorAll('.turn-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.turnMode === mode));
+  updateChips();
+}
+
 document.querySelectorAll('.turn-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const mode = btn.dataset.turnMode;
     if (mode === state.turnMode) return;
-    state.turnMode = mode;
-    trackPath.setTurnMode(mode);
-    document.querySelectorAll('.turn-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    updateChips();
+    applyTurnMode(mode);
   });
 });
 
@@ -794,6 +798,8 @@ document.getElementById('reset-btn').addEventListener('click', () => {
   // Deactivate all envs
   state.activeEnvs.clear();
   document.querySelectorAll('.env-btn').forEach(b => b.classList.remove('active'));
+  // Back to the default turn schedule — reset means the full selection resets
+  applyTurnMode('auto');
   updateChips();
   syncEffects();
 });
