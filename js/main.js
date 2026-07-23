@@ -326,9 +326,10 @@ window.__fsim.cfd = cfd;
  */
 function wireRainCoupling() {
   const both = state.activeEnvs.has('airflow') && state.activeEnvs.has('rain');
-  if (both && typeof airflow.sampleFlowAt === 'function' && typeof rain.setFlowCoupling === 'function') {
+  // getFlowEnvelope() is null on a stubbed airflow (EffectStub) — no field to couple.
+  const env = both && typeof airflow.getFlowEnvelope === 'function' ? airflow.getFlowEnvelope() : null;
+  if (env && typeof airflow.sampleFlowAt === 'function' && typeof rain.setFlowCoupling === 'function') {
     const baseY = state.carGroup?.userData?.baseY ?? 0;
-    const env = airflow.getFlowEnvelope();
     rain.setFlowCoupling(
       (x, y, z) => airflow.sampleFlowAt(x, y - baseY, z),
       state.bodyOccupancy || null,
