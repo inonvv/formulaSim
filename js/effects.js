@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import {
   traceStreamlinePath, topViewVelocity,
   vortexVelocity, sideViewVelocity,
-  venturiSpeedRatio, cpToColor,
+  venturiSpeedRatio, cpToColor, sumVelocity,
 } from './airflow-core.js';
 import { lerpCpProfile } from './cfd-effect.js';
 import { bendLookup, rainLateralAccel } from './track-path.js';
@@ -878,6 +878,57 @@ export class AirflowEffect {
     return this._sections[band] ?? null;
   }
 
+  /** Cross-section for an arbitrary height: nearest band by mean seed y. */
+  _bodyForY(y) {
+    if (!this._sections || !this._seeds) return null;
+    let bestBand = null, bestD = Infinity;
+    const seen = new Set();
+    for (const s of this._seeds) {
+      if (s.group !== 'ribbon' || !s.band || seen.has(s.band + s.y)) continue;
+      seen.add(s.band + s.y);
+      const d = Math.abs(s.y - y);
+      if (d < bestD) { bestD = d; bestBand = s.band; }
+    }
+    return this._bodyForBand(bestBand);
+  }
+
+  /**
+   * Phase 5 (part-precision): analytic car-local flow velocity (m/s) at a
+   * point — freestream (car speed) + the SAME y-gated, height-aware,
+   * speed-scaled perturbation field the ribbons are traced through. Pure
+   * function of existing state; consumed by RainEffect for drop coupling.
+   */
+  sampleFlowAt(x, y, z) {
+    const V = (this._speed || 0) / 3.6;
+    if (V <= 0) return { vx: 0, vy: 0, vz: 0 };
+    const halfW = this._halfW || DEFAULT_HALF_W;
+    const halfL = this._halfL || DEFAULT_HALF_L;
+    const xi = x / halfW, eta = z / halfL;
+    const body = this._bodyForY(y);
+    const opts = { y, halfW, halfL };
+    if (body) opts.body = body;
+    const { vxi, veta } = sumVelocity(xi, eta, topViewVelocity, this._activeModifiers || [], opts);
+    // Physical mapping: veta = 1 is the freestream (V); lateral picks up
+    // the halfW/halfL aspect (same convention as the doublet conversion).
+    // Vertical: side-view potential-flow rise over the nose, mild weight.
+    const yN = (y - (this._groundY || 0)) / Math.max(this._halfH, 0.1);
+    const sv = sideViewVelocity(eta, yN);
+    return {
+      vx: vxi * (halfW / halfL) * V,
+      vy: sv.vy * V * 0.4,
+      vz: veta * V,
+    };
+  }
+
+  /** Envelope for rain coupling (car-local): flow-plane dims + halo top. */
+  getFlowEnvelope() {
+    return {
+      halfW: this._halfW,
+      halfL: this._halfL,
+      topY: (this._haloY ?? (this._halfH * 1.93)) + 0.6,
+    };
+  }
+
   /** Quantized speedFactor bucket (0.2 steps ⇒ ≤ 6 flow shapes). */
   _sfBucket() {
     const sf = Math.min((this._speed || 0) / 350, 1);
@@ -1490,6 +1541,7 @@ export class RainEffect {
     this._visible  = false;
     this._rainPos  = RAIN_POS.F1;
     this._turnALat = 0;   // centrifugal accel v·ω while turning (m/s²)
+    this._flowCoupling = null;   // Phase 5: airflow sampler wiring (main.js)
 
     this._buildDroplets();
     this._buildSpray();
@@ -1528,6 +1580,10 @@ export class RainEffect {
     this._dVels  = vels;
     this._dCount = COUNT;
     this._dMat   = mat;
+    // Phase 5: per-droplet coupled velocities — written ONLY while airflow
+    // coupling is active, so the uncoupled update path stays byte-identical.
+    this._dVelX  = new Float32Array(COUNT);
+    this._dVelZ  = new Float32Array(COUNT);
   }
 
   _buildSpray() {
@@ -1544,6 +1600,15 @@ export class RainEffect {
       vels[i * 3]     = (side < 0 ? -1 : 1) * rnd(0.2, 0.8);
       vels[i * 3 + 1] = rnd(1.0, 3.0);
       vels[i * 3 + 2] = rnd(1.0, rnd(1.5, 4.5));
+      // Phase 5: bias the launch by the airflow at the emitter (gated like
+      // droplet coupling so behavior is unchanged with airflow off).
+      const cpl = this._flowCoupling;
+      if (cpl && Math.min(this._speed / 350, 1) >= 0.15) {
+        const f = cpl.sampler(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+        vels[i * 3]     += f.vx * 0.15;
+        vels[i * 3 + 1] += f.vy * 0.15;
+        vels[i * 3 + 2] += f.vz * 0.15;
+      }
     };
 
     for (let i = 0; i < COUNT; i++) spawnSpray(i);
@@ -1630,6 +1695,27 @@ export class RainEffect {
    * Free water (spray, rooster tails) accumulates it; falling streaks lean. */
   setTurnState(omega, v) { this._turnALat = rainLateralAccel(v, omega); }
 
+  /**
+   * Phase 5 (part-precision): attach the airflow field. `sampler(x,y,z)`
+   * returns car-frame flow velocity (m/s); `occupancy` (optional) triggers
+   * body-splash respawns; `env` bounds the coupling region
+   * (|x| ≤ 1.6·halfW, |z| ≤ 1.5·halfL, y ≤ topY). Passing null disarms the
+   * coupling entirely — rain behavior reverts to the uncoupled baseline.
+   */
+  setFlowCoupling(sampler, occupancy, env) {
+    if (typeof sampler !== 'function') {
+      this._flowCoupling = null;
+      this._dVelX?.fill(0);
+      this._dVelZ?.fill(0);
+      return;
+    }
+    this._flowCoupling = {
+      sampler,
+      occupancy: occupancy || null,
+      env: env || { halfW: 0.9, halfL: 2.4, topY: 1.6 },
+    };
+  }
+
   setCarType(type, measure) {
     // Prefer measured rear-axle position when the car builder exposed it.
     // Falls back to the per-type RAIN_POS table for procedural cars that
@@ -1690,14 +1776,40 @@ export class RainEffect {
     const aLat = this._turnALat;
     const turnDrift = aLat * 0.4;
     const turnLean  = (aLat / 9.8) * streakLen;
+    // Phase 5: airflow coupling — only above the sf gate, and only inside
+    // the envelope. With coupling off this loop is byte-identical to the
+    // uncoupled baseline (the coupled-velocity arrays are never touched).
+    const cpl = this._flowCoupling;
+    const coupleOn = !!(cpl && speedFactor >= 0.15);
+    const K_COUPLE = 0.6;
     for (let i = 0; i < this._dCount; i++) {
       dp[i * 6]     += dt * turnDrift;
       dp[i * 6 + 1] -= dt * this._dVels[i];
       dp[i * 6 + 2] += dt * windTilt;
+      if (coupleOn) {
+        const x = dp[i * 6], y = dp[i * 6 + 1], z = dp[i * 6 + 2];
+        const env = cpl.env;
+        if (Math.abs(x) <= 1.6 * env.halfW && Math.abs(z) <= 1.5 * env.halfL && y <= env.topY) {
+          const f = cpl.sampler(x, y, z);
+          this._dVelX[i] += f.vx * K_COUPLE * dt;
+          this._dVelZ[i] += f.vz * K_COUPLE * dt;
+        }
+        dp[i * 6]     += this._dVelX[i] * dt;
+        dp[i * 6 + 2] += this._dVelZ[i] * dt;
+        // Body splash — a drop that reaches the body respawns from the sky.
+        if (cpl.occupancy && cpl.occupancy.sample(dp[i * 6], dp[i * 6 + 1], dp[i * 6 + 2]) > 0.5) {
+          dp[i * 6]     = rnd(-5, 5);
+          dp[i * 6 + 1] = 8;
+          dp[i * 6 + 2] = rnd(-6, 6);
+          this._dVelX[i] = 0;
+          this._dVelZ[i] = 0;
+        }
+      }
       if (dp[i * 6 + 1] < -0.35) {
         dp[i * 6]     = rnd(-5, 5);
         dp[i * 6 + 1] = 8;
         dp[i * 6 + 2] = rnd(-6, 6);
+        if (coupleOn) { this._dVelX[i] = 0; this._dVelZ[i] = 0; }
       }
       // Head = tail + streak offset
       dp[i * 6 + 3] = dp[i * 6] + turnLean;
@@ -1753,6 +1865,14 @@ export class RainEffect {
         rv[i * 3]     = side * rnd(0.5, 2);
         rv[i * 3 + 1] = rnd(1.0, 3.0);  // reset vy so gravity accumulation restarts
         rv[i * 3 + 2] = rnd(2, 5);
+        // Phase 5: bias the relaunch by the airflow at the emitter.
+        const cpl = this._flowCoupling;
+        if (cpl && speedFactor >= 0.15) {
+          const f = cpl.sampler(rp[i * 3], rp[i * 3 + 1], rp[i * 3 + 2]);
+          rv[i * 3]     += f.vx * 0.15;
+          rv[i * 3 + 1] += f.vy * 0.15;
+          rv[i * 3 + 2] += f.vz * 0.15;
+        }
       }
     }
 

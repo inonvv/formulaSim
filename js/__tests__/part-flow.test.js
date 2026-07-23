@@ -821,3 +821,153 @@ describe('Phase 4 — speed-coherent flow shape', () => {
     expect(ms).toBeLessThan(100);
   });
 });
+
+/* ════════════════════════════════════════════════════════════════ */
+/*  Phase 5 — rain ↔ airflow coupling                               */
+/* ════════════════════════════════════════════════════════════════ */
+describe('Phase 5 — AirflowEffect.sampleFlowAt', () => {
+  it('P5.1 freestream far upfield: vz ≈ V (m/s), vx ≈ 0; zero vector at rest', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    airflow.setSpeed(350);
+    const V = 350 / 3.6;
+    const far = airflow.sampleFlowAt(0.2, 2.5, -18);
+    expect(far.vz).toBeCloseTo(V, 0);
+    expect(Math.abs(far.vx)).toBeLessThan(0.5);
+
+    airflow.setSpeed(0);
+    const rest = airflow.sampleFlowAt(0.2, 2.5, -18);
+    expect(rest.vx).toBe(0);
+    expect(rest.vy).toBe(0);
+    expect(rest.vz).toBe(0);
+  });
+
+  it('P5.2 part-local perturbation: lateral flow near the sidepod inlet, none at freestream height', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    airflow.setSpeed(350);
+    // Just outboard of the sidepod inlet (x −0.70, y 0.014, z −0.40).
+    const nearInlet = airflow.sampleFlowAt(-1.0, 0.014, -0.40);
+    expect(Math.abs(nearInlet.vx)).toBeGreaterThan(1.0);
+    // Same xz at the freestream reference height: sinks are y-gated away
+    // and the cross-section is empty ⇒ pure freestream.
+    const above = airflow.sampleFlowAt(-1.0, 0.373 + 0.5, -0.40);
+    expect(Math.abs(above.vx)).toBeLessThan(1e-9);
+    expect(above.vz).toBeCloseTo(350 / 3.6, 6);
+  });
+
+  it('P5.3 pure function of existing state: repeated calls are identical', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    airflow.setSpeed(200);
+    const a = airflow.sampleFlowAt(-0.9, 0.0, -1.2);
+    const b = airflow.sampleFlowAt(-0.9, 0.0, -1.2);
+    expect(a).toEqual(b);
+  });
+
+  it('P5.4 getFlowEnvelope exposes the coupling envelope dims', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    const env = airflow.getFlowEnvelope();
+    expect(env.halfW).toBeCloseTo(0.8125, 3);
+    expect(env.halfL).toBeCloseTo(2.412, 3);
+    expect(env.topY).toBeCloseTo(0.373 + 0.6, 3);
+  });
+});
+
+describe('Phase 5 — RainEffect flow coupling', () => {
+  const ENV = { halfW: 0.9, halfL: 2.4, topY: 1.6 };
+
+  it('P5.5 D8 fix: droplets inside the envelope deflect with coupling on; exactly zero drift with it off', async () => {
+    const { RainEffect } = await import('../effects.js');
+
+    // OFF — regression: with zero turn accel, tail x is byte-stable.
+    const off = new RainEffect(makeScene());
+    off.setVisible(true);
+    off.setSpeed(200);
+    const dpOff = off._dPos;
+    const xOff = Array.from({ length: off._dCount }, (_, i) => dpOff[i * 6]);
+    off.update(0.016, 0);
+    for (let i = 0; i < off._dCount; i++) {
+      if (dpOff[i * 6 + 1] >= -0.35) expect(dpOff[i * 6]).toBe(xOff[i]);
+    }
+
+    // ON — droplets inside the envelope pick up lateral velocity.
+    const on = new RainEffect(makeScene());
+    on.setVisible(true);
+    on.setSpeed(200);
+    on.setFlowCoupling(() => ({ vx: 8, vy: 0, vz: 3 }), null, ENV);
+    // Park droplet 0 inside the envelope.
+    on._dPos[0] = 0.2; on._dPos[1] = 0.8; on._dPos[2] = 0.1;
+    on.update(0.016, 0);
+    on.update(0.016, 0);
+    expect(on._dVelX[0]).toBeGreaterThan(0);
+    const drift = on._dPos[0] - 0.2;
+    console.info(`[part-flow] rain coupling drift after 2 frames: ${(drift * 1000).toFixed(2)} mm, vx ${on._dVelX[0].toFixed(3)} m/s`);
+    expect(drift).toBeGreaterThan(0);
+  });
+
+  it('P5.6 droplets outside the envelope are not deflected', async () => {
+    const { RainEffect } = await import('../effects.js');
+    const rain = new RainEffect(makeScene());
+    rain.setVisible(true);
+    rain.setSpeed(200);
+    rain.setFlowCoupling(() => ({ vx: 8, vy: 0, vz: 3 }), null, ENV);
+    // Outside: |x| > 1.6·halfW.
+    rain._dPos[0] = 4.5; rain._dPos[1] = 0.8; rain._dPos[2] = 0.1;
+    rain.update(0.016, 0);
+    expect(rain._dVelX[0]).toBe(0);
+  });
+
+  it('P5.7 coupling is gated below sf 0.15 (no suction at crawl speeds)', async () => {
+    const { RainEffect } = await import('../effects.js');
+    const rain = new RainEffect(makeScene());
+    rain.setVisible(true);
+    rain.setSpeed(40);   // sf 0.114 < 0.15
+    rain.setFlowCoupling(() => ({ vx: 8, vy: 0, vz: 3 }), null, ENV);
+    rain._dPos[0] = 0.2; rain._dPos[1] = 0.8; rain._dPos[2] = 0.1;
+    rain.update(0.016, 0);
+    expect(rain._dVelX[0]).toBe(0);
+  });
+
+  it('P5.8 body splash: a droplet entering occupancy respawns from the sky', async () => {
+    const { RainEffect } = await import('../effects.js');
+    const rain = new RainEffect(makeScene());
+    rain.setVisible(true);
+    rain.setSpeed(200);
+    const occupancy = { sample: (x, y, z) => (Math.abs(x) < 1 && y < 1 && Math.abs(z) < 2) ? 1 : 0 };
+    rain.setFlowCoupling(() => ({ vx: 0, vy: 0, vz: 0 }), occupancy, ENV);
+    rain._dPos[0] = 0.1; rain._dPos[1] = 0.6; rain._dPos[2] = 0.1;   // inside the body
+    rain.update(0.016, 0);
+    expect(rain._dPos[1]).toBeGreaterThan(5);   // respawned from the sky
+    expect(rain._dVelX[0]).toBe(0);
+  });
+
+  it('P5.9 rooster-tail gating unchanged: opacity 0 at speed ≤ 20 even with coupling on', async () => {
+    const { RainEffect } = await import('../effects.js');
+    const rain = new RainEffect(makeScene());
+    rain.setVisible(true);
+    rain.setSpeed(15);
+    rain.setFlowCoupling(() => ({ vx: 8, vy: 0, vz: 3 }), null, ENV);
+    rain.update(0.016, 0);
+    expect(rain._roosterMat.opacity).toBe(0);
+  });
+
+  it('P5.10 setFlowCoupling(null) fully disarms and zeroes coupled velocities', async () => {
+    const { RainEffect } = await import('../effects.js');
+    const rain = new RainEffect(makeScene());
+    rain.setVisible(true);
+    rain.setSpeed(200);
+    rain.setFlowCoupling(() => ({ vx: 8, vy: 0, vz: 3 }), null, ENV);
+    rain._dPos[0] = 0.2; rain._dPos[1] = 0.8; rain._dPos[2] = 0.1;
+    rain.update(0.016, 0);
+    expect(rain._dVelX[0]).toBeGreaterThan(0);
+    rain.setFlowCoupling(null, null, null);
+    expect(rain._flowCoupling).toBeNull();
+    for (let i = 0; i < rain._dCount; i++) expect(rain._dVelX[i]).toBe(0);
+  });
+});
