@@ -10,6 +10,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { EffectComposer }  from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass }      from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass }      from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass }      from 'three/addons/postprocessing/OutputPass.js';
 import { buildCar, getCarMeta, WHEEL_NAMES } from './cars.js';
 import { CAR_MANIFEST } from './car-manifest.js';
@@ -17,6 +18,7 @@ import { createDebugOverlay } from './debug-overlay.js';
 import { buildTrack, buildSkyline } from './track.js';
 import { TrackPath, TURN_CFG, steerAngleRad, rollAngleRad, smoothAngle, cameraBankRad, pathBendTable } from './track-path.js';
 import { AirflowEffect, RainEffect } from './effects.js';
+import { RainLensShader, rainLensIntensity, lensActive } from './rain-lens.js';
 import { CfdEffect, syncCfdLegend } from './cfd-effect.js';
 import { VentEmitterSystem } from './vent-emitters.js';
 import { buildOccupancy } from './body-sdf.js';
@@ -139,7 +141,15 @@ const bloomPass = new UnrealBloomPass(
   BLOOM.threshold   // 0.85 — only emissives
 );
 composer.addPass(bloomPass);
+// Rain-on-visor lens pass — cockpit + rain only. Disabled by default so the
+// fullscreen fragment costs nothing outside that combination; the render
+// loop ramps uIntensity (tau 0.4 s) and flips `enabled` from lensActive().
+const rainLensPass = new ShaderPass(RainLensShader);
+rainLensPass.enabled = false;
+rainLensPass.uniforms.uAspect.value = window.innerWidth / window.innerHeight;
+composer.addPass(rainLensPass);
 composer.addPass(new OutputPass());
+window.__fsim.rainLens = rainLensPass;   // verify-script uniform inspection
 
 /* ── Debug overlay (no-op unless ?debug=1 is in the URL) ────────── */
 const debugOverlay = createDebugOverlay(scene);
@@ -708,6 +718,16 @@ function animate() {
     try { vents.update(dt); }               catch (e) { console.error('[vents.update]', e); }
   }
 
+  // Rain-on-visor lens: ramp toward on/off (tau 0.4 s — no pop when the
+  // user switches camera or toggles rain) and only pay for the fullscreen
+  // pass while it is actually visible.
+  const lensOn = lensActive(state.camMode, state.activeEnvs);
+  const lensI  = rainLensIntensity(rainLensPass.uniforms.uIntensity.value, lensOn, dt);
+  rainLensPass.uniforms.uIntensity.value = lensI;
+  rainLensPass.uniforms.uSpeed.value     = state.speed / 350;
+  if (!state.paused) rainLensPass.uniforms.uTime.value += dt;
+  rainLensPass.enabled = lensI > 0.01;
+
   // HUD
   updateHUD(state.speed);
 
@@ -900,6 +920,7 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
   composer.setSize(window.innerWidth, window.innerHeight);
+  rainLensPass.uniforms.uAspect.value = window.innerWidth / window.innerHeight;
 });
 
 /* ── Keyboard shortcuts ─────────────────────────────────────────── */
