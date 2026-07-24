@@ -327,6 +327,60 @@ const CAR_AERO = {
     wakeHeightRange:[-0.10,1.20], wakeCount:220,
     strouhal: 0.21,  // Strouhal number for vortex shedding frequency
   },
+  F2: {
+    // Dallara F2/18 — conventional aero: flat stepped floor + strong
+    // diffuser, big wings, NO venturi tunnels. ~93% of F1 width.
+    halfW: 0.84, halfL: 2.30, halfH: 0.48,
+    pressureBlobs: [
+      { color:0xff2200, r:0.38, intensity:1.00, pos:[0, 0.10,-2.26] },
+      { color:0x2266ff, r:0.47, intensity:0.90, pos:[0, 0.02,-2.36] },
+      { color:0xff2200, r:0.34, intensity:0.70, pos:[0, 0.80, 1.70] },
+      { color:0x2266ff, r:0.51, intensity:0.95, pos:[0, 0.67, 1.70] },
+      { color:0x00ddff, r:0.75, intensity:0.85, pos:[0,-0.05, 0.00] },
+      { color:0xff4400, r:0.28, intensity:0.70, pos:[ 0.79, 0.04,-1.48] },
+      { color:0xff4400, r:0.28, intensity:0.70, pos:[-0.79, 0.04,-1.48] },
+      { color:0x0066ff, r:0.17, intensity:0.50, phase:1.5, pos:[0, 0.10,-2.48] },
+      { color:0xff6600, r:0.26, intensity:0.75, phase:0.8, pos:[0, 0.45,-0.42] },
+    ],
+    vortexDefs: [
+      {role:'frontWing', wx:-0.78,wy: 0.02,wz:-2.36,sign: 1, gamma:0.50, rc:0.12},
+      {role:'frontWing', wx: 0.78,wy: 0.02,wz:-2.36,sign:-1, gamma:0.50, rc:0.12},
+      {role:'rearWing',  wx:-0.85,wy: 0.78,wz: 1.80,sign:-1, gamma:0.85, rc:0.16},
+      {role:'rearWing',  wx: 0.85,wy: 0.78,wz: 1.80,sign: 1, gamma:0.85, rc:0.16},
+      {role:'floor',     wx:-0.80,wy:-0.05,wz: 0.90,sign: 1, gamma:0.35, rc:0.10},
+      {role:'floor',     wx: 0.80,wy:-0.05,wz: 0.90,sign:-1, gamma:0.35, rc:0.10},
+    ],
+    vortexMaxRadius:0.20, wakeWidthX:0.93,
+    wakeHeightRange:[-0.10,1.04], wakeCount:200,
+    strouhal: 0.21,
+  },
+  F3: {
+    // Dallara F3/19 — flat floor, modest diffuser, proportionally the most
+    // wing-dependent car of the ladder (and the draggiest).
+    halfW: 0.76, halfL: 2.10, halfH: 0.46,
+    pressureBlobs: [
+      { color:0xff2200, r:0.35, intensity:1.00, pos:[0, 0.10,-2.02] },
+      { color:0x2266ff, r:0.43, intensity:0.90, pos:[0, 0.02,-2.12] },
+      { color:0xff2200, r:0.31, intensity:0.70, pos:[0, 0.72, 1.58] },
+      { color:0x2266ff, r:0.47, intensity:0.95, pos:[0, 0.59, 1.58] },
+      { color:0x00ddff, r:0.68, intensity:0.80, pos:[0,-0.05, 0.00] },
+      { color:0xff4400, r:0.26, intensity:0.70, pos:[ 0.71, 0.04,-1.35] },
+      { color:0xff4400, r:0.26, intensity:0.70, pos:[-0.71, 0.04,-1.35] },
+      { color:0x0066ff, r:0.15, intensity:0.50, phase:1.5, pos:[0, 0.10,-2.24] },
+      { color:0xff6600, r:0.24, intensity:0.75, phase:0.8, pos:[0, 0.42,-0.39] },
+    ],
+    vortexDefs: [
+      {role:'frontWing', wx:-0.71,wy: 0.02,wz:-2.12,sign: 1, gamma:0.45, rc:0.11},
+      {role:'frontWing', wx: 0.71,wy: 0.02,wz:-2.12,sign:-1, gamma:0.45, rc:0.11},
+      {role:'rearWing',  wx:-0.76,wy: 0.71,wz: 1.68,sign:-1, gamma:0.75, rc:0.15},
+      {role:'rearWing',  wx: 0.76,wy: 0.71,wz: 1.68,sign: 1, gamma:0.75, rc:0.15},
+      {role:'floor',     wx:-0.72,wy:-0.05,wz: 0.80,sign: 1, gamma:0.28, rc:0.09},
+      {role:'floor',     wx: 0.72,wy:-0.05,wz: 0.80,sign:-1, gamma:0.28, rc:0.09},
+    ],
+    vortexMaxRadius:0.18, wakeWidthX:0.84,
+    wakeHeightRange:[-0.10,1.00], wakeCount:180,
+    strouhal: 0.20,
+  },
   GT: {
     halfW: 1.05, halfL: 2.40, halfH: 0.65,
     pressureBlobs: [
@@ -1600,6 +1654,8 @@ export class AirflowEffect {
 /* Per-car wheel/spray spawn positions */
 const RAIN_POS = {
   F1: { sprayX: 0.73, sprayZ: 1.52, roosterX: 0.80, roosterZ: 1.65 },
+  F2: { sprayX: 0.74, sprayZ: 1.48, roosterX: 0.81, roosterZ: 1.63 },
+  F3: { sprayX: 0.66, sprayZ: 1.35, roosterX: 0.73, roosterZ: 1.50 },
   GT: { sprayX: 0.85, sprayZ: 1.55, roosterX: 0.93, roosterZ: 1.72 },
 };
 

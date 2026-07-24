@@ -435,14 +435,17 @@ describe('AirflowEffect — vortexDefs role tagging', () => {
       .toBe(true);
   });
 
-  it('removed car types fall back to the F1 aero profile', async () => {
+  it('F2 has its OWN aero profile (no F1 fallback); unknown types still fall back', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
-    airflow.setCarType('F2');   // removed — getProfile falls back to F1
+    airflow.setCarType('F2');   // restored — dedicated CAR_AERO.F2 entry
+    expect(airflow._profile.halfW).toBeCloseTo(0.84, 5);
     const defs = airflow._profile.vortexDefs;
     expect(defs.filter(d => d.role === 'frontWing').length).toBe(2);
     expect(defs.filter(d => d.role === 'rearWing').length).toBe(2);
     expect(defs.filter(d => d.role === 'floor').length).toBe(2);
+    airflow.setCarType('UNKNOWN');
+    expect(airflow._profile.halfW).toBeCloseTo(0.90, 5);   // F1 fallback preserved
   });
 
   it('GT vortexDefs tagged rearWing', async () => {
@@ -807,5 +810,101 @@ describe('fog envelope — crisp entry, fog develops over the body', () => {
     airflow.setCarType('F1');
     const R = airflow._ribbonLines.find(r => airflow._seeds[r.seedIdx].group === 'underfloor');
     expect(R.haloColors).toBeNull();
+  });
+});
+
+/* ── f2-f3-cars P3: F2/F3 aero profiles + rain positions ─────────── */
+describe('F2/F3 aero profiles (P3)', () => {
+  it('SIZE ORDERING (hard requirement): halfW/halfL/halfH/wakeCount strictly F1 > F2 > F3', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    const p = {};
+    for (const t of ['F1', 'F2', 'F3']) { airflow.setCarType(t); p[t] = airflow._profile; }
+    for (const k of ['halfW', 'halfL', 'halfH', 'wakeCount']) {
+      expect(p.F1[k]).toBeGreaterThan(p.F2[k]);
+      expect(p.F2[k]).toBeGreaterThan(p.F3[k]);
+    }
+  });
+
+  it('F2 profile: plan-authored dims + vortex defs verbatim', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F2');
+    const p = airflow._profile;
+    expect(p.halfW).toBeCloseTo(0.84, 5);
+    expect(p.halfL).toBeCloseTo(2.30, 5);
+    expect(p.halfH).toBeCloseTo(0.48, 5);
+    expect(p.wakeCount).toBe(200);
+    expect(p.strouhal).toBeCloseTo(0.21, 5);
+    expect(p.vortexMaxRadius).toBeCloseTo(0.20, 5);
+    const fw = p.vortexDefs.filter(d => d.role === 'frontWing');
+    const rw = p.vortexDefs.filter(d => d.role === 'rearWing');
+    const fl = p.vortexDefs.filter(d => d.role === 'floor');
+    expect(fw.length).toBe(2); expect(rw.length).toBe(2); expect(fl.length).toBe(2);
+    expect(Math.abs(fw[0].wx)).toBeCloseTo(0.78, 5);
+    expect(fw[0].wz).toBeCloseTo(-2.36, 5);
+    expect(fw[0].gamma).toBeCloseTo(0.50, 5);
+    expect(fw[0].rc).toBeCloseTo(0.12, 5);
+    expect(Math.abs(rw[0].wx)).toBeCloseTo(0.85, 5);
+    expect(rw[0].wy).toBeCloseTo(0.78, 5);
+    expect(rw[0].wz).toBeCloseTo(1.80, 5);
+    expect(rw[0].gamma).toBeCloseTo(0.85, 5);
+    expect(rw[0].rc).toBeCloseTo(0.16, 5);
+    expect(Math.abs(fl[0].wx)).toBeCloseTo(0.80, 5);
+    expect(fl[0].wy).toBeCloseTo(-0.05, 5);
+    expect(fl[0].wz).toBeCloseTo(0.90, 5);
+    expect(fl[0].gamma).toBeCloseTo(0.35, 5);
+    expect(fl[0].rc).toBeCloseTo(0.10, 5);
+  });
+
+  it('F3 profile: plan-authored dims + vortex defs verbatim', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F3');
+    const p = airflow._profile;
+    expect(p.halfW).toBeCloseTo(0.76, 5);
+    expect(p.halfL).toBeCloseTo(2.10, 5);
+    expect(p.halfH).toBeCloseTo(0.46, 5);
+    expect(p.wakeCount).toBe(180);
+    expect(p.strouhal).toBeCloseTo(0.20, 5);
+    expect(p.vortexMaxRadius).toBeCloseTo(0.18, 5);
+    const fw = p.vortexDefs.filter(d => d.role === 'frontWing');
+    const rw = p.vortexDefs.filter(d => d.role === 'rearWing');
+    const fl = p.vortexDefs.filter(d => d.role === 'floor');
+    expect(fw.length).toBe(2); expect(rw.length).toBe(2); expect(fl.length).toBe(2);
+    expect(Math.abs(fw[0].wx)).toBeCloseTo(0.71, 5);
+    expect(fw[0].wz).toBeCloseTo(-2.12, 5);
+    expect(fw[0].gamma).toBeCloseTo(0.45, 5);
+    expect(fw[0].rc).toBeCloseTo(0.11, 5);
+    expect(Math.abs(rw[0].wx)).toBeCloseTo(0.76, 5);
+    expect(rw[0].wy).toBeCloseTo(0.71, 5);
+    expect(rw[0].wz).toBeCloseTo(1.68, 5);
+    expect(rw[0].gamma).toBeCloseTo(0.75, 5);
+    expect(rw[0].rc).toBeCloseTo(0.15, 5);
+    expect(Math.abs(fl[0].wx)).toBeCloseTo(0.72, 5);
+    expect(fl[0].wz).toBeCloseTo(0.80, 5);
+    expect(fl[0].gamma).toBeCloseTo(0.28, 5);
+    expect(fl[0].rc).toBeCloseTo(0.09, 5);
+  });
+
+  it('RAIN_POS: spray sits on each car\'s measured rear axle ±0.02 (F2 0.74/1.48, F3 0.66/1.35)', async () => {
+    const { RainEffect } = await import('../effects.js');
+    const rain = new RainEffect(makeScene());
+    // No measure supplied → authored RAIN_POS table must already sit on the
+    // builder's rear axle (F2: x 0.74 z 1.48; F3: x 0.66 z 1.35).
+    rain.setCarType('F2', {});
+    expect(Math.abs(rain._rainPos.sprayX - 0.74)).toBeLessThanOrEqual(0.02);
+    expect(Math.abs(rain._rainPos.sprayZ - 1.48)).toBeLessThanOrEqual(0.02);
+    expect(rain._rainPos.roosterX).toBeCloseTo(0.81, 5);
+    expect(rain._rainPos.roosterZ).toBeCloseTo(1.63, 5);
+    rain.setCarType('F3', {});
+    expect(Math.abs(rain._rainPos.sprayX - 0.66)).toBeLessThanOrEqual(0.02);
+    expect(Math.abs(rain._rainPos.sprayZ - 1.35)).toBeLessThanOrEqual(0.02);
+    expect(rain._rainPos.roosterX).toBeCloseTo(0.73, 5);
+    expect(rain._rainPos.roosterZ).toBeCloseTo(1.50, 5);
+    // With a real measure the axle wins exactly (existing mechanism).
+    rain.setCarType('F2', { rearAxleX: 0.74, rearAxleZ: 1.48 });
+    expect(rain._rainPos.sprayX).toBeCloseTo(0.74, 5);
+    expect(rain._rainPos.sprayZ).toBeCloseTo(1.48, 5);
   });
 });
