@@ -405,6 +405,8 @@ window.__fsim.renderer = renderer;
 // Engine-sound hook (scripts/verify-engine-sound.mjs): Playwright can't hear —
 // it reads ctx.state / masterGain / fundamental via engineAudio.debugState().
 window.__fsim.engineAudio = engineAudio;
+// F2/F3 hook (scripts/verify-f2-f3.mjs): ribbon lane extremes vs per-car halfW.
+window.__fsim.airflow = airflow;
 
 /**
  * Phase 5 (part-precision): wire rain to the airflow field when BOTH envs
