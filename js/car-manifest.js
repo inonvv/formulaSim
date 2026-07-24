@@ -142,6 +142,13 @@ export const CAR_MANIFEST = {
       exhaustPipe:  { anchor: 'bodyShell', offset: [ 0.00, -0.45,  2.15], direction: [ 0,   -0.1,  1], role: 'outlet' },
       fenderVentL:  { anchor: 'bodyShell', offset: [-0.78, -0.05, -1.10], direction: [-0.3,  1,    0], role: 'outlet' },
       fenderVentR:  { mirrored: 'fenderVentL' },
+      // 992 GT3 RS rear-fender side intakes (ahead of the rear wheels) —
+      // authored as sidepodInlet* so the shared vent table maps them to
+      // sink modifiers + VentEmitterSystem inlets automatically. Expected
+      // car-local landing ≈ (±0.92, 0.47, +0.78); bodyShell half-width is
+      // 1.01 m so x −0.92 sits just inside the flank.
+      sidepodInletL: { anchor: 'bodyShell', offset: [-0.92, -0.15,  0.85], direction: [ 0.3,  0,   -1], role: 'inlet'  },
+      sidepodInletR: { mirrored: 'sidepodInletL' },
     },
     // Extra collision meshes for the body-occupancy SDF: windows, doors and
     // hood complete the closed-body canopy on top of the (wheel-less)

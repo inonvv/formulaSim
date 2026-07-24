@@ -12,11 +12,11 @@ import { RenderPass }      from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass }      from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass }      from 'three/addons/postprocessing/OutputPass.js';
-import { buildCar, getCarMeta, WHEEL_NAMES } from './cars.js';
+import { buildCar, getCarMeta, WHEEL_NAMES, buildSteeringWheel } from './cars.js';
 import { CAR_MANIFEST } from './car-manifest.js';
 import { createDebugOverlay } from './debug-overlay.js';
 import { buildTrack, buildSkyline } from './track.js';
-import { TrackPath, TURN_CFG, steerAngleRad, rollAngleRad, smoothAngle, cameraBankRad, pathBendTable } from './track-path.js';
+import { TrackPath, TURN_CFG, steerAngleRad, rollAngleRad, smoothAngle, cameraBankRad, pathBendTable, turnEdgeCounter } from './track-path.js';
 import { AirflowEffect, RainEffect } from './effects.js';
 import { RainLensShader, rainLensIntensity, lensActive } from './rain-lens.js';
 import { CfdEffect, syncCfdLegend } from './cfd-effect.js';
@@ -26,6 +26,7 @@ import { collectOccupancyMeshes } from './car-loader.js';
 import { createSwapGuard } from './swap-guard.js';
 import { EffectStub } from './effect-stub.js';
 import { gearFromSpeed, wheelRotationRate, aeroSquishFactor, rpmRatio, lerpSpeed } from './physics.js';
+import { partForHit, eduEntryFor, splitCopy } from './edu-content.js';
 import {
   BACKGROUND_COLOR, AMBIENT_COLOR, AMBIENT_INTENSITY,
   SUN_COLOR, SUN_INTENSITY, FILL_COLOR, FILL_INTENSITY,
@@ -176,7 +177,16 @@ const state = {
   brakes:     {},
   camT:       0,          // camera path parameter for trackside/drone
   camBank:    0,          // smoothed cinematic camera roll (rad)
+  turnCount:  0,          // completed-turn tally shown in the HUD
+  _turnEdge:  null,       // turnEdgeCounter state {inTurn, count}
+  steeringWheel: null,    // cockpit wheel group (buildSteeringWheel), steered by steerVis
+  infoMode:   false,      // P6 educational layer — part cards on hover
+  _infoTargets: [],       // cached raycast subset: occupancy meshes + wheel groups
 };
+
+// Verify-script hook: headless scripts read sim state (turn count, steering
+// wheel pose, measured anchors) without faking DOM interactions.
+window.__fsim.state = state;
 
 /* ══════════════════════════════════════════════════════════════════
    CAR MANAGEMENT
@@ -251,6 +261,24 @@ async function spawnCar(type) {
   grp.traverse(obj => {
     if (obj.name?.startsWith('brake_')) state.brakes[obj.name] = obj;
   });
+
+  // P5: cockpit steering wheel — placed off the measured cockpit anchor,
+  // column-tilted about X; animateCar counter-rotates it with steerVis.
+  // Offsets calibrated so the wheel top sits in the helmet-cam's lower
+  // frame without covering the road.
+  const cockpitA = grp.userData.measure?.anchors?.cockpit;
+  const sw = buildSteeringWheel(type);
+  if (type === 'GT') {
+    // LHD: driver's side, deeper dash, steeper column rake.
+    sw.position.set((cockpitA?.x ?? 0) - 0.37, (cockpitA?.y ?? 0.60) - 0.28, (cockpitA?.z ?? 0) - 0.55);
+    sw.rotation.x = -0.5;
+  } else {
+    sw.position.set(cockpitA?.x ?? 0, (cockpitA?.y ?? 0.55) - 0.10, (cockpitA?.z ?? 0.30) - 0.45);
+    sw.rotation.x = -0.35;
+  }
+  grp.add(sw);
+  state.steeringWheel = sw;
+
   scene.add(grp);
   const carKey = String(type).toLowerCase();
   debugOverlay.attach(grp, CAR_MANIFEST[carKey] ?? null, state.carMeasure);
@@ -279,7 +307,16 @@ async function spawnCar(type) {
   // (collectOccupancyMeshes — same manifest-driven list as the SDF); the
   // rectangle patches only render for procedural fallbacks.
   grp.updateMatrixWorld(true);
-  cfd.setBodySurface(collectOccupancyMeshes(grp, CAR_MANIFEST[carKey] ?? null), grp);
+  const occMeshes = collectOccupancyMeshes(grp, CAR_MANIFEST[carKey] ?? null);
+  cfd.setBodySurface(occMeshes, grp);
+  // P6: cached raycast targets for INFO-mode part hover. F1: the whole car
+  // group — its GLB is many small meshes, so full coverage is cheap and the
+  // occupancy subset left visible parts (engine cover, livery) card-less.
+  // GT: keep the occupancy subset — its 224k-vert mega-mesh costs 37-65 ms
+  // per cast (docs/perf-audit.md R4), too slow for the 10 Hz hover.
+  state._infoTargets = carKey === 'gt'
+    ? [...occMeshes, ...Object.values(state.wheels).filter(Boolean)]
+    : [grp];
   cfd.setCarType(type, state.carMeasure);
   // Phase C: pipe the same feature-aware modifier list into CFD so the
   // pressure map sinks under inlets / low-pressure under the rear wing
@@ -331,6 +368,11 @@ spawnCar('F1').catch(e => console.error('[init] spawnCar failed:', e));
 // Verify-script hook (scripts/verify-cfd-emphasis.mjs): lets Playwright
 // inspect the CFD overlay state (mesh counts, colour buffers) headlessly.
 window.__fsim.cfd = cfd;
+// P7 hooks (scripts/verify-edu-backlog.mjs): rain streak buffers (gust
+// sway), vent emitter counts (GT sidepod inlets), renderer.info (perf audit).
+window.__fsim.rain     = rain;
+window.__fsim.vents    = vents;
+window.__fsim.renderer = renderer;
 
 /**
  * Phase 5 (part-precision): wire rain to the airflow field when BOTH envs
@@ -380,17 +422,36 @@ function syncEffects() {
   renderer.toneMappingExposure     = w.exposure;
 }
 
-/* ── CFD hover probe: 10 Hz raycast against the overlay clones ──── */
-const probeTip = document.getElementById('cfd-probe-tip');
+/* ── Hover raycasts (shared 10 Hz listener) ──────────────────────
+   CFD probe (Cp tooltip) + P6 INFO part cards share one throttled
+   pointermove raycast. When BOTH CFD and INFO are active, the info card
+   takes precedence and the probe stays hidden. */
+const probeTip  = document.getElementById('cfd-probe-tip');
+const infoCard  = document.getElementById('info-card');
+const infoTitle = document.getElementById('info-card-title');
+const infoBody  = document.getElementById('info-card-body');
 const probeRaycaster = new THREE.Raycaster();
 const probeNdc = new THREE.Vector2();
 let probeLastT = 0;
 
-renderer.domElement.addEventListener('pointermove', (e) => {
-  if (!probeTip) return;
-  if (!state.activeEnvs.has('cfd')) return;          // syncEffects hides the tip
+/** Part id for a raycast hit: wheel corner groups → 'wheels'; body hits →
+ *  nearest-anchor lookup on the car-local point (subtract baseY). */
+function partForHitObject(hit) {
+  const wheelSet = new Set(Object.values(state.wheels).filter(Boolean));
+  for (let o = hit.object; o; o = o.parent) {
+    if (wheelSet.has(o)) return 'wheels';
+  }
+  const baseY = state.carGroup?.userData?.baseY ?? 0;
+  const p = { x: hit.point.x, y: hit.point.y - baseY, z: hit.point.z };
+  return partForHit(p, state.carMeasure?.anchors ?? null, state.carType);
+}
+
+function runProbe(e, force = false) {
+  const infoOn = state.infoMode;
+  const cfdOn  = state.activeEnvs.has('cfd');
+  if (!infoOn && !cfdOn) return;
   const now = performance.now();
-  if (now - probeLastT < 100) return;                // throttle to 10 Hz
+  if (!force && now - probeLastT < 100) return;      // throttle to 10 Hz
   probeLastT = now;
 
   probeNdc.set(
@@ -398,6 +459,26 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     (e.clientY / window.innerHeight) * -2 + 1,
   );
   probeRaycaster.setFromCamera(probeNdc, camera);
+
+  if (infoOn && infoCard) {
+    probeTip?.classList.remove('show');              // card takes precedence
+    const hit = probeRaycaster.intersectObjects(state._infoTargets, true)[0];
+    const part  = hit ? partForHitObject(hit) : null;
+    const entry = part ? eduEntryFor(part, state.carType) : null;
+    if (entry) {
+      const { title, body } = splitCopy(entry);
+      infoTitle.textContent = title;
+      infoBody.textContent  = body;
+      infoCard.style.left = `${Math.min(e.clientX + 16, window.innerWidth - 260)}px`;
+      infoCard.style.top  = `${Math.min(e.clientY - 12, window.innerHeight - 150)}px`;
+      infoCard.classList.add('show');
+    } else {
+      infoCard.classList.remove('show');
+    }
+    return;
+  }
+
+  if (!probeTip) return;
   const res = cfd.raycastCp?.(probeRaycaster);
   if (res) {
     probeTip.textContent = `Cp ≈ ${res.cp.toFixed(2)}`;
@@ -407,6 +488,13 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   } else {
     probeTip.classList.remove('show');
   }
+}
+
+renderer.domElement.addEventListener('pointermove', runProbe);
+// Touch has no hover: a tap raycasts immediately (bypasses the throttle) so
+// INFO cards work on mobile. Misses hide the card via the same path.
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (state.infoMode) runProbe(e, true);
 });
 
 /* ══════════════════════════════════════════════════════════════════
@@ -520,7 +608,9 @@ function switchCamera(mode) {
   document.getElementById('camera-label').textContent = CAM_CONFIGS[mode].label;
 
   document.querySelectorAll('.cam-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.cam === mode);
+    const on = b.dataset.cam === mode;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', String(on));
   });
 }
 
@@ -624,6 +714,12 @@ function animateCar(dt) {
     const w = state.wheels[key];
     if (w) { w.rotation.order = 'YXZ'; w.rotation.y = state.steerVis; }
   }
+  // Steering wheel counter-motion (×2.5 the front-wheel steer). Positive
+  // rotation.z moves the wheel top toward −X, which is frame-LEFT for the
+  // driver looking down −Z — so a left road turn (steerVis > 0) turns the
+  // wheel top left, matching the front wheels. (The plan's authored −2.5
+  // sign fails that check; verified in the P7 cockpit shot.)
+  if (state.steeringWheel) state.steeringWheel.rotation.z = state.steerVis * 2.5;
   state.rollVis = smoothAngle(state.rollVis, rollAngleRad(mps, omega), dt);
   state.carGroup.rotation.z = state.rollVis;
   // Nose-in yaw ≤4° — clamp the ratio: the REAL_CORNER's fixed R 85 geometry
@@ -652,6 +748,14 @@ function updateTrack(dt) {
 
   // Recycle furniture rows through the sliding window.
   track.update(trackPath);
+
+  // Turn counter: rising edge of |κ| under the car, with hysteresis so one
+  // corner's curvature ramp can't double-count (pure helper, unit-tested).
+  state._turnEdge = turnEdgeCounter(state._turnEdge, trackPath.curvatureAt(trackPath.pose.s));
+  if (state._turnEdge.count !== state.turnCount) {
+    state.turnCount = state._turnEdge.count;
+    document.getElementById('turn-counter').textContent = state.turnCount;
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -747,8 +851,12 @@ document.querySelectorAll('.car-btn').forEach(btn => {
     if (type === state.carType) return;
     state.carType = type;
 
-    document.querySelectorAll('.car-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.car-btn').forEach(b => {
+      b.classList.remove('active');
+      b.setAttribute('aria-pressed', 'false');
+    });
     btn.classList.add('active');
+    btn.setAttribute('aria-pressed', 'true');
 
     await spawnCar(type);
     syncEffects();
@@ -777,8 +885,11 @@ document.querySelectorAll('#speed-presets .preset-btn').forEach(btn => {
 function applyTurnMode(mode) {
   state.turnMode = mode;
   trackPath.setTurnMode(mode);
-  document.querySelectorAll('.turn-btn').forEach(b =>
-    b.classList.toggle('active', b.dataset.turnMode === mode));
+  document.querySelectorAll('.turn-btn').forEach(b => {
+    const on = b.dataset.turnMode === mode;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
   updateChips();
 }
 
@@ -797,9 +908,11 @@ document.querySelectorAll('.env-btn').forEach(btn => {
     if (state.activeEnvs.has(env)) {
       state.activeEnvs.delete(env);
       btn.classList.remove('active');
+      btn.setAttribute('aria-pressed', 'false');
     } else {
       state.activeEnvs.add(env);
       btn.classList.add('active');
+      btn.setAttribute('aria-pressed', 'true');
     }
     updateChips();
     syncEffects();
@@ -818,12 +931,15 @@ playBtn.addEventListener('click', () => {
   if (state.paused) {
     playBtn.innerHTML = '&#9654; PLAY';
     playBtn.classList.remove('playing');
+    playBtn.setAttribute('aria-pressed', 'false');
   } else {
     playBtn.innerHTML = '&#9646;&#9646; PAUSE';
     playBtn.classList.add('playing');
+    playBtn.setAttribute('aria-pressed', 'true');
   }
 });
 playBtn.classList.add('playing');
+playBtn.setAttribute('aria-pressed', 'true');
 
 /* ── Reset ──────────────────────────────────────────────────────── */
 document.getElementById('reset-btn').addEventListener('click', () => {
@@ -831,6 +947,7 @@ document.getElementById('reset-btn').addEventListener('click', () => {
   state.paused = false;
   playBtn.innerHTML = '&#9646;&#9646; PAUSE';
   playBtn.classList.add('playing');
+  playBtn.setAttribute('aria-pressed', 'true');
 
   // Reset camera
   switchCamera('orbit');
@@ -839,11 +956,28 @@ document.getElementById('reset-btn').addEventListener('click', () => {
 
   // Deactivate all envs
   state.activeEnvs.clear();
-  document.querySelectorAll('.env-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.env-btn').forEach(b => {
+    b.classList.remove('active');
+    b.setAttribute('aria-pressed', 'false');
+  });
   // Back to the default turn schedule — reset means the full selection resets
   applyTurnMode('auto');
+  // Zero the turn tally with the rest of the session state.
+  state.turnCount = 0;
+  state._turnEdge = null;
+  document.getElementById('turn-counter').textContent = '0';
   updateChips();
   syncEffects();
+});
+
+/* ── INFO mode toggle (P6 educational layer) ────────────────────── */
+const infoBtn = document.getElementById('info-btn');
+infoBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();          // header click collapses the panel — keep it out
+  state.infoMode = !state.infoMode;
+  infoBtn.classList.toggle('active', state.infoMode);
+  infoBtn.setAttribute('aria-pressed', String(state.infoMode));
+  if (!state.infoMode) infoCard?.classList.remove('show');
 });
 
 /* ── Panel collapse (desktop only) ─────────────────────────────── */

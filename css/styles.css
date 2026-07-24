@@ -140,6 +140,29 @@ body {
   text-shadow: 0 0 18px color-mix(in srgb, var(--accent) 80%, transparent);
 }
 
+#turn-counter-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+}
+
+#turn-counter-label {
+  font-size: var(--label-fs);
+  letter-spacing: var(--label-track);
+  color: var(--dim);
+}
+
+#turn-counter {
+  font-family: var(--mono);
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #fff;
+  min-width: 2ch;
+  text-align: center;
+  line-height: 1;
+}
+
 /* ─── Car badge (top-left) ───────────────────────────────────────── */
 #car-badge {
   position: fixed;
@@ -302,6 +325,41 @@ body {
   transform: translateY(0);
 }
 
+/* ─── Educational part card (INFO mode) ─────────────────────────── */
+#info-card {
+  position: fixed;
+  display: block;
+  max-width: 240px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity var(--ease), visibility var(--ease), transform var(--ease);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--panel-border);
+  background: rgba(10,10,15,0.9);
+  pointer-events: none;
+  z-index: 31;
+}
+#info-card.show {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+#info-card-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent2);
+  margin-bottom: 4px;
+}
+#info-card-body {
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: #d8dce4;
+}
+
 /* ─── Panel ──────────────────────────────────────────────────────── */
 #panel {
   position: fixed;
@@ -368,6 +426,25 @@ body {
   display: flex; align-items: center; justify-content: center;
 }
 #panel-toggle:hover { background: rgba(255,255,255,0.07); }
+
+#info-btn {
+  background: none;
+  border: 1px solid var(--panel-border);
+  color: var(--dim);
+  border-radius: 6px;
+  width: 26px; height: 26px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+  display: flex; align-items: center; justify-content: center;
+}
+#info-btn:hover { background: rgba(255,255,255,0.07); }
+#info-btn.active {
+  color: var(--accent2);
+  border-color: color-mix(in srgb, var(--accent2) 60%, transparent);
+  background: color-mix(in srgb, var(--accent2) 14%, transparent);
+}
 
 #panel-body {
   flex: 1;
@@ -626,6 +703,19 @@ button:focus-visible, input:focus-visible {
   .panel-title,
   #panel-toggle { display: none; }
 
+  /* INFO joins the tab bar as a fixed-width tab (it was being flex-squeezed
+     to a sliver by the 100%-wide .mobile-tabs — unclickable). */
+  #info-btn {
+    flex: 0 0 48px;
+    height: 100%;
+    width: auto;
+    border: none;
+    border-radius: 0;
+    background: none;
+    font-size: 1.2rem;
+  }
+  #info-btn.active { background: none; }
+
   /* Header becomes the tab bar container */
   #panel-header {
     height: 60px;
@@ -639,7 +729,8 @@ button:focus-visible, input:focus-visible {
 
   .mobile-tabs {
     display: flex;
-    width: 100%;
+    flex: 1 1 auto;
+    width: auto;
     height: 100%;
     align-items: stretch;
     padding-bottom: env(safe-area-inset-bottom);

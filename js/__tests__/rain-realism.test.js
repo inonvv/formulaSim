@@ -456,3 +456,90 @@ describe('Rain realism — ground splashes', () => {
     expect(rain._splashNext).toBe(rain._dCount % 256);   // wrapped 1200 → 176
   });
 });
+
+/* ═══════════════════════════════════════════════════════════════════
+ * P4 — wind gusts + density waves (deterministic, no RNG in update)
+ * ═══════════════════════════════════════════════════════════════════ */
+describe('Rain gusts — gustVector / rainDensity pure functions', () => {
+  it('gustVector is deterministic and bounded: |gx| ≤ 2.2, |gz| ≤ 1.4', async () => {
+    const { gustVector } = await import('../effects.js');
+    for (let t = 0; t <= 600; t += 0.37) {
+      const a = gustVector(t);
+      const b = gustVector(t);
+      expect(a.gx).toBe(b.gx);                 // deterministic
+      expect(a.gz).toBe(b.gz);
+      expect(Math.abs(a.gx)).toBeLessThanOrEqual(2.2);
+      expect(Math.abs(a.gz)).toBeLessThanOrEqual(1.4);
+    }
+    // Exact authored law at a spot value.
+    const g = gustVector(5);
+    expect(g.gx).toBeCloseTo(2.2 * Math.sin(0.31 * 5) * Math.sin(0.113 * 5 + 1.7), 10);
+    expect(g.gz).toBeCloseTo(1.4 * Math.sin(0.23 * 5 + 0.9) * Math.sin(0.077 * 5), 10);
+  });
+
+  it('gust is zero-mean-ish over 600 s (|mean| < 0.15 per axis)', async () => {
+    const { gustVector } = await import('../effects.js');
+    let sx = 0, sz = 0, n = 0;
+    for (let t = 0; t <= 600; t += 0.1) {
+      const g = gustVector(t);
+      sx += g.gx; sz += g.gz; n++;
+    }
+    expect(Math.abs(sx / n)).toBeLessThan(0.15);
+    expect(Math.abs(sz / n)).toBeLessThan(0.15);
+  });
+
+  it('rainDensity stays within ±15% of 1', async () => {
+    const { rainDensity } = await import('../effects.js');
+    for (let t = 0; t <= 600; t += 0.31) {
+      const d = rainDensity(t);
+      expect(d).toBeGreaterThanOrEqual(0.85);
+      expect(d).toBeLessThanOrEqual(1.15);
+    }
+  });
+});
+
+describe('Rain gusts — droplet integration', () => {
+  it('streak head−tail includes the gust term: parallel to (gx, −vFall, wind+gz) at gusty t', async () => {
+    const { gustVector } = await import('../effects.js');
+    const g = gustVector(5);
+    expect(Math.abs(g.gx)).toBeGreaterThan(1);   // t=5 is a strong-gust instant
+    const rain = await makeRain();
+    rain.setSpeed(350);                          // windRear 30, no coupling, no turn
+    rain._dPos[0] = 0.2; rain._dPos[1] = 5.0; rain._dPos[2] = 0.1;
+    rain.update(DT, 5);
+    const d = streakVec(rain, 0);
+    const vel = [g.gx, -rain._dVels[0], 30 + g.gz];
+    const dm = mag(d), vm = mag(vel);
+    const cross = [
+      (d[1] * vel[2] - d[2] * vel[1]) / (dm * vm),
+      (d[2] * vel[0] - d[0] * vel[2]) / (dm * vm),
+      (d[0] * vel[1] - d[1] * vel[0]) / (dm * vm),
+    ];
+    expect(Math.abs(cross[0])).toBeLessThan(1e-4);
+    expect(Math.abs(cross[1])).toBeLessThan(1e-4);
+    expect(Math.abs(cross[2])).toBeLessThan(1e-4);
+    expect(d[0] * vel[0] + d[1] * vel[1] + d[2] * vel[2]).toBeGreaterThan(0);
+  });
+
+  it('gust drifts droplet positions: x advances by gx·dt at gusty t', async () => {
+    const { gustVector } = await import('../effects.js');
+    const g = gustVector(5);
+    const rain = await makeRain();
+    rain.setSpeed(0);                            // isolate the gust from the sweep
+    rain._dPos[0] = 0; rain._dPos[1] = 5; rain._dPos[2] = 0;
+    rain.update(DT, 5);
+    expect(rain._dPos[0]).toBeCloseTo(g.gx * DT, 5);
+    expect(rain._dPos[2]).toBeCloseTo(g.gz * DT, 5);
+  });
+
+  it('droplet opacity = 0.55 × rainDensity(t), always within [0.55·0.85, 0.55·1.15]', async () => {
+    const { rainDensity } = await import('../effects.js');
+    const rain = await makeRain();
+    for (const t of [0, 13, 27, 100, 314]) {
+      rain.update(DT, t);
+      expect(rain._dMat.opacity).toBeCloseTo(0.55 * rainDensity(t), 6);
+      expect(rain._dMat.opacity).toBeGreaterThanOrEqual(0.55 * 0.85 - 1e-9);
+      expect(rain._dMat.opacity).toBeLessThanOrEqual(0.55 * 1.15 + 1e-9);
+    }
+  });
+});

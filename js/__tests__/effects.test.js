@@ -597,6 +597,33 @@ describe('AirflowEffect — Phase C modifiers from role-tagged anchors', () => {
     expect(sources.length).toBe(3);   // exhaustPipe + both fender vents
   });
 
+  it('GT sidepod inlet anchors add exactly 2 sinks over the 992 baseline', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const baseAnchors = {
+      frontIntake:  { x: 0,     y: 0.30, z: -2.10, role: 'inlet'  },
+      engineIntake: { x: 0,     y: 1.05, z:  1.55, role: 'inlet'  },
+      exhaustPipe:  { x: 0,     y: 0.20, z:  2.18, role: 'outlet' },
+      fenderVentL:  { x: -0.78, y: 0.55, z: -1.10, role: 'outlet' },
+      fenderVentR:  { x:  0.78, y: 0.55, z: -1.10, role: 'outlet' },
+    };
+    const before = new AirflowEffect(makeScene());
+    before.setCarType('GT', { anchors: { ...baseAnchors } });
+    const after = new AirflowEffect(makeScene());
+    after.setCarType('GT', { anchors: {
+      ...baseAnchors,
+      // 992 rear-fender intakes — mirrored pair, landed from bodyShell + offset.
+      sidepodInletL: { x: -0.92, y: 0.47, z: 0.78, role: 'inlet' },
+      sidepodInletR: { x:  0.92, y: 0.47, z: 0.78, role: 'inlet' },
+    } });
+    const sinksBefore = before._modifiers.filter(m => m.type === 'sink');
+    const sinksAfter  = after._modifiers.filter(m => m.type === 'sink');
+    expect(sinksBefore.length).toBe(2);
+    expect(sinksAfter.length).toBe(4);       // exactly 2 new sinks
+    // Sources unchanged by the inlet pair.
+    expect(after._modifiers.filter(m => m.type === 'source').length)
+      .toBe(before._modifiers.filter(m => m.type === 'source').length);
+  });
+
   it('modifier (xi, eta) coordinates divide anchor (x, z) by (halfW, halfL)', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
