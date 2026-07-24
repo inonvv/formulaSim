@@ -30,6 +30,14 @@ export const EDU_COPY = {
  * frontWing anchor is the splitter (title + copy adapted per the plan's
  * override note; the base frontWing copy stays the source of intent). */
 const TYPE_OVERRIDES = {
+  // F2/F3 run conventional aero: a stepped flat floor (no F1-style underbody
+  // acceleration story) where the diffuser does the underbody work.
+  F2: {
+    floor: 'Floor & diffuser — stepped flat floor: the strong rear diffuser does the underbody work, easing underfloor air back out to pull the car down.',
+  },
+  F3: {
+    floor: 'Floor & diffuser — stepped flat floor: a modest diffuser does the underbody work while the wings carry most of this car\'s downforce.',
+  },
   GT: {
     frontWing: "Splitter — flat blade at the bumper's base: the first surface to meet the air, generating front downforce and feeding flow to the floor.",
     halo: "Roof — the crash structure over the cabin; protects the driver's head.",

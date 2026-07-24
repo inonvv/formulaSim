@@ -277,6 +277,15 @@ async function spawnCar(type) {
     // LHD: driver's side, deeper dash, steeper column rake.
     sw.position.set((cockpitA?.x ?? 0) - 0.37, (cockpitA?.y ?? 0.60) - 0.28, (cockpitA?.z ?? 0) - 0.55);
     sw.rotation.x = -0.5;
+  } else if (type === 'F2') {
+    // Offsets derived like F1's (−0.10/−0.45 off the cockpit anchor), scaled
+    // by the smaller tub: cockpit-height ratio 0.50/0.55, halfL 2.30/2.45.
+    sw.position.set(cockpitA?.x ?? 0, (cockpitA?.y ?? 0.50) - 0.09, (cockpitA?.z ?? 0.30) - 0.42);
+    sw.rotation.x = -0.35;
+  } else if (type === 'F3') {
+    // Cockpit-height ratio 0.46/0.55, halfL 2.10/2.45.
+    sw.position.set(cockpitA?.x ?? 0, (cockpitA?.y ?? 0.46) - 0.08, (cockpitA?.z ?? 0.38) - 0.39);
+    sw.rotation.x = -0.35;
   } else {
     sw.position.set(cockpitA?.x ?? 0, (cockpitA?.y ?? 0.55) - 0.10, (cockpitA?.z ?? 0.30) - 0.45);
     sw.rotation.x = -0.35;

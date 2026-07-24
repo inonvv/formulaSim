@@ -84,3 +84,26 @@ describe('edu-content — per-type overrides', () => {
     expect(eduEntryFor('nope', 'F1')).toBeNull();
   });
 });
+
+/* ── f2-f3-cars P5: F2/F3 floor cards ───────────────────────────── */
+describe('edu-content — F2/F3 floor overrides (P5)', () => {
+  it('F2/F3 floor cards describe the stepped flat floor + diffuser, with NO venturi/ground-effect wording', () => {
+    for (const t of ['F2', 'F3']) {
+      const entry = eduEntryFor('floor', t);
+      expect(entry).not.toBe(EDU_COPY.floor);           // override, not the F1 venturi card
+      expect(entry.toLowerCase()).toContain('stepped flat floor');
+      expect(entry.toLowerCase()).toContain('diffuser');
+      expect(entry.toLowerCase()).not.toMatch(/venturi|narrow gap|tunnel/);
+      // Card still renders: "Title — body" split works
+      const { title, body } = splitCopy(entry);
+      expect(title.length).toBeGreaterThan(0);
+      expect(body.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('F1 floor card keeps the base ground-effect copy; other F2/F3 parts inherit the base copy', () => {
+    expect(eduEntryFor('floor', 'F1')).toBe(EDU_COPY.floor);
+    expect(eduEntryFor('frontWing', 'F2')).toBe(EDU_COPY.frontWing);
+    expect(eduEntryFor('rearWing', 'F3')).toBe(EDU_COPY.rearWing);
+  });
+});
