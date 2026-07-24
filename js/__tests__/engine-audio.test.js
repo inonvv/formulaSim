@@ -24,6 +24,7 @@ import {
   saveAudioSettings,
   AUDIO_STORE_KEY,
 } from '../engine-audio.js';
+import { rpmInGear, rpmRatio } from '../physics.js';
 
 /* ── Mock Web Audio ─────────────────────────────────────────────── */
 
@@ -161,7 +162,7 @@ describe('EngineAudio — fundamental pitch model (EA2)', () => {
 
   it('EA2c. finite and within [30, 400] Hz for every speed 0–350', () => {
     for (let s = 0; s <= 350; s += 5) {
-      for (const type of ['F1', 'GT']) {
+      for (const type of ['F1', 'F2', 'F3', 'GT']) {
         const f = fundamentalHz(type, s);
         expect(Number.isFinite(f)).toBe(true);
         expect(f).toBeGreaterThanOrEqual(30);
@@ -180,6 +181,41 @@ describe('EngineAudio — fundamental pitch model (EA2)', () => {
       expect(f).toBeGreaterThan(prev);
       prev = f;
     }
+  });
+});
+
+/* ── f2-f3-cars P2: F2/F3 engine voices ─────────────────────────── */
+
+describe('EngineAudio — F2/F3 voices + pitch ordering (P2)', () => {
+  it('P2a. F2 voice is the turbo-V6 mid ladder: (48 + rig·120)·(0.90 + 0.20·sf)', () => {
+    for (const s of [0, 80, 200, 335]) {
+      const rig = rpmInGear(s), sf = rpmRatio(s);
+      expect(fundamentalHz('F2', s)).toBeCloseTo((48 + rig * 120) * (0.90 + 0.20 * sf), 6);
+    }
+  });
+
+  it('P2b. F3 voice is the flat NA-V6 ladder: 42 + rig·100', () => {
+    for (const s of [0, 80, 200, 300]) {
+      const rig = rpmInGear(s);
+      expect(fundamentalHz('F3', s)).toBeCloseTo(42 + rig * 100, 6);
+    }
+  });
+
+  it('P2c. PITCH ORDERING (hard requirement): F1 > F2 > F3 > GT at 200 km/h mid-gear and across speeds', () => {
+    for (const s of [60, 120, 200, 300]) {
+      const f1 = fundamentalHz('F1', s);
+      const f2 = fundamentalHz('F2', s);
+      const f3 = fundamentalHz('F3', s);
+      const gt = fundamentalHz('GT', s);
+      expect(f1).toBeGreaterThan(f2);
+      expect(f2).toBeGreaterThan(f3);
+      expect(f3).toBeGreaterThan(gt);
+    }
+  });
+
+  it('P2d. F2/F3 stay monotonic within a gear (55 → 99 km/h)', () => {
+    expect(fundamentalHz('F2', 99)).toBeGreaterThan(fundamentalHz('F2', 55));
+    expect(fundamentalHz('F3', 99)).toBeGreaterThan(fundamentalHz('F3', 55));
   });
 });
 

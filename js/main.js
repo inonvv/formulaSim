@@ -12,7 +12,7 @@ import { RenderPass }      from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass }      from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass }      from 'three/addons/postprocessing/OutputPass.js';
-import { buildCar, getCarMeta, WHEEL_NAMES, buildSteeringWheel } from './cars.js';
+import { buildCar, getCarMeta, clampToVMax, WHEEL_NAMES, buildSteeringWheel } from './cars.js';
 import { CAR_MANIFEST } from './car-manifest.js';
 import { createDebugOverlay } from './debug-overlay.js';
 import { buildTrack, buildSkyline } from './track.js';
@@ -890,6 +890,8 @@ document.querySelectorAll('.car-btn').forEach(btn => {
     btn.setAttribute('aria-pressed', 'true');
 
     await spawnCar(type);
+    // Re-clamp the speed target to the NEW car's vMax (e.g. 350 → 310 on GT).
+    setSpeed(state.targetSpeed);
     syncEffects();
   });
 });
@@ -899,9 +901,13 @@ const speedSlider = document.getElementById('speed-slider');
 const speedLabel  = document.getElementById('speed-label-val');
 
 function setSpeed(v) {
-  state.targetSpeed = v;
-  speedSlider.value = v;
-  speedLabel.textContent = v;
+  // Per-car top-speed clamp: the slider max stays 350 globally, but the
+  // attainable target is the active car's vMax (F1 350 / F2 335 / F3 300 /
+  // GT 310). The HUD readout shows the real cap.
+  const clamped = clampToVMax(state.carType, v);
+  state.targetSpeed = clamped;
+  speedSlider.value = clamped;
+  speedLabel.textContent = clamped;
   syncEffects();
 }
 

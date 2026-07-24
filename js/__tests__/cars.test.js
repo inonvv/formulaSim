@@ -886,3 +886,21 @@ describe('F2/F3 restored builders (P1)', () => {
     }
   });
 });
+
+/* ── f2-f3-cars P2: per-car top-speed clamp ──────────────────────── */
+describe('clampToVMax (P2)', () => {
+  it('clamps a 350 request to each car\'s vMax (incl. the NEW GT 310 cap)', async () => {
+    const { clampToVMax } = await import('../cars.js');
+    expect(clampToVMax('F1', 350)).toBe(350);
+    expect(clampToVMax('F2', 350)).toBe(335);
+    expect(clampToVMax('F3', 350)).toBe(300);
+    expect(clampToVMax('GT', 350)).toBe(310);   // intentional realism change (was 350)
+  });
+
+  it('leaves sub-cap speeds untouched; unknown type uses the F1 cap', async () => {
+    const { clampToVMax } = await import('../cars.js');
+    expect(clampToVMax('F3', 200)).toBe(200);
+    expect(clampToVMax('GT', 0)).toBe(0);
+    expect(clampToVMax('UNKNOWN', 350)).toBe(350);
+  });
+});

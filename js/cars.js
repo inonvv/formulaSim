@@ -672,6 +672,14 @@ export async function buildCar(type) {
 }
 
 export function getCarMeta(type) { return CAR_META[type] || CAR_META.F1; }
+
+/**
+ * Clamp a speed request [km/h] to the car's realistic top speed. The UI
+ * slider max stays 350 globally; the attainable target is per-car.
+ */
+export function clampToVMax(type, speed) {
+  return Math.min(speed, getCarMeta(type).vMax);
+}
 export const WHEEL_NAMES = ['wFL', 'wFR', 'wRL', 'wRR'];
 
 /**

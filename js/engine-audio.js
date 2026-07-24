@@ -56,11 +56,16 @@ export function saveAudioSettings(storage, settings) {
  * Fundamental engine frequency (Hz) for a car type at a speed.
  * F1: in-gear ladder 55 + rig·165, scaled by (0.85 + 0.3·rpmRatio) so each
  *     successive gear screams higher (~58 → ~250 Hz downshift ladder).
+ * F2: turbo V6 — mid ladder (48 + rig·120)·(0.90 + 0.20·rpmRatio).
+ * F3: NA V6 growl 42 + rig·100 — flat like GT but pitched higher.
  * GT: flat-6 growl 40 + rig·95 — same band every gear.
+ * Pitch ordering at any speed: F1 > F2 > F3 > GT.
  */
 export function fundamentalHz(type, speed) {
   const rig = rpmInGear(speed);
   if (type === 'GT') return 40 + rig * 95;
+  if (type === 'F3') return 42 + rig * 100;
+  if (type === 'F2') return (48 + rig * 120) * (0.90 + 0.20 * rpmRatio(speed));
   return (55 + rig * 165) * (0.85 + 0.3 * rpmRatio(speed));
 }
 
