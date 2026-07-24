@@ -37,6 +37,33 @@ const F1_CP_TABLE = [
 ];
 const CP_TABLES = {
   F1: { top: F1_CP_TABLE, under: F1_CP_TABLE },
+  F2: {
+    // Dallara F2/18 — conventional aero. Flat stepped floor + strong
+    // diffuser; the under-profile is diffuser-peaked (z 1.55), NOT F1's
+    // z = 1.4 venturi throat.
+    top: [
+      [-2.30,  0.85], [-2.15, -1.40], [-1.50, -0.45],
+      [ 0.00, -0.25], [ 1.20, -0.15], [ 1.80, -1.00],
+      [ 2.20,  0.10],
+    ],
+    under: [
+      [-2.30,  0.05], [-1.80, -0.35], [-1.50, -0.40],
+      [ 0.80, -0.40], [ 1.55, -0.85], [ 2.10,  0.00],
+    ],
+  },
+  F3: {
+    // Dallara F3/19 — flat floor, modest diffuser; the most wing-dependent
+    // car of the ladder (weakest underbody of the three formulae).
+    top: [
+      [-2.10,  0.88], [-1.95, -1.15], [-1.30, -0.40],
+      [ 0.00, -0.20], [ 1.10, -0.12], [ 1.68, -0.90],
+      [ 2.00,  0.10],
+    ],
+    under: [
+      [-2.10,  0.05], [-1.60, -0.25], [ 0.70, -0.28],
+      [ 1.45, -0.60], [ 1.95,  0.00],
+    ],
+  },
   GT: {
     top: [
       [-2.60,  0.10], [-2.35,  0.90],   // blunt-bumper stagnation
@@ -130,6 +157,38 @@ const ROLE_CP = {
     nose:             { bias:  0.55, scale: 0.50 },
     monocoque:        { bias: -0.10, scale: 0.30 },
   },
+  // F2 (conventional aero): wings do proportionally more of the work than
+  // the floor — |frontWing/floor| ratio 3.2 vs F1's 2.4.
+  F2: {
+    frontWing:        { bias: -1.45, scale: 0.95 },
+    frontWingFlap:    { bias: -1.20, scale: 0.80 },
+    rearWing:         { bias: -1.35, scale: 0.90 },
+    rearWingFlap:     { bias: -1.10, scale: 0.80 },
+    diffuser:         { bias: -0.95, scale: 0.70 },
+    floor:            { bias: -0.45, scale: 0.50 },
+    sidepodInlet:     { bias:  0.35, scale: 0.50 },
+    sidepodTop:       { bias: -0.30, scale: 0.50 },
+    sidepodSide:      { bias: -0.20, scale: 0.40 },
+    engineCover:      { bias: -0.25, scale: 0.40 },
+    nose:             { bias:  0.55, scale: 0.60 },
+    monocoque:        { bias: -0.15, scale: 0.35 },
+  },
+  // F3: F2 roles ×0.85 on bias, except the floor/diffuser (weakest underbody
+  // of the ladder) and a blunter nose — the most wing-dominant car (ratio 4.1).
+  F3: {
+    frontWing:        { bias: -1.2325, scale: 0.95 },
+    frontWingFlap:    { bias: -1.02,   scale: 0.80 },
+    rearWing:         { bias: -1.1475, scale: 0.90 },
+    rearWingFlap:     { bias: -0.935,  scale: 0.80 },
+    diffuser:         { bias: -0.70,   scale: 0.60 },
+    floor:            { bias: -0.30,   scale: 0.40 },
+    sidepodInlet:     { bias:  0.2975, scale: 0.50 },
+    sidepodTop:       { bias: -0.255,  scale: 0.50 },
+    sidepodSide:      { bias: -0.17,   scale: 0.40 },
+    engineCover:      { bias: -0.2125, scale: 0.40 },
+    nose:             { bias:  0.58,   scale: 0.60 },
+    monocoque:        { bias: -0.1275, scale: 0.35 },
+  },
   GT: {
     frontBumper:      { bias:  0.78, scale: 0.35 },   // blunt-body stagnation
     hood:             { bias: -0.35, scale: 0.45 },   // hood-lip acceleration
@@ -184,6 +243,47 @@ export const CFD_PATCHES = {
     // Rear wing DRS flap
     { w: 1.86, h: 0.26, cx:  0,      cy:  1.06,  cz:  1.91, rx: -π/2, ry: 0,    rz: 0.14, role: 'rearWingFlap' },
   ],
+  // F2 — derived from the F1 set: x ×(0.84/0.90), y ×(0.92/1.06), z matched
+  // per named feature to the F2 builder geometry (fw −2.48, rw/diffuser 1.80,
+  // sidepod inlet −0.55) — NOT blanket z-scaling.
+  F2: [
+    { w: 1.62, h: 0.32, cx:  0,      cy:  0.022, cz: -2.48, rx: -π/2, ry: 0,    rz: 0,    role: 'frontWing' },
+    { w: 1.57, h: 0.21, cx:  0,      cy:  0.072, cz: -2.41, rx: -π/2, ry: 0,    rz: 0.10, role: 'frontWingFlap' },
+    { w: 1.44, h: 0.17, cx:  0,      cy:  0.114, cz: -2.34, rx: -π/2, ry: 0,    rz: 0.18, role: 'frontWingFlap' },
+    { w: 0.30, h: 0.86, cx:  0,      cy:  0.11,  cz: -2.02, rx: 0,    ry: 0,    rz: 0,    role: 'nose' },
+    { w: 0.58, h: 1.13, cx:  0,      cy:  0.40,  cz: -0.08, rx: -π/2, ry: 0,    rz: 0,    role: 'monocoque' },
+    { w: 0.06, h: 0.28, cx: -0.449,  cy:  0.19,  cz: -0.55, rx: 0,    ry:  π/2, rz: 0,    role: 'sidepodInlet' },
+    { w: 0.06, h: 0.28, cx:  0.449,  cy:  0.19,  cz: -0.55, rx: 0,    ry: -π/2, rz: 0,    role: 'sidepodInlet' },
+    { w: 0.33, h: 1.71, cx: -0.465,  cy:  0.40,  cz:  0.22, rx: -π/2, ry: 0,    rz: 0,    role: 'sidepodTop' },
+    { w: 0.33, h: 1.71, cx:  0.465,  cy:  0.40,  cz:  0.22, rx: -π/2, ry: 0,    rz: 0,    role: 'sidepodTop' },
+    { w: 0.30, h: 1.71, cx: -0.62,   cy:  0.19,  cz:  0.26, rx: 0,    ry:  π/2, rz: 0,    role: 'sidepodSide' },
+    { w: 0.30, h: 1.71, cx:  0.62,   cy:  0.19,  cz:  0.26, rx: 0,    ry: -π/2, rz: 0,    role: 'sidepodSide' },
+    { w: 0.47, h: 1.08, cx:  0,      cy:  0.48,  cz:  1.44, rx: -π/2, ry: 0,    rz: 0,    role: 'engineCover' },
+    { w: 1.28, h: 3.35, cx:  0,      cy:  0.007, cz:  0.00, rx:  π/2, ry: 0,    rz: 0,    role: 'floor' },
+    { w: 1.06, h: 0.92, cx:  0,      cy: -0.042, cz:  1.80, rx:  π/2, ry: 0,    rz: 0.26, role: 'diffuser' },
+    { w: 1.79, h: 0.34, cx:  0,      cy:  0.90,  cz:  1.80, rx: -π/2, ry: 0,    rz: 0,    role: 'rearWing' },
+    { w: 1.74, h: 0.24, cx:  0,      cy:  0.97,  cz:  1.76, rx: -π/2, ry: 0,    rz: 0.14, role: 'rearWingFlap' },
+  ],
+  // F3 — same derivation: x ×(0.76/0.90), y ×(0.92/1.06), feature-matched z
+  // (fw −2.24, rw/diffuser 1.68, sidepod inlet vane −0.50).
+  F3: [
+    { w: 1.48, h: 0.29, cx:  0,      cy:  0.020, cz: -2.24, rx: -π/2, ry: 0,    rz: 0,    role: 'frontWing' },
+    { w: 1.42, h: 0.19, cx:  0,      cy:  0.068, cz: -2.17, rx: -π/2, ry: 0,    rz: 0.10, role: 'frontWingFlap' },
+    { w: 1.30, h: 0.15, cx:  0,      cy:  0.102, cz: -2.12, rx: -π/2, ry: 0,    rz: 0.18, role: 'frontWingFlap' },
+    { w: 0.27, h: 0.79, cx:  0,      cy:  0.10,  cz: -1.90, rx: 0,    ry: 0,    rz: 0,    role: 'nose' },
+    { w: 0.52, h: 1.03, cx:  0,      cy:  0.36,  cz: -0.08, rx: -π/2, ry: 0,    rz: 0,    role: 'monocoque' },
+    { w: 0.055,h: 0.24, cx: -0.44,   cy:  0.18,  cz: -0.50, rx: 0,    ry:  π/2, rz: 0,    role: 'sidepodInlet' },
+    { w: 0.055,h: 0.24, cx:  0.44,   cy:  0.18,  cz: -0.50, rx: 0,    ry: -π/2, rz: 0,    role: 'sidepodInlet' },
+    { w: 0.30, h: 1.45, cx: -0.45,   cy:  0.36,  cz:  0.24, rx: -π/2, ry: 0,    rz: 0,    role: 'sidepodTop' },
+    { w: 0.30, h: 1.45, cx:  0.45,   cy:  0.36,  cz:  0.24, rx: -π/2, ry: 0,    rz: 0,    role: 'sidepodTop' },
+    { w: 0.27, h: 1.45, cx: -0.55,   cy:  0.17,  cz:  0.24, rx: 0,    ry:  π/2, rz: 0,    role: 'sidepodSide' },
+    { w: 0.27, h: 1.45, cx:  0.55,   cy:  0.17,  cz:  0.24, rx: 0,    ry: -π/2, rz: 0,    role: 'sidepodSide' },
+    { w: 0.42, h: 0.97, cx:  0,      cy:  0.43,  cz:  1.38, rx: -π/2, ry: 0,    rz: 0,    role: 'engineCover' },
+    { w: 1.14, h: 3.02, cx:  0,      cy:  0.007, cz:  0.00, rx:  π/2, ry: 0,    rz: 0,    role: 'floor' },
+    { w: 0.96, h: 0.80, cx:  0,      cy: -0.038, cz:  1.68, rx:  π/2, ry: 0,    rz: 0.24, role: 'diffuser' },
+    { w: 1.62, h: 0.30, cx:  0,      cy:  0.82,  cz:  1.68, rx: -π/2, ry: 0,    rz: 0,    role: 'rearWing' },
+    { w: 1.57, h: 0.21, cx:  0,      cy:  0.89,  cz:  1.64, rx: -π/2, ry: 0,    rz: 0.14, role: 'rearWingFlap' },
+  ],
   GT: [
     { w: 1.84, h: 0.40, cx:  0,      cy:  0.00,  cz: -2.32, rx: -π/2, ry: 0,    rz: 0,    role: 'frontBumper' },
     { w: 1.70, h: 0.50, cx:  0,      cy:  0.60,  cz: -2.10, rx: -π/2, ry: 0,    rz:-0.20, role: 'hood' },
@@ -195,8 +295,8 @@ export const CFD_PATCHES = {
   ],
 };
 
-/* ── Zone blob definitions ────────────────────────────────────────── */
-const ZONE_BLOBS = {
+/* ── Zone blob definitions (exported for unit tests) ──────────────── */
+export const ZONE_BLOBS = {
   F1: [
     { role: 'stagnation',   color: 0xff2200, r: 0.26, intensity: 0.90, phase: 0.0, pos: [ 0,      0.12, -2.88] },
     { role: 'suction',      color: 0x0044ff, r: 0.42, intensity: 0.85, phase: 1.1, pos: [ 0,      0.02, -2.64] },
@@ -210,6 +310,34 @@ const ZONE_BLOBS = {
     { role: 'rearWing',     color: 0xff2200, r: 0.30, intensity: 0.65, phase: 0.8, pos: [ 0,      0.98,  1.95] },
     { role: 'fwCenter',     color: 0x0044ff, r: 0.16, intensity: 0.50, phase: 0.7, pos: [ 0,      0.10, -2.72] },
     { role: 'cockpit',      color: 0xff6600, r: 0.20, intensity: 0.70, phase: 1.4, pos: [ 0,      0.52, -0.45] },
+  ],
+  F2: [
+    { role: 'stagnation',   color: 0xff2200, r: 0.24, intensity: 0.90, phase: 0.0, pos: [ 0,      0.10, -2.64] },
+    { role: 'suction',      color: 0x0044ff, r: 0.39, intensity: 0.85, phase: 1.1, pos: [ 0,      0.02, -2.40] },
+    { role: 'fwTipL',       color: 0x2266ff, r: 0.17, intensity: 0.70, phase: 0.6, pos: [-0.82,   0.02, -2.48] },
+    { role: 'fwTipR',       color: 0x2266ff, r: 0.17, intensity: 0.70, phase: 0.6, pos: [ 0.82,   0.02, -2.48] },
+    { role: 'sidepodInlet', color: 0xff4400, r: 0.20, intensity: 0.70, phase: 0.5, pos: [-0.449,  0.19, -0.55] },
+    { role: 'sidepodInlet', color: 0xff4400, r: 0.20, intensity: 0.70, phase: 0.5, pos: [ 0.449,  0.19, -0.55] },
+    { role: 'undercut',     color: 0x00aaff, r: 0.19, intensity: 0.60, phase: 1.8, pos: [-0.57,   0.06,  0.28] },
+    { role: 'undercut',     color: 0x00aaff, r: 0.19, intensity: 0.60, phase: 1.8, pos: [ 0.57,   0.06,  0.28] },
+    { role: 'diffuser',     color: 0x0066ff, r: 0.51, intensity: 0.85, phase: 2.2, pos: [ 0,     -0.04,  1.80] },
+    { role: 'rearWing',     color: 0xff2200, r: 0.28, intensity: 0.65, phase: 0.8, pos: [ 0,      0.90,  1.80] },
+    { role: 'fwCenter',     color: 0x0044ff, r: 0.15, intensity: 0.50, phase: 0.7, pos: [ 0,      0.10, -2.48] },
+    { role: 'cockpit',      color: 0xff6600, r: 0.19, intensity: 0.70, phase: 1.4, pos: [ 0,      0.45, -0.42] },
+  ],
+  F3: [
+    { role: 'stagnation',   color: 0xff2200, r: 0.22, intensity: 0.90, phase: 0.0, pos: [ 0,      0.10, -2.40] },
+    { role: 'suction',      color: 0x0044ff, r: 0.35, intensity: 0.85, phase: 1.1, pos: [ 0,      0.02, -2.16] },
+    { role: 'fwTipL',       color: 0x2266ff, r: 0.15, intensity: 0.70, phase: 0.6, pos: [-0.75,   0.02, -2.24] },
+    { role: 'fwTipR',       color: 0x2266ff, r: 0.15, intensity: 0.70, phase: 0.6, pos: [ 0.75,   0.02, -2.24] },
+    { role: 'sidepodInlet', color: 0xff4400, r: 0.18, intensity: 0.70, phase: 0.5, pos: [-0.44,   0.18, -0.50] },
+    { role: 'sidepodInlet', color: 0xff4400, r: 0.18, intensity: 0.70, phase: 0.5, pos: [ 0.44,   0.18, -0.50] },
+    { role: 'undercut',     color: 0x00aaff, r: 0.17, intensity: 0.60, phase: 1.8, pos: [-0.52,   0.05,  0.26] },
+    { role: 'undercut',     color: 0x00aaff, r: 0.17, intensity: 0.60, phase: 1.8, pos: [ 0.52,   0.05,  0.26] },
+    { role: 'diffuser',     color: 0x0066ff, r: 0.46, intensity: 0.85, phase: 2.2, pos: [ 0,     -0.04,  1.68] },
+    { role: 'rearWing',     color: 0xff2200, r: 0.26, intensity: 0.65, phase: 0.8, pos: [ 0,      0.82,  1.68] },
+    { role: 'fwCenter',     color: 0x0044ff, r: 0.14, intensity: 0.50, phase: 0.7, pos: [ 0,      0.10, -2.24] },
+    { role: 'cockpit',      color: 0xff6600, r: 0.18, intensity: 0.70, phase: 1.4, pos: [ 0,      0.42, -0.39] },
   ],
   GT: [
     { role: 'stagnation',   color: 0xff2200, r: 0.42, intensity: 0.80, phase: 0.0, pos: [ 0,      0.08, -2.48] },
@@ -231,6 +359,22 @@ const VORTEX_CORES = {
     { x:  0.61, y:  0.06, z:  0.10, sign: -1, radius: 0.18, length: 1.40, role: 'sidepodTop', dz: -0.18 }, // sidepod undercut R
     { x: -0.48, y: -0.04, z:  2.10, sign:  1, radius: 0.26, length: 1.43, role: 'diffuser',   dz: 0.17 }, // diffuser L
     { x:  0.48, y: -0.04, z:  2.10, sign: -1, radius: 0.26, length: 1.43, role: 'diffuser',   dz: 0.17 }, // diffuser R
+  ],
+  F2: [
+    { x: -0.82, y:  0.02, z: -2.48, sign:  1, radius: 0.13, length: 0.95, role: 'frontWing',  dz: 0    },
+    { x:  0.82, y:  0.02, z: -2.48, sign: -1, radius: 0.13, length: 0.95, role: 'frontWing',  dz: 0    },
+    { x: -0.57, y:  0.06, z:  0.10, sign:  1, radius: 0.17, length: 1.31, role: 'sidepodTop', dz: -0.18 },
+    { x:  0.57, y:  0.06, z:  0.10, sign: -1, radius: 0.17, length: 1.31, role: 'sidepodTop', dz: -0.18 },
+    { x: -0.45, y: -0.04, z:  1.97, sign:  1, radius: 0.24, length: 1.34, role: 'diffuser',   dz: 0.17 },
+    { x:  0.45, y: -0.04, z:  1.97, sign: -1, radius: 0.24, length: 1.34, role: 'diffuser',   dz: 0.17 },
+  ],
+  F3: [
+    { x: -0.75, y:  0.02, z: -2.24, sign:  1, radius: 0.12, length: 0.86, role: 'frontWing',  dz: 0    },
+    { x:  0.75, y:  0.02, z: -2.24, sign: -1, radius: 0.12, length: 0.86, role: 'frontWing',  dz: 0    },
+    { x: -0.52, y:  0.05, z:  0.10, sign:  1, radius: 0.15, length: 1.20, role: 'sidepodTop', dz: -0.18 },
+    { x:  0.52, y:  0.05, z:  0.10, sign: -1, radius: 0.15, length: 1.20, role: 'sidepodTop', dz: -0.18 },
+    { x: -0.41, y: -0.04, z:  1.84, sign:  1, radius: 0.21, length: 1.23, role: 'diffuser',   dz: 0.16 },
+    { x:  0.41, y: -0.04, z:  1.84, sign: -1, radius: 0.21, length: 1.23, role: 'diffuser',   dz: 0.16 },
   ],
   GT: [
     // Splitter-edge vortices — the GT3 RS front splitter sheds a tip pair.
@@ -264,7 +408,7 @@ export function resolveVortexCores(type, anchors) {
  * Each lane is a line strip from zStart to zEnd at a fixed (x, y) lane.
  * waveX/waveY: lateral + vertical oscillation amplitude.
  * -------------------------------------------------------------------- */
-const STREAMLINE_DEFS = {
+export const STREAMLINE_DEFS = {
   F1: [
     { x:  0.00, y: 0.52, zStart: -2.85, zEnd: 2.70, waveX: 0.000, waveY: 0.030 }, // centerline
     { x: -0.22, y: 0.40, zStart: -2.85, zEnd: 2.50, waveX: 0.012, waveY: 0.025 }, // monocoque L
@@ -274,6 +418,26 @@ const STREAMLINE_DEFS = {
     { x: -0.72, y: 0.22, zStart: -2.85, zEnd: 2.20, waveX: 0.010, waveY: 0.018 }, // sidepod outer L
     { x:  0.72, y: 0.22, zStart: -2.85, zEnd: 2.20, waveX:-0.010, waveY: 0.018 }, // sidepod outer R
     { x:  0.00, y: 0.00, zStart: -2.10, zEnd: 2.15, waveX: 0.000, waveY: 0.012 }, // floor / ground effect
+  ],
+  // F2: 8 lanes — F1-like, narrowed (x ×0.93, y ×0.87, z span ×0.94).
+  F2: [
+    { x:  0.00, y: 0.45, zStart: -2.68, zEnd: 2.54, waveX: 0.000, waveY: 0.030 }, // centerline
+    { x: -0.21, y: 0.35, zStart: -2.68, zEnd: 2.35, waveX: 0.012, waveY: 0.025 }, // monocoque L
+    { x:  0.21, y: 0.35, zStart: -2.68, zEnd: 2.35, waveX:-0.012, waveY: 0.025 }, // monocoque R
+    { x: -0.50, y: 0.40, zStart: -2.68, zEnd: 2.16, waveX: 0.008, waveY: 0.020 }, // sidepod top L
+    { x:  0.50, y: 0.40, zStart: -2.68, zEnd: 2.16, waveX:-0.008, waveY: 0.020 }, // sidepod top R
+    { x: -0.67, y: 0.19, zStart: -2.68, zEnd: 2.07, waveX: 0.010, waveY: 0.018 }, // sidepod outer L
+    { x:  0.67, y: 0.19, zStart: -2.68, zEnd: 2.07, waveX:-0.010, waveY: 0.018 }, // sidepod outer R
+    { x:  0.00, y: 0.00, zStart: -1.97, zEnd: 2.02, waveX: 0.000, waveY: 0.012 }, // floor
+  ],
+  // F3: 6 lanes — compact body drops the sidepod-outer pair.
+  F3: [
+    { x:  0.00, y: 0.45, zStart: -2.44, zEnd: 2.31, waveX: 0.000, waveY: 0.030 }, // centerline
+    { x: -0.19, y: 0.35, zStart: -2.44, zEnd: 2.14, waveX: 0.012, waveY: 0.025 }, // monocoque L
+    { x:  0.19, y: 0.35, zStart: -2.44, zEnd: 2.14, waveX:-0.012, waveY: 0.025 }, // monocoque R
+    { x: -0.46, y: 0.40, zStart: -2.44, zEnd: 1.97, waveX: 0.008, waveY: 0.020 }, // sidepod top L
+    { x:  0.46, y: 0.40, zStart: -2.44, zEnd: 1.97, waveX:-0.008, waveY: 0.020 }, // sidepod top R
+    { x:  0.00, y: 0.00, zStart: -1.80, zEnd: 1.84, waveX: 0.000, waveY: 0.012 }, // floor
   ],
   GT: [
     { x:  0.00, y: 0.68, zStart: -2.40, zEnd: 2.60, waveX: 0.000, waveY: 0.030 },

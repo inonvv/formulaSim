@@ -557,3 +557,25 @@ describe('AirflowEffect underfloor ribbons', () => {
     }
   });
 });
+
+/* ── f2-f3-cars P4: F2/F3 underfloor delegation ─────────────────── */
+describe('F2/F3 venturi streaks inherit each car floor character (P4)', () => {
+  it('underfloorChannelCp delegates to CP_TABLES[type].under for F2/F3 (no code change needed)', async () => {
+    const { underfloorChannelCp } = await import('../effects.js');
+    const { lerpCpProfile }       = await import('../cfd-effect.js');
+    for (const z of [-2.0, -1.0, 0, 0.8, 1.55, 2.0]) {
+      expect(underfloorChannelCp(z, 'F2')).toBeCloseTo(lerpCpProfile(z, 'F2', 'under'), 10);
+      expect(underfloorChannelCp(z, 'F3')).toBeCloseTo(lerpCpProfile(z, 'F3', 'under'), 10);
+    }
+  });
+
+  it('F2 is diffuser-peaked (z 1.55, Cp −0.85), NOT F1\'s z=1.4 venturi throat; F3 gentler still', async () => {
+    const { underfloorChannelCp } = await import('../effects.js');
+    expect(underfloorChannelCp(1.55, 'F2')).toBeCloseTo(-0.85, 5);
+    expect(underfloorChannelCp(1.45, 'F3')).toBeCloseTo(-0.60, 5);
+    // At F1's venturi throat z=1.4 the F1 channel pulls hardest of the three.
+    const at14 = t => Math.abs(underfloorChannelCp(1.4, t));
+    expect(at14('F1')).toBeGreaterThan(at14('F2'));
+    expect(at14('F2')).toBeGreaterThan(at14('F3'));
+  });
+});
