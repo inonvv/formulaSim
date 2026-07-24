@@ -48,6 +48,28 @@ export function rpmRatio(speed, maxSpeed = 350) {
 }
 
 /**
+ * Speed band [lo, hi) per gear index 1–8 — MUST mirror gearFromSpeed above.
+ * Gear 8's band is closed at 350 (rpmInGear clamps there).
+ */
+const GEAR_BANDS = [
+  [5, 50], [50, 100], [100, 160], [160, 210],
+  [210, 265], [265, 310], [310, 340], [340, 350],
+];
+
+/**
+ * Position 0..1 inside the current gear's speed band — the "revs" of an
+ * engine that climbs through each gear and drops back at every shift.
+ * Gear 0 (neutral/idle) returns a constant 0.12 idle tick-over.
+ * @param {number} speed - km/h
+ */
+export function rpmInGear(speed) {
+  const gear = gearFromSpeed(speed);
+  if (gear === 0) return 0.12;
+  const [lo, hi] = GEAR_BANDS[gear - 1];
+  return Math.min(Math.max((speed - lo) / (hi - lo), 0), 1);
+}
+
+/**
  * Asymmetric speed lerp — accelerates slower than it decelerates.
  * Snaps to target when within ±0.5 km/h.
  * @param {number} cur       - current speed

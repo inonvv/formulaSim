@@ -4,6 +4,7 @@ import {
   wheelRotationRate,
   aeroSquishFactor,
   rpmRatio,
+  rpmInGear,
   lerpSpeed,
 } from '../physics.js';
 
@@ -116,6 +117,60 @@ describe('rpmRatio', () => {
 
   it('accepts a custom maxSpeed', () => {
     expect(rpmRatio(100, 200)).toBeCloseTo(0.5, 5);
+  });
+});
+
+describe('rpmInGear', () => {
+  // gearFromSpeed bands: 0 <5 | 1 5–49 | 2 50–99 | 3 100–159 | 4 160–209
+  //                      5 210–264 | 6 265–309 | 7 310–339 | 8 ≥340
+  const BANDS = [
+    [5, 50], [50, 100], [100, 160], [160, 210],
+    [210, 265], [265, 310], [310, 340], [340, 350],
+  ];
+
+  it('returns the 0.12 idle constant in gear 0 (speed < 5)', () => {
+    expect(rpmInGear(0)).toBeCloseTo(0.12, 5);
+    expect(rpmInGear(4.9)).toBeCloseTo(0.12, 5);
+  });
+
+  it('is ~0 at every gear band start and ~1 just below the next boundary', () => {
+    for (const [lo, hi] of BANDS) {
+      expect(rpmInGear(lo)).toBeCloseTo(0, 5);
+      expect(rpmInGear(hi - 0.01)).toBeGreaterThan(0.99);
+    }
+  });
+
+  it('stays within [0, 1] for all speeds 0–400', () => {
+    for (let s = 0; s <= 400; s += 1) {
+      const r = rpmInGear(s);
+      expect(r).toBeGreaterThanOrEqual(0);
+      expect(r).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('is monotonic (strictly increasing) inside each gear band', () => {
+    for (const [lo, hi] of BANDS) {
+      let prev = -1;
+      for (let s = lo; s < hi; s += (hi - lo) / 10) {
+        const r = rpmInGear(s);
+        expect(r).toBeGreaterThan(prev);
+        prev = r;
+      }
+    }
+  });
+
+  it('drops at each shift boundary — 49→50 goes near-1 → near-0', () => {
+    expect(rpmInGear(49.9)).toBeGreaterThan(0.95);
+    expect(rpmInGear(50)).toBeCloseTo(0, 5);
+    // Every up-shift boundary resets: value just below >> value at boundary.
+    for (const [, hi] of BANDS.slice(0, -1)) {
+      expect(rpmInGear(hi - 0.01)).toBeGreaterThan(rpmInGear(hi) + 0.9);
+    }
+  });
+
+  it('clamps to 1 above 350 km/h (top of gear 8)', () => {
+    expect(rpmInGear(350)).toBe(1);
+    expect(rpmInGear(400)).toBe(1);
   });
 });
 
