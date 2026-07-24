@@ -146,10 +146,18 @@ describe('getCarMeta', () => {
     expect(getCarMeta('F1').label).toBe('Formula One');
   });
 
-  it('F2/F3 removed — fall back to F1 meta', async () => {
+  it('F2/F3 restored — own meta labels', async () => {
     const { getCarMeta } = await import('../cars.js');
-    expect(getCarMeta('F2').label).toBe('Formula One');
-    expect(getCarMeta('F3').label).toBe('Formula One');
+    expect(getCarMeta('F2').label).toBe('Formula Two');
+    expect(getCarMeta('F3').label).toBe('Formula Three');
+  });
+
+  it('every car publishes a realistic vMax (F1 350 / F2 335 / F3 300 / GT 310)', async () => {
+    const { getCarMeta } = await import('../cars.js');
+    expect(getCarMeta('F1').vMax).toBe(350);
+    expect(getCarMeta('F2').vMax).toBe(335);
+    expect(getCarMeta('F3').vMax).toBe(300);
+    expect(getCarMeta('GT').vMax).toBe(310);
   });
 
   it('returns correct label for GT', async () => {
@@ -190,10 +198,16 @@ describe('buildCar', () => {
     expect(car.name).toBe('car');
   });
 
-  it('buildCar("F2")/("F3") removed types fall back to F1 build', async () => {
+  it('buildCar("F2")/("F3") build their OWN procedural cars (not the F1 fallback)', async () => {
     const { buildCar } = await import('../cars.js');
-    expect((await buildCar('F2')).name).toBe('car');
-    expect((await buildCar('F3')).name).toBe('car');
+    const f2 = await buildCar('F2');
+    const f3 = await buildCar('F3');
+    expect(f2.name).toBe('car');
+    expect(f3.name).toBe('car');
+    // Distinctness proof: each car's measured wheel radius is its own spec,
+    // not F1's 0.345.
+    expect(f2.userData.measure.wheelRadius).toBeCloseTo(0.328, 3);
+    expect(f3.userData.measure.wheelRadius).toBeCloseTo(0.300, 3);
   });
 
   it('buildCar("GT") resolves to group named "car"', async () => {
@@ -742,9 +756,18 @@ describe('buildSteeringWheel (P5)', () => {
 
   it('unknown type falls back to the F1 wheel', async () => {
     const { buildSteeringWheel } = await import('../cars.js');
-    const w = buildSteeringWheel('F2');
+    const w = buildSteeringWheel('UNKNOWN');
     expect(w.children.some(c => c.geometry?.type === 'TorusGeometry')).toBe(false);
     expect(w.children.length).toBe(4);
+  });
+
+  it('F2/F3 use the formula-style rect wheel (by design, not fallback)', async () => {
+    const { buildSteeringWheel } = await import('../cars.js');
+    for (const t of ['F2', 'F3']) {
+      const w = buildSteeringWheel(t);
+      expect(w.children.some(c => c.geometry?.type === 'TorusGeometry')).toBe(false);
+      expect(w.children.length).toBe(4);
+    }
   });
 });
 
@@ -768,5 +791,98 @@ describe('GLB fallback acceptance (Phase 6)', () => {
     grp.traverse(o => { if (o.name === 'wFL') wFL = o; });
     expect(wFL).not.toBeNull();
     expect(grp.position.y + wFL.position.y - 0.338).toBeCloseTo(-0.34, 3);
+  });
+});
+
+/* ── F2/F3 restored builders (f2-f3-cars P1) ─────────────────────── */
+describe('F2/F3 restored builders (P1)', () => {
+  beforeEach(() => { _loaderManifestResult = null; });
+
+  function findWheels(car) {
+    const w = {};
+    car.traverse(o => { if (['wFL','wFR','wRL','wRR'].includes(o.name)) w[o.name] = o; });
+    return w;
+  }
+
+  it('F2 measure contract: r 0.328, wheelbase 2.86, track 1.52, wheelWidth 0.318', async () => {
+    const { buildCar } = await import('../cars.js');
+    const m = (await buildCar('F2')).userData.measure;
+    expect(m.wheelRadius).toBeCloseTo(0.328, 3);
+    expect(m.wheelbase).toBeCloseTo(2.86, 3);       // 1.48 − (−1.38)
+    expect(m.trackWidth).toBeCloseTo(1.52, 3);      // 2 × 0.76
+    expect(m.wheelWidth).toBeCloseTo(0.318, 3);
+    expect(m.groundContactY).toBeCloseTo(-0.368, 3); // −0.04 − 0.328
+  });
+
+  it('F3 measure contract: r 0.300, wheelbase 2.60, track 1.36, wheelWidth 0.290', async () => {
+    const { buildCar } = await import('../cars.js');
+    const m = (await buildCar('F3')).userData.measure;
+    expect(m.wheelRadius).toBeCloseTo(0.300, 3);
+    expect(m.wheelbase).toBeCloseTo(2.60, 3);       // 1.35 − (−1.25)
+    expect(m.trackWidth).toBeCloseTo(1.36, 3);      // 2 × 0.68
+    expect(m.wheelWidth).toBeCloseTo(0.290, 3);
+    expect(m.groundContactY).toBeCloseTo(-0.340, 3); // −0.04 − 0.300
+  });
+
+  it('baseY lands wheels on SURFACE_Y ±0.01 for both cars', async () => {
+    const { buildCar } = await import('../cars.js');
+    for (const [t, wR] of [['F2', 0.328], ['F3', 0.300]]) {
+      const car = await buildCar(t);
+      const { wFL } = findWheels(car);
+      expect(wFL).toBeDefined();
+      expect(Math.abs(car.position.y + wFL.position.y - wR - (-0.34))).toBeLessThan(0.01);
+      expect(car.userData.baseY).toBeCloseTo(car.position.y, 5);
+    }
+  });
+
+  it('wheels are left/right symmetric on both axles', async () => {
+    const { buildCar } = await import('../cars.js');
+    for (const t of ['F2', 'F3']) {
+      const w = findWheels(await buildCar(t));
+      expect(w.wFL.position.x).toBeCloseTo(-w.wFR.position.x, 5);
+      expect(w.wRL.position.x).toBeCloseTo(-w.wRR.position.x, 5);
+      expect(w.wFL.position.z).toBeCloseTo(w.wFR.position.z, 5);
+      expect(w.wRL.position.z).toBeCloseTo(w.wRR.position.z, 5);
+    }
+  });
+
+  it('anchors: all 8 feature keys + vents present; F2 fw −2.36 / rw 1.80, F3 fw −2.12 / rw 1.68', async () => {
+    const { buildCar } = await import('../cars.js');
+    const expected = { F2: { fwZ: -2.36, rwZ: 1.80 }, F3: { fwZ: -2.12, rwZ: 1.68 } };
+    for (const t of ['F2', 'F3']) {
+      const a = (await buildCar(t)).userData.measure.anchors;
+      ['cockpit','halo','frontWing','rearWing','sidepodTop','floor','diffuser','noseTip']
+        .forEach(k => expect(a[k]).toBeDefined());
+      expect(a.frontWing.z).toBeCloseTo(expected[t].fwZ, 3);
+      expect(a.rearWing.z).toBeCloseTo(expected[t].rwZ, 3);
+      expect(a.frontWing.z).toBeLessThan(a.rearWing.z);
+      // Vent template merged (same anchor surface as F1/GT)
+      expect(a.sidepodInletL).toBeDefined();
+      expect(a.exhaustPipe).toBeDefined();
+      expect(a.frontBrakeDuctL).toBeDefined();
+    }
+  });
+
+  it('SIZE ORDERING (hard requirement): F1 > F2 > F3 on wheelbase, track, wheel radius', async () => {
+    const { buildCar } = await import('../cars.js');
+    const f1 = (await buildCar('F1')).userData.measure;
+    const f2 = (await buildCar('F2')).userData.measure;
+    const f3 = (await buildCar('F3')).userData.measure;
+    expect(f1.wheelbase).toBeGreaterThan(f2.wheelbase);
+    expect(f2.wheelbase).toBeGreaterThan(f3.wheelbase);
+    expect(f1.trackWidth).toBeGreaterThan(f2.trackWidth);
+    expect(f2.trackWidth).toBeGreaterThan(f3.trackWidth);
+    expect(f1.wheelRadius).toBeGreaterThan(f2.wheelRadius);
+    expect(f2.wheelRadius).toBeGreaterThan(f3.wheelRadius);
+  });
+
+  it('brake calipers present inside F2/F3 wheel groups', async () => {
+    const { buildCar } = await import('../cars.js');
+    for (const t of ['F2', 'F3']) {
+      const car = await buildCar(t);
+      const names = new Set();
+      car.traverse(o => { if (o.name) names.add(o.name); });
+      ['wFL','wFR','wRL','wRR'].forEach(n => expect(names.has(`brake_cal_${n}`)).toBe(true));
+    }
   });
 });
