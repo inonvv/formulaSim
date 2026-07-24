@@ -527,8 +527,8 @@ button:focus-visible, input:focus-visible {
   outline-offset: 2px;
 }
 
-/* ─── Speed slider ───────────────────────────────────────────────── */
-#speed-slider {
+/* ─── Speed + volume sliders ─────────────────────────────────────── */
+#speed-slider, #volume-slider {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
@@ -539,7 +539,7 @@ button:focus-visible, input:focus-visible {
   cursor: pointer;
 }
 
-#speed-slider::-webkit-slider-thumb {
+#speed-slider::-webkit-slider-thumb, #volume-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 16px; height: 16px;
@@ -549,15 +549,16 @@ button:focus-visible, input:focus-visible {
   box-shadow: var(--glow) color-mix(in srgb, var(--accent) 70%, transparent);
   transition: transform 0.15s;
 }
-#speed-slider::-webkit-slider-thumb:hover { transform: scale(1.2); }
+#speed-slider::-webkit-slider-thumb:hover,
+#volume-slider::-webkit-slider-thumb:hover { transform: scale(1.2); }
 
 /* Firefox parity — mirrors the webkit track/thumb above */
-#speed-slider::-moz-range-track {
+#speed-slider::-moz-range-track, #volume-slider::-moz-range-track {
   height: 4px;
   border-radius: 2px;
   background: rgba(255,255,255,0.1);
 }
-#speed-slider::-moz-range-thumb {
+#speed-slider::-moz-range-thumb, #volume-slider::-moz-range-thumb {
   width: 16px; height: 16px;
   border: none;
   border-radius: 50%;
@@ -566,7 +567,25 @@ button:focus-visible, input:focus-visible {
   box-shadow: var(--glow) color-mix(in srgb, var(--accent) 70%, transparent);
   transition: transform 0.15s;
 }
-#speed-slider::-moz-range-thumb:hover { transform: scale(1.2); }
+#speed-slider::-moz-range-thumb:hover,
+#volume-slider::-moz-range-thumb:hover { transform: scale(1.2); }
+
+/* ─── SOUND sub-row (ENVIRONMENT section) ────────────────────────── */
+#sound-row {
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 10px;
+}
+.sound-btn {
+  flex: 0 0 auto;
+  min-width: 44px;
+  font-size: 14px;
+}
+.sound-btn.muted {
+  color: var(--dim);
+  opacity: 0.75;
+}
+#volume-slider { flex: 1; width: auto; }
 
 /* ─── Environment toggles ────────────────────────────────────────── */
 .toggle-row {

@@ -26,6 +26,7 @@ import { collectOccupancyMeshes } from './car-loader.js';
 import { createSwapGuard } from './swap-guard.js';
 import { EffectStub } from './effect-stub.js';
 import { gearFromSpeed, wheelRotationRate, aeroSquishFactor, rpmRatio, lerpSpeed } from './physics.js';
+import { EngineAudio, loadAudioSettings, saveAudioSettings } from './engine-audio.js';
 import { partForHit, eduEntryFor, splitCopy } from './edu-content.js';
 import {
   BACKGROUND_COLOR, AMBIENT_COLOR, AMBIENT_INTENSITY,
@@ -182,6 +183,10 @@ const state = {
   steeringWheel: null,    // cockpit wheel group (buildSteeringWheel), steered by steerVis
   infoMode:   false,      // P6 educational layer — part cards on hover
   _infoTargets: [],       // cached raycast subset: occupancy meshes + wheel groups
+  // Engine-sound settings — persisted to localStorage('fsim-audio'), restored
+  // on load, and deliberately NOT touched by the RESET button (user pref,
+  // not scene state).
+  audio: loadAudioSettings(window.localStorage),
 };
 
 // Verify-script hook: headless scripts read sim state (turn count, steering
@@ -341,6 +346,9 @@ async function spawnCar(type) {
   const meta = getCarMeta(type);
   document.getElementById('car-badge-type').textContent = type;
   document.getElementById('car-badge-name').textContent = meta.label;
+
+  // Engine voice follows the car: F1 screaming in-gear ladder vs GT growl.
+  engineAudio.setCarType(type);
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -360,6 +368,18 @@ catch (e) { console.error('[CfdEffect] constructor failed:', e); cfd = new Effec
 try { vents = new VentEmitterSystem(scene); }
 catch (e) { console.error('[VentEmitterSystem] constructor failed:', e); vents = new EffectStub(); }
 
+/* ── Engine sound (Web Audio synth — engine-audio.js) ───────────────
+   NOT an effect: no scene nodes, so no EffectStub fallback. The graph is
+   built lazily on the first user gesture (autoplay policy); every setter
+   is safe before that. Restored mute/volume apply before the graph exists
+   and are picked up at build time. */
+const engineAudio = new EngineAudio();
+engineAudio.setMuted(state.audio.muted);
+engineAudio.setVolume(state.audio.volume);
+engineAudio.setCarType(state.carType);
+// One-shot gesture unlock — first pointerdown anywhere starts the context.
+window.addEventListener('pointerdown', () => engineAudio.resume(), { once: true });
+
 // Initial F1 spawn — surface the error to the console if it fails so a blank
 // scene doesn't go unexplained. The swap-token guard inside spawnCar keeps
 // this safe against an early user click on a different car-btn.
@@ -373,6 +393,9 @@ window.__fsim.cfd = cfd;
 window.__fsim.rain     = rain;
 window.__fsim.vents    = vents;
 window.__fsim.renderer = renderer;
+// Engine-sound hook (scripts/verify-engine-sound.mjs): Playwright can't hear —
+// it reads ctx.state / masterGain / fundamental via engineAudio.debugState().
+window.__fsim.engineAudio = engineAudio;
 
 /**
  * Phase 5 (part-precision): wire rain to the airflow field when BOTH envs
@@ -832,6 +855,14 @@ function animate() {
   if (!state.paused) rainLensPass.uniforms.uTime.value += dt;
   rainLensPass.enabled = lensI > 0.01;
 
+  // Engine sound — mirrors the sim every frame: pitch from speed (gear
+  // changes blip inside setSpeed), rain layer from the env toggle, paused
+  // drops to idle. All no-ops until the pointerdown gesture unlock.
+  engineAudio.setSpeed(state.speed);
+  engineAudio.setRain(state.activeEnvs.has('rain'));
+  engineAudio.setPaused(state.paused);
+  engineAudio.update(dt);
+
   // HUD
   updateHUD(state.speed);
 
@@ -900,6 +931,37 @@ document.querySelectorAll('.turn-btn').forEach(btn => {
     applyTurnMode(mode);
   });
 });
+
+/* ── SOUND (mute + volume, ENVIRONMENT section) ─────────────────── */
+const muteBtn      = document.getElementById('mute-btn');
+const volumeSlider = document.getElementById('volume-slider');
+
+function syncSoundUI() {
+  const { muted, volume } = state.audio;
+  muteBtn.textContent = muted ? '🔇' : '🔊';
+  muteBtn.classList.toggle('muted', muted);
+  muteBtn.setAttribute('aria-pressed', String(muted));
+  muteBtn.setAttribute('aria-label', muted ? 'Unmute engine sound' : 'Mute engine sound');
+  volumeSlider.value = Math.round(volume * 100);
+}
+
+muteBtn.addEventListener('click', () => {
+  state.audio.muted = !state.audio.muted;
+  engineAudio.setMuted(state.audio.muted);
+  engineAudio.resume();          // sound-row interaction is a gesture too
+  saveAudioSettings(window.localStorage, state.audio);
+  syncSoundUI();
+});
+
+volumeSlider.addEventListener('input', () => {
+  state.audio.volume = Number(volumeSlider.value) / 100;
+  engineAudio.setVolume(state.audio.volume);
+  engineAudio.resume();
+  saveAudioSettings(window.localStorage, state.audio);
+});
+
+// Reflect restored localStorage settings in the DOM on load.
+syncSoundUI();
 
 /* ── Environment toggles ────────────────────────────────────────── */
 document.querySelectorAll('.env-btn').forEach(btn => {
