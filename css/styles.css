@@ -163,6 +163,214 @@ body {
   line-height: 1;
 }
 
+/* ─── Arcade HUD (game plan Phase B — hidden outside arcade) ─────── */
+:root { --c-coin: #ffd766; }
+
+#arcade-hud {
+  position: fixed;
+  top: 58px;                       /* below the effects chips */
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none;
+  z-index: 10;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--ease), visibility var(--ease);
+}
+#arcade-hud.show { opacity: 1; visibility: visible; }
+
+#arcade-score-label {
+  font-size: var(--label-fs);
+  letter-spacing: var(--label-track);
+  color: var(--dim);
+}
+
+#arcade-score {
+  font-family: var(--mono);
+  font-size: 2.2rem;
+  font-weight: 800;
+  color: #fff;
+  line-height: 1;
+  text-shadow: 0 0 18px color-mix(in srgb, var(--c-coin) 55%, transparent);
+}
+
+#arcade-timer {
+  font-family: var(--mono);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--dim);
+}
+#arcade-timer.low {
+  color: var(--accent);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+#arcade-coins-wrap {
+  position: fixed;
+  top: 64px;
+  right: calc(var(--panel-w) + 32px);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background: var(--overlay-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 20px;
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+  z-index: 10;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--ease), visibility var(--ease);
+}
+#arcade-coins-wrap.show { opacity: 1; visibility: visible; }
+
+#arcade-coin-count {
+  font-family: var(--mono);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--c-coin);
+}
+
+#arcade-combo {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: var(--accent2);
+  text-shadow: 0 0 10px color-mix(in srgb, var(--accent2) 70%, transparent);
+  opacity: 0;
+  transition: opacity var(--ease);
+}
+#arcade-combo.show { opacity: 1; }
+
+/* Floating "+10" pickup marker (HUD layer, not 3D text) */
+.score-float {
+  position: fixed;
+  font-family: var(--mono);
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: var(--c-coin);
+  text-shadow: 0 0 10px color-mix(in srgb, var(--c-coin) 70%, transparent);
+  pointer-events: none;
+  z-index: 15;
+  animation: scoreFloat 0.9s ease-out forwards;
+}
+@keyframes scoreFloat {
+  from { opacity: 1; transform: translate(-50%, 0); }
+  to   { opacity: 0; transform: translate(-50%, -46px); }
+}
+
+/* ─── Arcade countdown overlay (3-2-1-GO) ────────────────────────── */
+#countdown-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 24;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--ease), visibility var(--ease);
+}
+#countdown-overlay.show { opacity: 1; visibility: visible; }
+
+#countdown-num {
+  font-family: var(--mono);
+  font-size: 7rem;
+  font-weight: 900;
+  color: #fff;
+  text-shadow: 0 0 40px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+/* Per-digit pop: scale 1.6 → 1.0 back-ease (overshoot ~1.12), fade in the
+   last 0.2 s of the 0.9 s tick. Re-triggered from JS on each digit change. */
+#countdown-num.pop { animation: cdPop 0.9s ease-out forwards; }
+@keyframes cdPop {
+  0%   { transform: scale(1.6); opacity: 0; }
+  15%  { opacity: 1; }
+  50%  { transform: scale(0.96); }
+  68%  { transform: scale(1.12); }
+  78%  { transform: scale(1.0); opacity: 1; }
+  100% { transform: scale(1.0); opacity: 0; }
+}
+
+/* ─── Arcade game-over overlay ───────────────────────────────────── */
+/* Container passes clicks through (mode toggle stays usable); only the
+   card itself is interactive. */
+#gameover-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 24;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.25s ease, visibility 0.25s ease;
+}
+#gameover-overlay.show { opacity: 1; visibility: visible; }
+
+#gameover-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 28px 44px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  backdrop-filter: blur(14px);
+  pointer-events: auto;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.55);
+}
+
+#gameover-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+#gameover-score {
+  font-family: var(--mono);
+  font-size: 3.4rem;
+  font-weight: 900;
+  color: #fff;
+  line-height: 1;
+  text-shadow: 0 0 24px color-mix(in srgb, var(--c-coin) 55%, transparent);
+}
+
+#gameover-stats {
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  color: var(--dim);
+}
+
+#restart-btn {
+  margin-top: 8px;
+  padding: 10px 26px;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  transition: all var(--ease);
+}
+#restart-btn:hover {
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+  box-shadow: var(--glow) color-mix(in srgb, var(--accent) 40%, transparent);
+}
+#restart-btn:active { transform: scale(0.97); }
+
 /* ─── Car badge (top-left) ───────────────────────────────────────── */
 #car-badge {
   position: fixed;
@@ -876,6 +1084,12 @@ button:focus-visible, input:focus-visible {
 
   /* ── Effects chips ── */
   #effects-chips { top: 16px; }
+
+  /* ── Arcade HUD ── */
+  #arcade-hud { top: 48px; }
+  #arcade-score { font-size: 1.7rem; }
+  #arcade-coins-wrap { top: 52px; right: 16px; }
+  #countdown-num { font-size: 4.5rem; }
 
   /* ── Orbit hint ── */
   #orbit-hint { bottom: 72px; }

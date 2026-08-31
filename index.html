@@ -33,6 +33,31 @@
     </div>
   </div>
 
+  <!-- ── Arcade HUD (game plan Phase B — hidden outside arcade) ── -->
+  <div id="arcade-hud">
+    <div id="arcade-score-label">SCORE</div>
+    <div id="arcade-score">0</div>
+    <div id="arcade-timer">90</div>
+  </div>
+  <div id="arcade-coins-wrap">
+    <span id="arcade-coin-icon">🪙</span>
+    <span id="arcade-coin-count">0</span>
+    <span id="arcade-combo">×2</span>
+  </div>
+
+  <!-- ── Arcade countdown overlay (3-2-1-GO) ───────────────────── -->
+  <div id="countdown-overlay"><span id="countdown-num">3</span></div>
+
+  <!-- ── Arcade game-over overlay ──────────────────────────────── -->
+  <div id="gameover-overlay">
+    <div id="gameover-card">
+      <div id="gameover-title">TIME UP</div>
+      <div id="gameover-score">0</div>
+      <div id="gameover-stats"></div>
+      <button id="restart-btn" aria-label="Restart arcade run">&#8635; RESTART</button>
+    </div>
+  </div>
+
   <!-- ── Info overlay (top-left) ───────────────────────────────── -->
   <div id="car-badge">
     <span id="car-badge-type">F1</span>

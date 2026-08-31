@@ -16,7 +16,7 @@ import { buildCar, getCarMeta, clampToVMax, WHEEL_NAMES, buildSteeringWheel } fr
 import { CAR_MANIFEST } from './car-manifest.js';
 import { createDebugOverlay } from './debug-overlay.js';
 import { buildTrack, buildSkyline } from './track.js';
-import { TrackPath, TURN_CFG, steerAngleRad, rollAngleRad, smoothAngle, cameraBankRad, pathBendTable, turnEdgeCounter } from './track-path.js';
+import { TrackPath, TURN_CFG, rowPose, steerAngleRad, rollAngleRad, smoothAngle, cameraBankRad, pathBendTable, turnEdgeCounter } from './track-path.js';
 import { AirflowEffect, RainEffect } from './effects.js';
 import { RainLensShader, rainLensIntensity, lensActive } from './rain-lens.js';
 import { CfdEffect, syncCfdLegend } from './cfd-effect.js';
@@ -27,6 +27,8 @@ import { createSwapGuard } from './swap-guard.js';
 import { EffectStub } from './effect-stub.js';
 import { gearFromSpeed, wheelRotationRate, aeroSquishFactor, rpmRatio, lerpSpeed } from './physics.js';
 import { createGame, lateralStep, tiltStep, worldOffsetX } from './game-mode.js';
+import { createCoinField, createScoring } from './coins.js';
+import { buildCoinVisuals } from './coin-visuals.js';
 import { EngineAudio, loadAudioSettings, saveAudioSettings } from './engine-audio.js';
 import { partForHit, eduEntryFor, splitCopy } from './edu-content.js';
 import {
@@ -201,6 +203,15 @@ window.__fsim.state = state;
 /* ── ARCADE game (pure state machine — main.js only wires it) ───── */
 const game = createGame();
 window.__fsim.game = game;
+
+/* ── ARCADE coins (Phase B) — pure field/scoring + thin THREE pool.
+   Coins live in trackGroup: coin-visuals places them via rowPose, so the
+   inverse car pose AND the −playerX strafe offset are inherited from the
+   group transform (plan decision 2). */
+const coinField = createCoinField();
+const scoring   = createScoring();
+const coinVis   = buildCoinVisuals(trackGroup);
+window.__fsim.coins = { field: coinField, scoring, visuals: coinVis };
 
 /* ══════════════════════════════════════════════════════════════════
    CAR MANAGEMENT
@@ -675,6 +686,107 @@ function updateHUD(speed) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+   ARCADE HUD + OVERLAYS (game plan Phase B)
+══════════════════════════════════════════════════════════════════ */
+const arcadeHudEl   = document.getElementById('arcade-hud');
+const arcadeCoinsEl = document.getElementById('arcade-coins-wrap');
+const arcScoreEl    = document.getElementById('arcade-score');
+const arcTimerEl    = document.getElementById('arcade-timer');
+const arcCoinCntEl  = document.getElementById('arcade-coin-count');
+const arcComboEl    = document.getElementById('arcade-combo');
+const cdOverlay     = document.getElementById('countdown-overlay');
+const cdNum         = document.getElementById('countdown-num');
+const goOverlay     = document.getElementById('gameover-overlay');
+const goScoreEl     = document.getElementById('gameover-score');
+const goStatsEl     = document.getElementById('gameover-stats');
+
+const hudVis = {
+  scoreShown:    0,      // rolling counter (tau 0.3 s toward scoring.score)
+  lastCountdown: null,   // last digit rendered (re-triggers the pop anim)
+  lastPhase:     null,
+  goCount:       0,      // gameover count-up clock (0.8 s to full score)
+};
+
+/** Per-frame HUD mirror of game + scoring state (scene must mirror state). */
+function updateArcadeHud(dt) {
+  const on = state.mode === 'arcade';
+  const hudOn = on && game.phase !== 'menu';
+  arcadeHudEl.classList.toggle('show', hudOn);
+  arcadeCoinsEl.classList.toggle('show', hudOn);
+  if (!on) {
+    cdOverlay.classList.remove('show');
+    goOverlay.classList.remove('show');
+    hudVis.lastCountdown = null;
+    hudVis.lastPhase = null;
+    return;
+  }
+
+  // Rolling score counter — one-pole toward the live score, tau 0.3 s.
+  const target = scoring.score;
+  if (dt > 0) hudVis.scoreShown += (target - hudVis.scoreShown) * (1 - Math.exp(-dt / 0.3));
+  if (Math.abs(target - hudVis.scoreShown) < 0.5) hudVis.scoreShown = target;
+  arcScoreEl.textContent  = String(Math.round(hudVis.scoreShown));
+  arcTimerEl.textContent  = String(Math.ceil(game.timeLeft));
+  arcTimerEl.classList.toggle('low', game.phase === 'running' && game.timeLeft <= 10);
+  arcCoinCntEl.textContent = String(game.coins);
+  arcComboEl.classList.toggle('show', scoring.mult > 1);
+
+  // Countdown overlay — re-trigger the pop animation + tick blip per digit.
+  if (game.phase === 'countdown') {
+    cdOverlay.classList.add('show');
+    if (game.countdown !== hudVis.lastCountdown) {
+      hudVis.lastCountdown = game.countdown;
+      cdNum.textContent = game.countdown === 0 ? 'GO' : String(game.countdown);
+      cdNum.classList.remove('pop');
+      void cdNum.offsetWidth;              // reflow — restart the CSS animation
+      cdNum.classList.add('pop');
+      engineAudio.countdownBlip(game.countdown);
+    }
+  } else {
+    cdOverlay.classList.remove('show');
+    hudVis.lastCountdown = null;
+  }
+
+  // Gameover overlay — final score counts up over 0.8 s, RESTART below.
+  if (game.phase === 'gameover') {
+    if (hudVis.lastPhase !== 'gameover') {
+      goOverlay.classList.add('show');
+      hudVis.goCount = 0;
+      goStatsEl.textContent =
+        `${game.coins} COINS · ${Math.floor(scoring.distance)} M`;
+    }
+    hudVis.goCount = Math.min(0.8, hudVis.goCount + dt);
+    goScoreEl.textContent = String(Math.round(scoring.score * (hudVis.goCount / 0.8)));
+  } else if (hudVis.lastPhase === 'gameover') {
+    goOverlay.classList.remove('show');
+  }
+  hudVis.lastPhase = game.phase;
+}
+
+/** Floating "+N" at the collected coin's screen position (HUD layer). */
+const _floatV = new THREE.Vector3();
+function spawnScoreFloat(coin, points) {
+  // Track space → world with THIS frame's group transform (matrixWorld is
+  // one frame stale here): world = R_y(rotY)·p + groupPos.
+  const rp = rowPose(trackPath, coin.s, coin.lat);
+  const cy = Math.cos(trackGroup.rotation.y), sy = Math.sin(trackGroup.rotation.y);
+  _floatV.set(
+    cy * rp.x + sy * rp.z + trackGroup.position.x,
+    0.9,
+    -sy * rp.x + cy * rp.z + trackGroup.position.z,
+  );
+  _floatV.project(camera);
+  if (_floatV.z > 1) return;               // behind the camera — skip
+  const el = document.createElement('div');
+  el.className = 'score-float';
+  el.textContent = `+${points}`;
+  el.style.left = `${(_floatV.x * 0.5 + 0.5) * window.innerWidth}px`;
+  el.style.top  = `${(-_floatV.y * 0.5 + 0.5) * window.innerHeight}px`;
+  document.body.appendChild(el);
+  el.addEventListener('animationend', () => el.remove());
+}
+
+/* ══════════════════════════════════════════════════════════════════
    EFFECTS CHIPS
 ══════════════════════════════════════════════════════════════════ */
 const TURN_CHIP_LABELS = { t5: '↩ TURNS 5/30s', t10: '↩ TURNS 10/30s', only: '↩ TURNS ONLY' };
@@ -799,7 +911,11 @@ function updateTrack(dt) {
   // apply the INVERSE car pose to the whole track group — the car stays
   // at the origin while the world curves around it.
   trackPath.update(dt, mps);
-  trackPath.rebaseIfNeeded();          // floating origin every 1 km
+  // Floating origin every 1 km. rebase() re-roots track space at the car
+  // (s → 0), so the coin field must shift every stored s by the car's
+  // pre-rebase s — coin WORLD positions stay invariant (plan decision 2).
+  const sPreRebase = trackPath.pose.s;
+  if (trackPath.rebaseIfNeeded()) coinField.rebase(sPreRebase);
   const w = trackPath.worldTransform();
   trackGroup.rotation.y = w.rotY;
   trackGroup.position.set(w.x, 0, w.z);
@@ -811,6 +927,28 @@ function updateTrack(dt) {
 
   // Recycle furniture rows through the sliding window.
   track.update(trackPath);
+
+  // ARCADE coins — the field advances (spawn / magnet / swept-collect /
+  // cull) only while RUNNING; the visual pool tracks the field every
+  // unpaused frame and hides outside arcade. Collection fans out to the
+  // game tally, scoring/combo, pop burst, pickup blip and "+N" float.
+  if (state.mode === 'arcade' && game.phase === 'running') {
+    scoring.step(dt, mps);
+    const got = coinField.update({
+      sCar: trackPath.pose.s,
+      playerX: game.lateral.playerX,
+      dt,
+    });
+    for (const c of got) {
+      if (!game.collect()) break;          // phase flipped mid-frame — stop
+      const p = scoring.pickup();
+      coinVis.pop(c, trackPath);
+      engineAudio.coinPickup(p.streak);
+      spawnScoreFloat(c, p.points);
+    }
+  }
+  coinVis.update(coinField, trackPath, state.time, dt,
+    state.mode === 'arcade' && game.phase !== 'menu');
 
   // Turn counter: rising edge of |κ| under the car, with hysteresis so one
   // corner's curvature ramp can't double-count (pure helper, unit-tested).
@@ -930,6 +1068,7 @@ function animate() {
 
   // HUD
   updateHUD(state.speed);
+  updateArcadeHud(dt);
 
   composer.render();
 }
@@ -974,9 +1113,19 @@ function setMode(mode) {
   // preserved and the scene keeps mirroring it (core principle).
   document.getElementById('section-env').classList.toggle('collapsed-arcade', mode === 'arcade');
   if (mode === 'arcade') {
-    game.start();      // menu → countdown → running (menu/gameover UI: Phase B)
+    // Fresh run: zero the coin field / scoring / rolling counter, then
+    // straight into the countdown (its overlay + ticks land next frame).
+    coinField.reset();
+    scoring.reset();
+    hudVis.scoreShown = 0;
+    game.start();      // menu → countdown → running
   } else {
     game.reset();
+    coinField.reset();
+    scoring.reset();
+    hudVis.scoreShown = 0;
+    // Hide the coin pool immediately — updateTrack skips while paused.
+    coinVis.update(coinField, trackPath, state.time, 0, false);
     state.arcadeTilt = { roll: 0, yaw: 0, steer: 0 };
     state.camJuice = 0;
     arcadeKeys.left = arcadeKeys.right = false;
@@ -987,6 +1136,15 @@ function setMode(mode) {
     trackGroup.position.set(w.x, 0, w.z);
   }
 }
+
+/* ── ARCADE restart (gameover overlay button) ───────────────────── */
+document.getElementById('restart-btn').addEventListener('click', () => {
+  if (state.mode !== 'arcade') return;
+  coinField.reset();
+  scoring.reset();
+  hudVis.scoreShown = 0;
+  game.start();      // gameover → countdown; overlay hides on the next frame
+});
 
 document.querySelectorAll('.mode-btn').forEach(btn => {
   btn.addEventListener('click', () => setMode(btn.dataset.mode));

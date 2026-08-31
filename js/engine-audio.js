@@ -79,6 +79,29 @@ const BLIP_LEN    = 0.08;    // s — shift-blip envelope
 const IDLE_LFO_HZ = 6;
 const IDLE_LFO_AMP = 1.5;    // Hz of wobble on the fundamental
 
+/* Arcade one-shots (game plan Phase B) */
+const COIN_BASE_HZ = 988;    // B5 — coin-pickup base pitch
+const COIN_GAIN    = 0.15;
+const COIN_DECAY   = 0.15;   // s — exponential decay
+const COUNT_BASE_HZ = 660;   // countdown tick base (E5)
+const COUNT_LEN     = 0.12;  // s per tick; "GO" holds longer
+const COUNT_GO_LEN  = 0.30;
+const COUNT_GAIN    = 0.2;
+
+/** Coin-pickup pitch: base 988 Hz, +1 semitone per combo-streak step past
+ *  the first pickup, capped at +12 (one octave). */
+export function coinPickupHz(streak) {
+  const semi = Math.min(Math.max((streak ?? 1) - 1, 0), 12);
+  return COIN_BASE_HZ * Math.pow(2, semi / 12);
+}
+
+/** Countdown tick pitch — rises a semitone per step 3 → 2 → 1; the "GO"
+ *  frame (step 0) jumps a full octave above the base. */
+export function countdownHz(step) {
+  if (step === 0) return COUNT_BASE_HZ * 2;
+  return COUNT_BASE_HZ * Math.pow(2, (3 - step) / 12);
+}
+
 export class EngineAudio {
   /** @param {() => AudioContext} [ctxFactory] injectable for tests */
   constructor(ctxFactory) {
@@ -281,6 +304,37 @@ export class EngineAudio {
       src.start(t);
       src.stop(t + 0.04);
     }
+  }
+
+  /** One-shot helper — osc → gain(g0, exp decay over len) → masterGain.
+   *  Scheduled writes only (EA6 zipper rule); per-event, never per-frame. */
+  _oneShot(type, hz, g0, len) {
+    const n = this.nodes, t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.setValueAtTime(hz, t);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(g0, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + len);
+    osc.connect(g);
+    g.connect(n.masterGain);
+    osc.start(t);
+    osc.stop(t + len);
+  }
+
+  /** Arcade coin pickup — triangle blip; pitch climbs with the combo streak
+   *  (coinPickupHz). Safe no-op before the graph exists. */
+  coinPickup(streak) {
+    if (!this.nodes) return;
+    this._oneShot('triangle', coinPickupHz(streak), COIN_GAIN, COIN_DECAY);
+  }
+
+  /** Arcade countdown tick (3 / 2 / 1 / 0 = "GO") — rising-pitch blip with
+   *  the shift-blip's exp-envelope style. Safe no-op before the graph. */
+  countdownBlip(step) {
+    if (!this.nodes) return;
+    this._oneShot('sine', countdownHz(step), COUNT_GAIN,
+      step === 0 ? COUNT_GO_LEN : COUNT_LEN);
   }
 
   /** Per-frame smoothing — every AudioParam approaches its target (τ 60 ms). */

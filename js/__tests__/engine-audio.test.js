@@ -20,6 +20,8 @@ import { describe, it, expect } from 'vitest';
 import {
   EngineAudio,
   fundamentalHz,
+  coinPickupHz,
+  countdownHz,
   loadAudioSettings,
   saveAudioSettings,
   AUDIO_STORE_KEY,
@@ -55,17 +57,24 @@ class MockAudioContext {
     this.destination = { name: 'destination', connect() {} };
     this.allParams = [];
     this.created = { osc: 0, gain: 0, biquad: 0, buffer: 0, bufferSrc: 0 };
+    this.oscNodes  = [];   // every oscillator in creation order (EA8 one-shots)
+    this.gainNodes = [];
   }
   resume() { this.state = 'running'; return Promise.resolve(); }
   close()  { this.state = 'closed';  return Promise.resolve(); }
   createOscillator() {
     this.created.osc++;
-    return { type: 'sine', frequency: makeParam(this, 440), connect() {}, disconnect() {},
-             start() {}, stop() {} };
+    const osc = { type: 'sine', frequency: makeParam(this, 440), connect() {}, disconnect() {},
+                  started: null, stopped: null,
+                  start(t) { this.started = t ?? 0; }, stop(t) { this.stopped = t ?? 0; } };
+    this.oscNodes.push(osc);
+    return osc;
   }
   createGain() {
     this.created.gain++;
-    return { gain: makeParam(this, 1), connect() {}, disconnect() {} };
+    const g = { gain: makeParam(this, 1), connect() {}, disconnect() {} };
+    this.gainNodes.push(g);
+    return g;
   }
   createBiquadFilter() {
     this.created.biquad++;
@@ -437,5 +446,82 @@ describe('EngineAudio — localStorage settings (EA7)', () => {
     expect(ea.nodes.masterGain.gain.value).toBe(0);
     ea.setMuted(false);
     expect(ea.nodes.masterGain.gain.calls.at(-1).v).toBeCloseTo(0.16, 5);
+  });
+});
+
+/* ── EA8 — arcade pickup + countdown blips (game plan Phase B) ────── */
+
+describe('EngineAudio — coin pickup + countdown blips (EA8)', () => {
+  it('EA8a. coinPickupHz: base 988 Hz, +1 semitone per streak step, capped +12', () => {
+    expect(coinPickupHz(1)).toBeCloseTo(988, 6);
+    expect(coinPickupHz(2)).toBeCloseTo(988 * Math.pow(2, 1 / 12), 6);
+    expect(coinPickupHz(5)).toBeCloseTo(988 * Math.pow(2, 4 / 12), 6);
+    expect(coinPickupHz(13)).toBeCloseTo(988 * 2, 6);      // +12 semitones
+    expect(coinPickupHz(40)).toBeCloseTo(988 * 2, 6);      // capped
+    expect(coinPickupHz(0)).toBeCloseTo(988, 6);           // junk-tolerant floor
+  });
+
+  it('EA8b. countdownHz rises 3 → 2 → 1 → GO', () => {
+    const f3 = countdownHz(3), f2 = countdownHz(2), f1 = countdownHz(1), go = countdownHz(0);
+    expect(f2).toBeGreaterThan(f3);
+    expect(f1).toBeGreaterThan(f2);
+    expect(go).toBeGreaterThan(f1);
+  });
+
+  it('EA8c. pre-resume coinPickup/countdownBlip are safe no-ops (graph stays unbuilt)', () => {
+    const { ea, getFactoryCalls } = makeEngine();
+    expect(() => { ea.coinPickup(3); ea.countdownBlip(2); }).not.toThrow();
+    expect(getFactoryCalls()).toBe(0);
+  });
+
+  it('EA8d. coinPickup: one triangle one-shot at coinPickupHz, gain 0.15 exp-decaying over 0.15 s', () => {
+    const { ea, getCtx } = makeEngine();
+    ea.resume();
+    const ctx = getCtx();
+    const oscBefore = ctx.oscNodes.length, gainBefore = ctx.gainNodes.length;
+    ctx.currentTime = 2;
+    ea.coinPickup(5);
+    expect(ctx.oscNodes.length).toBe(oscBefore + 1);
+    expect(ctx.gainNodes.length).toBe(gainBefore + 1);
+    const osc = ctx.oscNodes.at(-1);
+    expect(osc.type).toBe('triangle');
+    const fset = osc.frequency.calls.find(c => c.m === 'setValueAtTime');
+    expect(fset.v).toBeCloseTo(coinPickupHz(5), 6);
+    expect(osc.started).toBe(2);
+    expect(osc.stopped).toBeCloseTo(2.15, 6);
+    const g = ctx.gainNodes.at(-1).gain;
+    expect(g.calls.find(c => c.m === 'setValueAtTime').v).toBeCloseTo(0.15, 6);
+    const ramp = g.calls.find(c => c.m === 'expRamp');
+    expect(ramp.v).toBeLessThanOrEqual(0.001);
+    expect(ramp.t).toBeCloseTo(2.15, 6);
+  });
+
+  it('EA8e. countdownBlip: one-shot osc at countdownHz(step); repeated calls never grow the persistent graph', () => {
+    const { ea, getCtx } = makeEngine();
+    ea.resume();
+    const ctx = getCtx();
+    const before = ctx.oscNodes.length;
+    ea.countdownBlip(3);
+    ea.countdownBlip(0);
+    expect(ctx.oscNodes.length).toBe(before + 2);
+    const [t3, go] = ctx.oscNodes.slice(-2);
+    expect(t3.frequency.calls.find(c => c.m === 'setValueAtTime').v).toBeCloseTo(countdownHz(3), 6);
+    expect(go.frequency.calls.find(c => c.m === 'setValueAtTime').v).toBeCloseTo(countdownHz(0), 6);
+    // one-shots stop themselves — persistent node families untouched
+    expect(t3.stopped).toBeGreaterThan(t3.started);
+    expect(ctx.created.biquad).toBe(5);
+    expect(ctx.created.bufferSrc).toBe(2);
+  });
+
+  it('EA8f. one-shots never write params directly (no zipper) — scheduled methods only', () => {
+    const { ea, getCtx } = makeEngine();
+    ea.resume();
+    const ctx = getCtx();
+    const snapshot = ctx.allParams.length;
+    ea.coinPickup(2);
+    ea.countdownBlip(1);
+    ctx.allParams.slice(snapshot).forEach((p, i) => {
+      expect(p.directSets.length, `one-shot param #${i} used a direct .value write`).toBe(0);
+    });
   });
 });
