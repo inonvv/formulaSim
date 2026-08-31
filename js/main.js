@@ -26,6 +26,7 @@ import { collectOccupancyMeshes } from './car-loader.js';
 import { createSwapGuard } from './swap-guard.js';
 import { EffectStub } from './effect-stub.js';
 import { gearFromSpeed, wheelRotationRate, aeroSquishFactor, rpmRatio, lerpSpeed } from './physics.js';
+import { createGame, lateralStep, tiltStep, worldOffsetX } from './game-mode.js';
 import { EngineAudio, loadAudioSettings, saveAudioSettings } from './engine-audio.js';
 import { partForHit, eduEntryFor, splitCopy } from './edu-content.js';
 import {
@@ -160,6 +161,7 @@ const debugOverlay = createDebugOverlay(scene);
    STATE
 ══════════════════════════════════════════════════════════════════ */
 const state = {
+  mode:       'sim',      // 'sim' | 'arcade' — top-level app mode (game plan §3)
   carType:    'F1',
   speed:      0,          // km/h
   targetSpeed: 0,
@@ -181,6 +183,9 @@ const state = {
   turnCount:  0,          // completed-turn tally shown in the HUD
   _turnEdge:  null,       // turnEdgeCounter state {inTurn, count}
   steeringWheel: null,    // cockpit wheel group (buildSteeringWheel), steered by steerVis
+  arcadeTilt: { roll: 0, yaw: 0, steer: 0 },  // smoothed strafe pose (arcade only)
+  camJuice:   0,          // smoothed arcade camera x-offset (0.25·playerX target)
+  _camJuiceApplied: 0,    // what was actually added to camera.position.x last frame
   infoMode:   false,      // P6 educational layer — part cards on hover
   _infoTargets: [],       // cached raycast subset: occupancy meshes + wheel groups
   // Engine-sound settings — persisted to localStorage('fsim-audio'), restored
@@ -192,6 +197,10 @@ const state = {
 // Verify-script hook: headless scripts read sim state (turn count, steering
 // wheel pose, measured anchors) without faking DOM interactions.
 window.__fsim.state = state;
+
+/* ── ARCADE game (pure state machine — main.js only wires it) ───── */
+const game = createGame();
+window.__fsim.game = game;
 
 /* ══════════════════════════════════════════════════════════════════
    CAR MANAGEMENT
@@ -761,6 +770,22 @@ function animateCar(dt) {
   const yawRatio = Math.max(-1, Math.min(1, omega / TURN_CFG.MAX_YAW_RATE));
   state.yawVis = smoothAngle(state.yawVis, yawRatio * 0.07, dt);
   state.carGroup.rotation.y = state.yawVis;
+
+  // ─ ARCADE strafe tilt — additive on top of the turn pose, own tau 0.12 s
+  //   (tiltStep). Sim mode: targets zero and the sums equal the pure turn
+  //   pose above, so sim rendering is bit-identical once the pose decays.
+  state.arcadeTilt = tiltStep(
+    state.arcadeTilt, state.mode === 'arcade' ? game.lateral.vx : 0, mps, dt);
+  const at = state.arcadeTilt;
+  if (state.mode === 'arcade' || at.roll !== 0 || at.yaw !== 0 || at.steer !== 0) {
+    state.carGroup.rotation.z = state.rollVis + at.roll;
+    state.carGroup.rotation.y = state.yawVis + at.yaw;
+    for (const key of ['FL', 'FR', 'wFL', 'wFR']) {
+      const w = state.wheels[key];
+      if (w) w.rotation.y = state.steerVis + at.steer;
+    }
+    if (state.steeringWheel) state.steeringWheel.rotation.z = (state.steerVis + at.steer) * 2.5;
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -778,6 +803,10 @@ function updateTrack(dt) {
   const w = trackPath.worldTransform();
   trackGroup.rotation.y = w.rotY;
   trackGroup.position.set(w.x, 0, w.z);
+  // ARCADE strafe: move the WORLD, not the car (plan decision 1). The sign
+  // chain is pinned in game-mode.test.js: strafe right ⇒ world −x ⇒
+  // apparent wind hits the +x side. Skyline stays put (infinite parallax).
+  if (state.mode === 'arcade') trackGroup.position.x += worldOffsetX(game.lateral.playerX);
   skyline.group.rotation.y = w.rotY;   // horizon yaws with the turn, stays centred
 
   // Recycle furniture rows through the sliding window.
@@ -806,7 +835,21 @@ function animate() {
   // Smooth speed towards target
   state.speed = lerpSpeed(state.speed, state.targetSpeed, 60, 90, dt);
 
-  // Camera
+  // ARCADE: advance the game clock, then integrate the strafe BEFORE
+  // updateTrack so the world offset uses this frame's playerX.
+  if (state.mode === 'arcade' && !state.paused) {
+    game.tick(dt);
+    if (game.phase === 'running') {
+      Object.assign(game.lateral,
+        lateralStep(game.lateral, arcadeInputValue(), state.speed / 3.6, dt));
+    }
+  }
+
+  // Camera — undo last frame's arcade juice first: trackside/drone lerp
+  // from the CURRENT position, so a persistent additive offset would feed
+  // back into their targets (~50× amplification at lerp 0.02).
+  camera.position.x -= state._camJuiceApplied;
+  state._camJuiceApplied = 0;
   CAM_CONFIGS[state.camMode].update(dt);
   if (state.camMode === 'orbit') orbit.update();
 
@@ -820,6 +863,17 @@ function animate() {
     ? 0 : cameraBankRad(trackPath.yawRate(state.speed / 3.6));
   state.camBank += (bankTarget - state.camBank) * Math.min(1, dt / 0.35);
   if (state.camBank !== 0 && state.camMode !== 'cockpit') camera.rotateZ(state.camBank);
+
+  // ARCADE camera juice — lean 0.25·playerX toward the strafe, tau 0.3 s,
+  // applied AFTER the per-mode camera logic; orbit excluded (owns its own
+  // transform). Undone at the top of the next frame (see above).
+  const juiceTarget = (state.mode === 'arcade' && state.camMode !== 'orbit')
+    ? 0.25 * game.lateral.playerX : 0;
+  if (dt > 0) state.camJuice += (juiceTarget - state.camJuice) * (1 - Math.exp(-dt / 0.3));
+  if (state.camJuice !== 0) {
+    camera.position.x += state.camJuice;
+    state._camJuiceApplied = state.camJuice;
+  }
 
   // Car animation + track motion
   if (!state.paused) animateCar(dt);
@@ -905,6 +959,66 @@ document.querySelectorAll('.car-btn').forEach(btn => {
     setSpeed(state.targetSpeed);
     syncEffects();
   });
+});
+
+/* ── Mode toggle (SIMULATE | ARCADE) ────────────────────────────── */
+function setMode(mode) {
+  if (state.mode === mode) return;
+  state.mode = mode;
+  document.querySelectorAll('.mode-btn').forEach(b => {
+    const on = b.dataset.mode === mode;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+  // Arcade COLLAPSES (not destroys) the env/CFD controls — effect state is
+  // preserved and the scene keeps mirroring it (core principle).
+  document.getElementById('section-env').classList.toggle('collapsed-arcade', mode === 'arcade');
+  if (mode === 'arcade') {
+    game.start();      // menu → countdown → running (menu/gameover UI: Phase B)
+  } else {
+    game.reset();
+    state.arcadeTilt = { roll: 0, yaw: 0, steer: 0 };
+    state.camJuice = 0;
+    arcadeKeys.left = arcadeKeys.right = false;
+    arcadePointer = 0; arcadeDrag = false;
+    // Clear the strafe world-offset immediately (updateTrack would skip the
+    // re-set while paused and leave the road shifted).
+    const w = trackPath.worldTransform();
+    trackGroup.position.set(w.x, 0, w.z);
+  }
+}
+
+document.querySelectorAll('.mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => setMode(btn.dataset.mode));
+});
+
+/* ── ARCADE input — keys (hold = strafe) + pointer drag on canvas ── */
+const arcadeKeys = { left: false, right: false };
+let arcadePointer = 0;      // −1..1 from drag
+let arcadeDrag = false;
+let arcadeDragX = 0;
+
+function arcadeInputValue() {
+  const k = (arcadeKeys.right ? 1 : 0) - (arcadeKeys.left ? 1 : 0);
+  return Math.max(-1, Math.min(1, k + arcadePointer));
+}
+
+function arcadeRunning() {
+  return state.mode === 'arcade' && game.phase === 'running';
+}
+
+canvas.addEventListener('pointerdown', e => {
+  if (!arcadeRunning()) return;
+  arcadeDrag  = true;
+  arcadeDragX = e.clientX;
+});
+window.addEventListener('pointermove', e => {
+  if (!arcadeDrag) return;
+  arcadePointer = Math.max(-1, Math.min(1, (e.clientX - arcadeDragX) / 120));
+});
+window.addEventListener('pointerup', () => {
+  arcadeDrag = false;
+  arcadePointer = 0;
 });
 
 /* ── Speed slider ───────────────────────────────────────────────── */
@@ -1022,6 +1136,7 @@ playBtn.setAttribute('aria-pressed', 'true');
 
 /* ── Reset ──────────────────────────────────────────────────────── */
 document.getElementById('reset-btn').addEventListener('click', () => {
+  setMode('sim');          // Reset returns to sim-mode defaults (plan Phase A)
   setSpeed(0);
   state.paused = false;
   playBtn.innerHTML = '&#9646;&#9646; PAUSE';
@@ -1158,5 +1273,18 @@ window.addEventListener('keydown', e => {
     case 'r': case 'R':
       document.getElementById('reset-btn').click();
       break;
+    case 'ArrowLeft': case 'a': case 'A':
+      if (state.mode === 'arcade') { e.preventDefault(); arcadeKeys.left = true; }
+      break;
+    case 'ArrowRight': case 'd': case 'D':
+      if (state.mode === 'arcade') { e.preventDefault(); arcadeKeys.right = true; }
+      break;
   }
+});
+
+// Release strafe keys unconditionally — a mode switch mid-hold must not
+// leave a phantom key latched.
+window.addEventListener('keyup', e => {
+  if (e.key === 'ArrowLeft'  || e.key === 'a' || e.key === 'A') arcadeKeys.left  = false;
+  if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') arcadeKeys.right = false;
 });

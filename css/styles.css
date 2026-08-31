@@ -480,6 +480,41 @@ body {
   flex-wrap: wrap;
 }
 
+/* ─── Mode toggle (SIMULATE | ARCADE) — segmented control ─────────── */
+.mode-row { gap: 0; flex-wrap: nowrap; }
+
+.mode-btn {
+  flex: 1;
+  padding: 9px 6px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--panel-border);
+  color: var(--dim);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: all var(--ease);
+  white-space: nowrap;
+}
+
+.mode-btn:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+.mode-btn:last-child  { border-radius: 0 var(--radius) var(--radius) 0; border-left: none; }
+
+.mode-btn:hover { background: rgba(255,255,255,0.08); color: var(--text); }
+
+.mode-btn.active {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: var(--glow) color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.mode-btn:active { transform: scale(0.97); }
+
+/* Arcade collapses (not destroys) the environment/CFD section. The
+   #panel-body prefix outranks the mobile `.ctrl-group.active` display rule. */
+#panel-body #section-env.collapsed-arcade { display: none; }
+
 /* ─── Car buttons ────────────────────────────────────────────────── */
 .car-btn, .cam-btn, .preset-btn {
   flex: 1;
