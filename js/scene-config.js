@@ -3,7 +3,7 @@
  * No browser / Three.js dependency so vitest can import and assert these values.
  *
  * Rules encoded here:
- *   • No fog  (scene.fog must never be set)
+ *   • No fog in SIM mode (scene.fog only exists in ARCADE — see ARCADE_FOG)
  *   • Bright outdoor sky (background = sky blue, high ambient + sun)
  *   • Bloom is SELECTIVE — threshold > 0.7 so only genuinely emissive
  *     objects (brake glow, headlights, cockpit) bloom, not the sky or body.
@@ -51,6 +51,15 @@ export const BLOOM = {
   radius:    0.08,   // tight spread
   threshold: 1.05,   // must be > 0.7 — only emissive surfaces bloom
 };
+
+/* ── Arcade horizon fog (game plan Phase C) ──────────────────── */
+// SIM mode never sets scene.fog (clarity rules above). ARCADE adds
+// distance fog for speed/depth; its colour MUST equal the skyline's
+// horizon-haze gradient stop (track.js imports HORIZON_COLOR for the
+// panorama texture) so the fog wall melts into the panorama. The far
+// band ends inside the skyline ring (330 < R 350).
+export const HORIZON_COLOR = '#d8e9e4';
+export const ARCADE_FOG = { color: HORIZON_COLOR, near: 90, far: 330 };
 
 /* ── Weather override tables ─────────────────────────────────── */
 export const WEATHER = {

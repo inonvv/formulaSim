@@ -289,3 +289,73 @@ describe('CfdEffect body-surface overlay', () => {
     expect(cfd._patchMeshes.length).toBeGreaterThan(0);
   });
 });
+
+/* ══════════════════════════════════════════════════════════════════
+   Phase C (arcade) — apparent sideslip β in the Newtonian facing term.
+   Sign chain: strafe right ⇒ vx > 0 ⇒ apparent wind hits the +x side
+   (pinned in game-mode.test.js). main.js passes β = atan2(−vx, vFwd),
+   so vx > 0 ⇒ β < 0 ⇒ rotated flow dir (sinβ, 0, cosβ) gains a −x
+   component ⇒ +x-facing surfaces gain impact.
+══════════════════════════════════════════════════════════════════ */
+describe('computeSurfaceCp — arcade sideslip β (Phase C)', () => {
+  const BETA_R = Math.atan2(-9, 60);       // ≈ −8.5° — plan's max sideslip
+
+  it('CSb1. β = 0 and |β| ≤ 5° leave the model byte-identical', () => {
+    const args = [0.95, 0.95, -0.30, 0, 0, -1, 'GT', GT_ANCHORS, 1.0, 1];
+    const base = computeSurfaceCp(...args);
+    expect(computeSurfaceCp(...args, 0)).toBe(base);
+    expect(computeSurfaceCp(...args, 0.05)).toBe(base);     // 2.9° — gated
+    expect(computeSurfaceCp(...args, -0.087)).toBe(base);   // 5.0° — still gated
+  });
+
+  it('CSb2. above the gate, the +x side face gains impact for vx > 0', () => {
+    const side = (beta) =>
+      computeSurfaceCp(1.0, 0.60, 0.0, 1, 0, 0, 'GT', GT_ANCHORS, 1.0, 1, beta);
+    expect(side(BETA_R)).toBeGreaterThan(side(0) + 0.01);
+  });
+
+  it('CSb3. the −x (leeward) side face gains nothing', () => {
+    const side = (beta) =>
+      computeSurfaceCp(-1.0, 0.60, 0.0, -1, 0, 0, 'GT', GT_ANCHORS, 1.0, 1, beta);
+    expect(side(BETA_R)).toBeCloseTo(side(0), 10);
+  });
+
+  it('CSb4. a flow-facing nose vertex never gains from rotation (cosβ ≤ 1) and stays hot', () => {
+    const nose = (beta) =>
+      computeSurfaceCp(0, 0.35, -2.10, 0, 0.2, -0.9, 'GT', GT_ANCHORS, 1.0, 1, beta);
+    expect(nose(BETA_R)).toBeLessThanOrEqual(nose(0));
+    expect(nose(BETA_R)).toBeGreaterThan(0);
+  });
+});
+
+describe('CfdEffect.setSideslip — recolor gating (Phase C)', () => {
+  it('CSb5. below the 5° gate: β stored as 0, no rebake scheduled', () => {
+    const cfd = new CfdEffect(makeScene());
+    cfd._speedDirty = false;
+    cfd._lastBuiltSpeed = 100;
+    cfd.setSideslip(0.05);                   // 2.9°
+    expect(cfd._beta).toBe(0);
+    expect(cfd._speedDirty).toBe(false);
+    expect(cfd._lastBuiltSpeed).toBe(100);
+  });
+
+  it('CSb6. above the gate: β quantised to 2° and a recolor forced', () => {
+    const cfd = new CfdEffect(makeScene());
+    cfd._speedDirty = false;
+    cfd._lastBuiltSpeed = 100;
+    cfd.setSideslip(-0.15);                  // −8.59° → −8° bucket
+    expect(cfd._beta).toBeCloseTo(-8 * Math.PI / 180, 6);
+    expect(cfd._speedDirty).toBe(true);
+    expect(cfd._lastBuiltSpeed).toBe(-9999);
+  });
+
+  it('CSb7. same 2° bucket twice does not re-schedule a rebake', () => {
+    const cfd = new CfdEffect(makeScene());
+    cfd.setSideslip(-0.15);
+    cfd._speedDirty = false;
+    cfd._lastBuiltSpeed = 50;
+    cfd.setSideslip(-0.149);                 // −8.54° — same −8° bucket
+    expect(cfd._speedDirty).toBe(false);
+    expect(cfd._lastBuiltSpeed).toBe(50);
+  });
+});

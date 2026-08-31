@@ -908,3 +908,148 @@ describe('F2/F3 aero profiles (P3)', () => {
     expect(rain._rainPos.sprayZ).toBeCloseTo(1.48, 5);
   });
 });
+
+/* ══════════════════════════════════════════════════════════════════
+   Phase C (arcade) — strafe crosswind coupling
+   Sign chain (pinned in game-mode.test.js): strafe right ⇒ vx > 0 ⇒
+   world −x ⇒ apparent wind −x in the car frame. main.js calls
+   setCrosswind(−vx) on both effects, so vx > 0 ⇒ streaks/streamlines
+   drift toward −x.
+══════════════════════════════════════════════════════════════════ */
+describe('AirflowEffect — arcade crosswind (Phase C)', () => {
+  const SPEED = 180;                       // km/h — airV = 50 m/s
+  const AIR_V = SPEED / 3.6;
+
+  async function crosswindDeltas(c) {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setVisible(true);
+    airflow.setSpeed(SPEED);
+    airflow.setCrosswind(0);
+    airflow.update(0.016, 0);
+    const bases = airflow._ribbonLines.map(R => Float32Array.from(R.positions));
+    airflow.setCrosswind(c);
+    airflow.update(0.016, 0.016);
+    const deltas = [];
+    airflow._ribbonLines.forEach((R, r) => {
+      const base = bases[r];
+      for (let i = 0; i < base.length / 3; i++) {
+        deltas.push({ dx: R.positions[i * 3] - base[i * 3], z: base[i * 3 + 2] });
+      }
+    });
+    return deltas;
+  }
+
+  it('exposes setCrosswind(c)', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const a = new AirflowEffect(makeScene());
+    expect(typeof a.setCrosswind).toBe('function');
+  });
+
+  it('shears every vertex by Δx = c·z/airV — growing downstream, at the pathBend point', async () => {
+    const c = -6;
+    const deltas = await crosswindDeltas(c);
+    expect(deltas.length).toBeGreaterThan(100);
+    let sawDownstream = false;
+    for (const d of deltas) {
+      expect(d.dx).toBeCloseTo((c * d.z) / AIR_V, 4);
+      if (d.z > 2) sawDownstream = true;
+    }
+    expect(sawDownstream).toBe(true);
+  });
+
+  it('sign chain: strafe right (setCrosswind(−vx), vx > 0) drifts downstream verts −x', async () => {
+    const deltas = await crosswindDeltas(-6);
+    let checked = 0;
+    for (const d of deltas) {
+      if (d.z > 0.5) { expect(d.dx).toBeLessThan(0); checked++; }
+    }
+    expect(checked).toBeGreaterThan(50);
+  });
+
+  it('zero crosswind → zero drift (sim path byte-identical)', async () => {
+    const deltas = await crosswindDeltas(0);
+    for (const d of deltas) expect(d.dx).toBe(0);
+  });
+
+  it('composes additively with the road bend at the same application point', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const { bendLookup } = await import('../track-path.js');
+    const TABLE = {
+      zMin: -24, step: 2,
+      dx: Array.from({ length: 19 }, (_, i) => {
+        const z = -24 + i * 2;
+        return -(1 - Math.cos(z / 85)) * 85;   // analytic R 85 arc
+      }),
+    };
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setVisible(true);
+    airflow.setSpeed(SPEED);
+    airflow.update(0.016, 0);
+    const bases = airflow._ribbonLines.map(R => Float32Array.from(R.positions));
+    airflow.setPathBend(TABLE);
+    airflow.setCrosswind(-6);
+    airflow.update(0.016, 0.016);
+    airflow._ribbonLines.forEach((R, r) => {
+      const base = bases[r];
+      for (let i = 0; i < base.length / 3; i++) {
+        const z = base[i * 3 + 2];
+        expect(R.positions[i * 3] - base[i * 3])
+          .toBeCloseTo(bendLookup(TABLE, z) + (-6 * z) / AIR_V, 4);
+      }
+    });
+  });
+});
+
+describe('RainEffect — arcade crosswind (Phase C)', () => {
+  it('exposes setCrosswind(c)', async () => {
+    const { RainEffect } = await import('../effects.js');
+    const rain = new RainEffect(makeScene());
+    expect(typeof rain.setCrosswind).toBe('function');
+  });
+
+  it('streak tails drift by c·dt and heads lean toward c', async () => {
+    const { RainEffect } = await import('../effects.js');
+    const rain = new RainEffect(makeScene());
+    rain.setVisible(true);
+    rain.setSpeed(0);                        // windRear 0; gust(0) = 0 exactly
+    const before = Float32Array.from(rain._dPos);
+    rain.setCrosswind(5);
+    rain.update(0.01, 0);
+    const dp = rain._dPos;
+    for (let i = 0; i < rain._dCount; i++) {
+      expect(dp[i * 6]).toBeCloseTo(before[i * 6] + 5 * 0.01, 6);
+      expect(dp[i * 6 + 3]).toBeGreaterThan(dp[i * 6]);   // head leans +x
+    }
+  });
+
+  it('sign chain: strafe right (setCrosswind(−vx), vx > 0) sweeps streaks toward −x', async () => {
+    const { RainEffect } = await import('../effects.js');
+    const rain = new RainEffect(makeScene());
+    rain.setVisible(true);
+    rain.setSpeed(0);
+    const before = Float32Array.from(rain._dPos);
+    rain.setCrosswind(-6);
+    rain.update(0.01, 0);
+    const dp = rain._dPos;
+    for (let i = 0; i < rain._dCount; i++) {
+      expect(dp[i * 6]).toBeCloseTo(before[i * 6] - 6 * 0.01, 6);
+      expect(dp[i * 6 + 3]).toBeLessThan(dp[i * 6]);      // head leans −x
+    }
+  });
+
+  it('zero crosswind leaves the uncoupled x baseline byte-identical (ω = 0, t = 0)', async () => {
+    const { RainEffect } = await import('../effects.js');
+    const rain = new RainEffect(makeScene());
+    rain.setVisible(true);
+    rain.setSpeed(0);
+    const before = Float32Array.from(rain._dPos);
+    rain.setCrosswind(0);
+    rain.update(0.01, 0);
+    const dp = rain._dPos;
+    for (let i = 0; i < rain._dCount; i++) {
+      expect(dp[i * 6]).toBe(before[i * 6]);              // no lateral term at all
+      expect(dp[i * 6 + 3]).toBe(dp[i * 6]);              // vertical streak
+    }
+  });
+});

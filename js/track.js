@@ -16,6 +16,7 @@ import {
   rowPose, rowWindow, poolSize, poolIndex,
   WINDOW_BEHIND, WINDOW_AHEAD,
 } from './track-path.js';
+import { HORIZON_COLOR } from './scene-config.js';
 
 const ROAD_W      = 30;     // full ground width (m)
 const GRASS_W     = 160;    // grass apron width (m) — fills the view to the sides
@@ -104,6 +105,25 @@ function makeGrassTexture() {
 const SKYLINE_R = 350;   // m — horizon ring radius
 const SKYLINE_H = 90;    // m — panorama height (sky gradient blends out on top)
 
+/* Arcade mid-ground parallax ring (game plan Phase C): a second, nearer
+ * cylinder of taller/darker silhouettes. Per frame it gets the world rotY
+ * PLUS a forward drift v·dt/(2π·R) rad (nearParallaxStep in game-mode.js);
+ * the far ring keeps rotY only — that differential is the depth cue.
+ * Hidden in SIM mode (sim scene must stay byte-identical). */
+export const SKYLINE_NEAR_R = 200;   // m — between WINDOW_AHEAD 160 and R 350
+const SKYLINE_NEAR_H = 70;
+
+/* Arcade rhythm furniture (Phase C): roadside posts + dashed lane paint
+ * give the strafe lanes a visible beat. Row-pool spacings/laterals pinned
+ * by game-mode.test.js. LANE_X = ±2.5 m — the boundaries of the three
+ * coin lanes at lat −5 / 0 / +5 (coins.js). */
+export const ARCADE_PROPS = {
+  POST_X:       13.5,   // m — outside the strafe hard clamp (±12)
+  POST_SPACING: 25,     // m
+  LANE_X:       2.5,    // m — lane-paint lateral
+  LANE_SPACING: 8,      // m — dash period
+};
+
 function makeSkylineTexture() {
   const W = 2048, H = 512;
   const canvas = document.createElement('canvas');
@@ -112,10 +132,12 @@ function makeSkylineTexture() {
   const ctx = canvas.getContext('2d');
 
   // Sky: background blue at top → pale haze at the horizon line (62%).
+  // The final stop is HORIZON_COLOR — the arcade fog (ARCADE_FOG) shares
+  // the constant so the fog wall melts into this panorama seamlessly.
   const sky = ctx.createLinearGradient(0, 0, 0, H * 0.66);
   sky.addColorStop(0,    '#87ceeb');   // = BACKGROUND_COLOR, seamless blend up
   sky.addColorStop(0.75, '#b8dcec');
-  sky.addColorStop(1,    '#d8e9e4');
+  sky.addColorStop(1,    HORIZON_COLOR);
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, W, H * 0.66);
 
@@ -152,24 +174,83 @@ function makeSkylineTexture() {
   return tex;
 }
 
+/* Arcade near ring: taller/darker silhouettes only — the sky stays
+ * transparent so the far panorama shows through above them. Same
+ * integer-cycle sinusoid rule as the far ring (seamless 360° wrap). */
+function makeNearSkylineTexture() {
+  const W = 2048, H = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  const bands = [
+    { base: 0.42, amps: [[2, 0.100], [5, 0.045], [9, 0.020]], phase: 2.9, color: '#31502f' },
+    { base: 0.55, amps: [[4, 0.080], [7, 0.040], [13, 0.018]], phase: 5.1, color: '#22381f' },
+  ];
+  for (const b of bands) {
+    ctx.fillStyle = b.color;
+    ctx.beginPath();
+    ctx.moveTo(0, H);
+    for (let x = 0; x <= W; x += 4) {
+      let y = b.base;
+      for (const [k, a] of b.amps) y -= a * Math.sin((2 * Math.PI * k * x) / W + b.phase * k);
+      ctx.lineTo(x, y * H);
+    }
+    ctx.lineTo(W, H);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Foot melts into the ground-disc green, like the far ring.
+  const base = ctx.createLinearGradient(0, H * 0.85, 0, H);
+  base.addColorStop(0, 'rgba(74,122,64,0)');
+  base.addColorStop(1, '#4a7a40');
+  ctx.fillStyle = base;
+  ctx.fillRect(0, H * 0.85, W, H * 0.15);
+
+  return new THREE.CanvasTexture(canvas);
+}
+
 export function buildSkyline() {
   const group = new THREE.Group();
   group.name = 'skyline';
 
-  // Hazy distant-grass floor out to the horizon ring.
+  // Hazy distant-grass floor out to the horizon ring. fog: false — beyond
+  // the arcade fog far plane (330), fogging would flatten it to a wall
+  // that clashes with the (fog-exempt) panorama above it.
   const discGeo = new THREE.CircleGeometry(SKYLINE_R + 40, 48);
   discGeo.rotateX(-Math.PI / 2);
-  const disc = new THREE.Mesh(discGeo, new THREE.MeshBasicMaterial({ color: 0x4a7a40 }));
+  const disc = new THREE.Mesh(discGeo, new THREE.MeshBasicMaterial({ color: 0x4a7a40, fog: false }));
   disc.position.y = GRASS_Y - 0.06;
   group.add(disc);
 
   const cylGeo = new THREE.CylinderGeometry(SKYLINE_R, SKYLINE_R, SKYLINE_H, 64, 1, true);
-  const cylMat = new THREE.MeshBasicMaterial({ map: makeSkylineTexture(), side: THREE.BackSide });
+  // fog: false — the far ring IS the horizon backdrop; the arcade fog ends
+  // at 330 < 350, so a fogged panorama would collapse to a flat colour band
+  // under the (unfogged) Sky shader. Fog colour == HORIZON_COLOR keeps the
+  // hand-off seamless instead.
+  const cylMat = new THREE.MeshBasicMaterial({ map: makeSkylineTexture(), side: THREE.BackSide, fog: false });
   const cyl = new THREE.Mesh(cylGeo, cylMat);
   cyl.position.y = SKYLINE_H / 2 + GRASS_Y - 0.1;
   group.add(cyl);
 
-  return { group };
+  // Arcade mid-ground parallax ring — HIDDEN in sim mode. Fog stays ON for
+  // this one (R 200 → ~46% fogged): the haze is part of the depth cue.
+  const nearGeo = new THREE.CylinderGeometry(SKYLINE_NEAR_R, SKYLINE_NEAR_R, SKYLINE_NEAR_H, 64, 1, true);
+  const nearMat = new THREE.MeshBasicMaterial({
+    map: makeNearSkylineTexture(),
+    side: THREE.BackSide,
+    transparent: true,
+    depthWrite: false,
+  });
+  const near = new THREE.Mesh(nearGeo, nearMat);
+  near.name = 'skyline-near';
+  near.position.y = SKYLINE_NEAR_H / 2 + GRASS_Y - 0.08;
+  near.visible = false;
+  group.add(near);
+
+  return { group, near };
 }
 
 /* ── Ground ribbon — path-following textured strip (asphalt or grass) ── */
@@ -353,6 +434,56 @@ export function buildTrack() {
     }));
   }
 
+  /* ── ARCADE rhythm props (Phase C) — hidden in sim mode ─────────── *
+   * Roadside posts every 25 m at ±13.5 m (outside the ±12 strafe clamp)
+   * and dashed lane paint every 8 m at ±2.5 m (coin-lane boundaries).
+   * Same row-pool recycling as the rest of the furniture; visibility is
+   * the only arcade/sim difference (setArcadeProps). */
+  const arcadeItems = [];
+
+  const postGeo   = new THREE.BoxGeometry(0.14, 2.4, 0.14);
+  const postRed   = new THREE.MeshBasicMaterial({ color: 0xd22222 });
+  const postWhite = new THREE.MeshBasicMaterial({ color: 0xf2f2f2 });
+  for (const side of [-1, 1]) {
+    pools.push(makeRowPool({
+      spacing: ARCADE_PROPS.POST_SPACING,
+      build: () => {
+        const m = new THREE.Mesh(postGeo, postWhite);
+        m.visible = false;
+        grp.add(m);
+        arcadeItems.push(m);
+        return m;
+      },
+      place: (m, k, path) => {
+        m.material = (((k % 2) + 2) % 2) === 0 ? postRed : postWhite; // positive mod
+        placeRow(m, k, ARCADE_PROPS.POST_SPACING, side * ARCADE_PROPS.POST_X,
+          SURFACE_Y + 1.2, path);
+      },
+    }));
+  }
+
+  const laneGeo = new THREE.PlaneGeometry(0.12, 2.2);
+  laneGeo.rotateX(-Math.PI / 2);
+  const laneMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  for (const side of [-1, 1]) {
+    pools.push(makeRowPool({
+      spacing: ARCADE_PROPS.LANE_SPACING,
+      build: () => {
+        const m = new THREE.Mesh(laneGeo, laneMat);
+        m.visible = false;
+        grp.add(m);
+        arcadeItems.push(m);
+        return m;
+      },
+      place: (m, k, path) => placeRow(m, k, ARCADE_PROPS.LANE_SPACING,
+        side * ARCADE_PROPS.LANE_X, SURFACE_Y + 0.008, path),
+    }));
+  }
+
+  function setArcadeProps(on) {
+    for (const o of arcadeItems) o.visible = !!on;
+  }
+
   /* Re-place every out-of-date row + rebuild the ground ribbons. */
   function update(path) {
     grass.update(path);
@@ -360,5 +491,5 @@ export function buildTrack() {
     for (const p of pools) p.update(path);
   }
 
-  return { group: grp, groundTex, update, WINDOW_BEHIND, WINDOW_AHEAD };
+  return { group: grp, groundTex, update, setArcadeProps, WINDOW_BEHIND, WINDOW_AHEAD };
 }

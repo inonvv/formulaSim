@@ -588,6 +588,7 @@ export class AirflowEffect {
     this._measure      = null;
     this._turnOmega    = 0;    // car yaw rate (rad/s) while turning
     this._pathBend     = null; // pathBendTable sample — the road's own curve
+    this._crosswind    = 0;    // arcade strafe apparent wind, m/s (setCrosswind)
 
     this._build(getProfile('F1'), null);
     this.group.visible = false;
@@ -1377,6 +1378,13 @@ export class AirflowEffect {
      per frame by main.js. Ribbons offset by bendLookup(table, z). */
   setPathBend(table) { this._pathBend = table; }
 
+  /* ARCADE crosswind (game plan Phase C) — apparent lateral wind from the
+   * strafe. main.js passes −vx (strafe right, vx > 0 ⇒ air sweeps −x in
+   * the car frame). Ribbons shear by Δx = c·z/airV — the lateral drift a
+   * parcel accumulates over its transit time to station z — applied at
+   * the same point as the road bend so air and road never diverge. */
+  setCrosswind(c) { this._crosswind = c || 0; }
+
   setVisible(v) {
     this._visible = v;
     this.group.visible = v;
@@ -1486,6 +1494,14 @@ export class AirflowEffect {
         // mid-corner instead of shearing by a rigid-rotation heuristic.
         if (this._pathBend) {
           wx += bendLookup(this._pathBend, wz);
+        }
+
+        // ARCADE crosswind — uniform shear growing downstream (Phase C).
+        // Same application point as the road bend. airV floored at 8 m/s
+        // (transit time undefined at rest). setCrosswind(−vx): strafe
+        // right ⇒ streamlines drift −x (sign chain in effects.test.js).
+        if (this._crosswind) {
+          wx += (this._crosswind * wz) / Math.max(this._speed / 3.6, 8);
         }
 
         positions[i * 3]     = wx;
@@ -1715,6 +1731,7 @@ export class RainEffect {
     this._visible  = false;
     this._rainPos  = RAIN_POS.F1;
     this._turnALat = 0;   // centrifugal accel v·ω while turning (m/s²)
+    this._crosswind = 0;  // arcade strafe apparent wind, m/s (setCrosswind)
     this._flowCoupling = null;   // Phase 5: airflow sampler wiring (main.js)
 
     this._buildDroplets();
@@ -1943,6 +1960,11 @@ export class RainEffect {
    * Free water (spray, rooster tails) accumulates it; falling streaks lean. */
   setTurnState(omega, v) { this._turnALat = rainLateralAccel(v, omega); }
 
+  /* ARCADE crosswind (game plan Phase C) — additive lateral VELOCITY on the
+   * falling streaks (distinct from the ω-based rainLateralAccel term).
+   * main.js passes −vx: strafe right ⇒ rain sweeps −x past the car. */
+  setCrosswind(c) { this._crosswind = c || 0; }
+
   /**
    * Phase 5 (part-precision): attach the airflow field. `sampler(x,y,z)`
    * returns car-frame flow velocity (m/s); `occupancy` (optional) triggers
@@ -2042,7 +2064,9 @@ export class RainEffect {
     // time (~0.4 s); the streak leans outward because vel.x ≠ 0.
     const aLat = this._turnALat;
     const turnDrift = aLat * 0.4;
-    const driftX = turnDrift + gust.gx;   // shared by drift + streak vector
+    // Arcade crosswind rides the same shared lateral term — position drift
+    // AND streak orientation lean together (zero in sim: byte-identical).
+    const driftX = turnDrift + gust.gx + this._crosswind;
     const sweepZ = windRear + gust.gz;
     // Phase 5: airflow coupling — only above the sf gate, and only inside
     // the envelope. With coupling off this loop is byte-identical to the

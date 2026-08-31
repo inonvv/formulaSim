@@ -18,6 +18,13 @@ import { topViewVelocity, pressureCoeff, cpToColor, vortexVelocity, sumVelocity 
 /* ── Helpers ──────────────────────────────────────────────────────── */
 function rnd(a, b) { return a + Math.random() * (b - a); }
 
+/* Arcade sideslip (game plan Phase C): the Newtonian facing term only
+ * rotates when |β| exceeds the gate — below it the sim-mode Cp model is
+ * byte-identical. setSideslip quantises to 2° buckets so a ramping strafe
+ * forces at most a handful of full-surface recolors, not one per frame. */
+const SIDESLIP_GATE  = 5 * Math.PI / 180;   // rad
+const SIDESLIP_QUANT = 2 * Math.PI / 180;   // rad
+
 /**
  * Piecewise-linear Cp profiles along the car body (car-frame z), PER CAR and
  * PER SURFACE. An open-wheel ground-effect F1 and a closed-body GT3 RS have
@@ -572,8 +579,15 @@ export function computePatchCp(p, lx, ly, speedFactor, modifiers = [], vortexCor
  * @param {number} speedFactor  — [0, 1]
  * @param {number} shadow       — upstream-shadowing factor ∈ (0, 1]; 1 = clean
  *                                freestream, 0.35 = body part sits upstream
+ * @param {number} beta         — arcade apparent sideslip (rad). Rotates the
+ *                                Newtonian flow dir (0,0,1) → (sinβ, 0, cosβ)
+ *                                in the facing term ONLY when |β| > 5° (gate:
+ *                                SIDESLIP_GATE), else skipped — the sim path
+ *                                stays byte-identical. main.js passes
+ *                                β = atan2(−vx, vFwd): strafe right (vx > 0)
+ *                                ⇒ β < 0 ⇒ the +x side face gains impact.
  */
-export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor, shadow = 1) {
+export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor, shadow = 1, beta = 0) {
   if (!speedFactor) return 0;
 
   const floorY  = Number.isFinite(anchors?.floor?.y) ? anchors.floor.y : 0.03;
@@ -648,7 +662,11 @@ export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor
     // faces the flow. facing = −nz ∈ (0, 1]; impact = facing². Scaled by
     // `shadow` (upstream body ⇒ wake impingement, not clean stagnation) and
     // suppressed on wing suction sides (accelerating flow, not blunt-body).
-    const facing = Math.max(0, -nz) * shadow;
+    // Arcade sideslip (Phase C): above the 5° gate the flow dir rotates to
+    // (sinβ, 0, cosβ) — facing = −n·d picks up the strafe wind's side bias.
+    const facing = (Math.abs(beta) > SIDESLIP_GATE
+      ? Math.max(0, -(nx * Math.sin(beta) + nz * Math.cos(beta)))
+      : Math.max(0, -nz)) * shadow;
     if (facing > 0) {
       const t = Math.min(1, facing * facing * 1.4) * (1 - sGate);
       cp = cp + (0.95 - cp) * t;
@@ -725,6 +743,7 @@ export class CfdEffect {
     this._anchors        = null;   // set by setCarType(type, measure)
     this._measure        = null;   // full measure (axle fields → tire proxies)
     this._modifiers      = [];     // Phase C: injected via setModifiers()
+    this._beta           = 0;      // arcade sideslip (rad), gated + quantised
     this._occupancy      = null;   // world-frame body SDF (setOccupancy)
     this._occBaseY       = 0;      // world y = car-local y + occBaseY
 
@@ -798,6 +817,21 @@ export class CfdEffect {
   setSpeed(speed) {
     this._speed      = speed;
     this._speedDirty = true;
+  }
+
+  /**
+   * Arcade apparent sideslip (game plan Phase C). β = atan2(−vx, vFwd) from
+   * main.js — the strafe's apparent wind direction. Gated at 5° (below it
+   * the stored β is 0 and the Cp model is untouched) and quantised to 2°
+   * buckets; only a bucket CHANGE forces the full-surface recolor.
+   */
+  setSideslip(beta) {
+    const gated = Math.abs(beta) > SIDESLIP_GATE ? beta : 0;
+    const q = Math.round(gated / SIDESLIP_QUANT) * SIDESLIP_QUANT;
+    if (q === this._beta) return;
+    this._beta           = q;
+    this._speedDirty     = true;
+    this._lastBuiltSpeed = -9999;   // force the recolor threshold
   }
 
   /**
@@ -1117,7 +1151,7 @@ export class CfdEffect {
         }
         const cp = computeSurfaceCp(
           px, py, pz, vnx, vny, vnz,
-          this._type, this._anchors, speedFactor, shadow,
+          this._type, this._anchors, speedFactor, shadow, this._beta,
         );
         // Emphasis map: cpRef scaled by the current speed's attainable peak
         // so the heat-point pattern is legible at 100 km/h too.

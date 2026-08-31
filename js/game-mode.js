@@ -101,6 +101,60 @@ export function tiltStep(prev, vx, vFwd, dt, wheelbase = 3.6) {
   };
 }
 
+/* ── Phase C — immersion helpers (pure) ──────────────────────────── */
+
+/** Dynamic FOV (arcade only): 50° base → 60° at sf 1, scaled by sf²,
+ *  one-pole tau 0.45 s. main.js touches the projection matrix only when
+ *  |camera.fov − fovStep(...)| > EPS. */
+export const FOV_CFG = { BASE: 50, MAX: 60, TAU: 0.45, EPS: 0.05 };
+
+export function fovTarget(sf) {
+  const s = clamp(sf, 0, 1);
+  return FOV_CFG.BASE + (FOV_CFG.MAX - FOV_CFG.BASE) * s * s;
+}
+
+export function fovStep(current, sf, dt) {
+  if (!(dt > 0)) return current;
+  return current + (fovTarget(sf) - current) * (1 - Math.exp(-dt / FOV_CFG.TAU));
+}
+
+/** Near parallax cylinder (R 200 in track.js buildSkyline): forward motion
+ *  reads as a slow drift v·dt/(2π·R) rad against the static far ring —
+ *  the rotation differential is the depth cue. Accumulated sim time only. */
+export function nearParallaxStep(prev, vFwd, dt, radius = 200) {
+  if (!(dt > 0)) return prev;
+  return prev + (vFwd * dt) / (2 * Math.PI * radius);
+}
+
+/**
+ * Camera shake (arcade only, camera-local x/y): 2 summed sines per axis in
+ * the 15–25 Hz band, peak amplitude 0.006–0.012 m, gain sf² ramping in
+ * above sf 0.7. Edge rumble (lateralStep soft zone) adds a 0.02–0.03 m
+ * component at 28 Hz regardless of speed. `t` is ACCUMULATED SIM TIME
+ * (state.time) — never Date.now(), so the shake pauses with the sim.
+ */
+export const SHAKE_CFG = { SF_GATE: 0.7, RUMBLE_AMP: 0.025, RUMBLE_HZ: 28 };
+
+export function cameraShake(t, sf, edgeRumble = 0) {
+  const s    = clamp(sf, 0, 1);
+  const ramp = Math.max(0, (s - SHAKE_CFG.SF_GATE) / (1 - SHAKE_CFG.SF_GATE));
+  const gain = ramp * s * s;
+  const TAU  = 2 * Math.PI;
+  let x = 0, y = 0;
+  if (gain > 0) {
+    x = gain * (0.007 * Math.sin(TAU * 17 * t) +
+                0.004 * Math.sin(TAU * 23 * t + 1.3));
+    y = gain * (0.005 * Math.sin(TAU * 15 * t + 0.7) +
+                0.004 * Math.sin(TAU * 25 * t + 2.4));
+  }
+  if (edgeRumble > 0) {
+    const r = clamp(edgeRumble, 0, 1) * SHAKE_CFG.RUMBLE_AMP;
+    x += r * Math.sin(TAU * SHAKE_CFG.RUMBLE_HZ * t);
+    y += r * 0.6 * Math.sin(TAU * SHAKE_CFG.RUMBLE_HZ * t + Math.PI / 2);
+  }
+  return { x: x + 0, y: y + 0 };   // +0 normalises −0 (toEqual pins exact zero)
+}
+
 /* ── Game state machine ──────────────────────────────────────────── */
 /**
  * menu → (start) → countdown → running → (timer 0) → gameover → (start) →

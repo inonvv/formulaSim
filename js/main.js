@@ -15,7 +15,7 @@ import { OutputPass }      from 'three/addons/postprocessing/OutputPass.js';
 import { buildCar, getCarMeta, clampToVMax, WHEEL_NAMES, buildSteeringWheel } from './cars.js';
 import { CAR_MANIFEST } from './car-manifest.js';
 import { createDebugOverlay } from './debug-overlay.js';
-import { buildTrack, buildSkyline } from './track.js';
+import { buildTrack, buildSkyline, SKYLINE_NEAR_R } from './track.js';
 import { TrackPath, TURN_CFG, rowPose, steerAngleRad, rollAngleRad, smoothAngle, cameraBankRad, pathBendTable, turnEdgeCounter } from './track-path.js';
 import { AirflowEffect, RainEffect } from './effects.js';
 import { RainLensShader, rainLensIntensity, lensActive } from './rain-lens.js';
@@ -26,7 +26,10 @@ import { collectOccupancyMeshes } from './car-loader.js';
 import { createSwapGuard } from './swap-guard.js';
 import { EffectStub } from './effect-stub.js';
 import { gearFromSpeed, wheelRotationRate, aeroSquishFactor, rpmRatio, lerpSpeed } from './physics.js';
-import { createGame, lateralStep, tiltStep, worldOffsetX } from './game-mode.js';
+import {
+  createGame, lateralStep, tiltStep, worldOffsetX,
+  fovStep, FOV_CFG, cameraShake, nearParallaxStep,
+} from './game-mode.js';
 import { createCoinField, createScoring } from './coins.js';
 import { buildCoinVisuals } from './coin-visuals.js';
 import { EngineAudio, loadAudioSettings, saveAudioSettings } from './engine-audio.js';
@@ -34,7 +37,7 @@ import { partForHit, eduEntryFor, splitCopy } from './edu-content.js';
 import {
   BACKGROUND_COLOR, AMBIENT_COLOR, AMBIENT_INTENSITY,
   SUN_COLOR, SUN_INTENSITY, FILL_COLOR, FILL_INTENSITY,
-  RIM_COLOR, RIM_INTENSITY, EXPOSURE, SKY, BLOOM, WEATHER,
+  RIM_COLOR, RIM_INTENSITY, EXPOSURE, SKY, BLOOM, WEATHER, ARCADE_FOG,
 } from './scene-config.js';
 
 /* ══════════════════════════════════════════════════════════════════
@@ -188,6 +191,9 @@ const state = {
   arcadeTilt: { roll: 0, yaw: 0, steer: 0 },  // smoothed strafe pose (arcade only)
   camJuice:   0,          // smoothed arcade camera x-offset (0.25·playerX target)
   _camJuiceApplied: 0,    // what was actually added to camera.position.x last frame
+  fovVis:     FOV_CFG.BASE,           // smoothed arcade FOV (fovStep, tau 0.45 s)
+  _nearDrift: 0,          // near parallax ring forward-drift accumulator (rad)
+  _shakeApplied: new THREE.Vector3(), // last frame's camera-shake offset (undone each frame)
   infoMode:   false,      // P6 educational layer — part cards on hover
   _infoTargets: [],       // cached raycast subset: occupancy meshes + wheel groups
   // Engine-sound settings — persisted to localStorage('fsim-audio'), restored
@@ -924,6 +930,13 @@ function updateTrack(dt) {
   // apparent wind hits the +x side. Skyline stays put (infinite parallax).
   if (state.mode === 'arcade') trackGroup.position.x += worldOffsetX(game.lateral.playerX);
   skyline.group.rotation.y = w.rotY;   // horizon yaws with the turn, stays centred
+  // Phase C: the near parallax ring adds a forward drift v·dt/(2π·200) on
+  // top of the group rotY (its local rotation). The far ring keeps rotY
+  // only — the differential is the depth cue. Arcade only.
+  if (state.mode === 'arcade') {
+    state._nearDrift = nearParallaxStep(state._nearDrift, mps, dt, SKYLINE_NEAR_R);
+    skyline.near.rotation.y = state._nearDrift;
+  }
 
   // Recycle furniture rows through the sliding window.
   track.update(trackPath);
@@ -963,6 +976,8 @@ function updateTrack(dt) {
    RENDER LOOP
 ══════════════════════════════════════════════════════════════════ */
 const clock = new THREE.Clock();
+const _shakeRight = new THREE.Vector3();   // camera-local shake basis temps
+const _shakeUp    = new THREE.Vector3();
 
 function animate() {
   requestAnimationFrame(animate);
@@ -983,11 +998,13 @@ function animate() {
     }
   }
 
-  // Camera — undo last frame's arcade juice first: trackside/drone lerp
-  // from the CURRENT position, so a persistent additive offset would feed
-  // back into their targets (~50× amplification at lerp 0.02).
+  // Camera — undo last frame's arcade juice + shake first: trackside/drone
+  // lerp from the CURRENT position, so a persistent additive offset would
+  // feed back into their targets (~50× amplification at lerp 0.02).
   camera.position.x -= state._camJuiceApplied;
   state._camJuiceApplied = 0;
+  camera.position.sub(state._shakeApplied);
+  state._shakeApplied.set(0, 0, 0);
   CAM_CONFIGS[state.camMode].update(dt);
   if (state.camMode === 'orbit') orbit.update();
 
@@ -1011,6 +1028,30 @@ function animate() {
   if (state.camJuice !== 0) {
     camera.position.x += state.camJuice;
     state._camJuiceApplied = state.camJuice;
+  }
+
+  // ARCADE dynamic FOV — 50° → 60° by sf², tau 0.45 s. The projection
+  // matrix only refreshes past the 0.05° epsilon (fovStep / FOV_CFG).
+  // setMode('sim') snaps back to base, so sim never touches this.
+  if (state.mode === 'arcade' && !state.paused) {
+    state.fovVis = fovStep(state.fovVis, Math.min(state.speed / 350, 1), dt);
+    if (Math.abs(camera.fov - state.fovVis) > FOV_CFG.EPS) {
+      camera.fov = state.fovVis;
+      camera.updateProjectionMatrix();
+    }
+  }
+
+  // ARCADE camera shake — accumulated sim time (state.time), camera-local
+  // x/y, sf² gain above sf 0.7 plus the soft-zone edge rumble. Applied
+  // last and undone at the top of the next frame (same rule as camJuice).
+  if (state.mode === 'arcade' && !state.paused) {
+    const sh = cameraShake(state.time, Math.min(state.speed / 350, 1), game.lateral.edgeRumble);
+    if (sh.x !== 0 || sh.y !== 0) {
+      _shakeRight.set(1, 0, 0).applyQuaternion(camera.quaternion).multiplyScalar(sh.x);
+      _shakeUp.set(0, 1, 0).applyQuaternion(camera.quaternion).multiplyScalar(sh.y);
+      state._shakeApplied.copy(_shakeRight).add(_shakeUp);
+      camera.position.add(state._shakeApplied);
+    }
   }
 
   // Car animation + track motion
@@ -1042,6 +1083,16 @@ function animate() {
     airflow.setPathBend?.(pathBendTable(trackPath));
     airflow.setTurnState?.(turnOmega, state.speed / 3.6);
     rain.setTurnState?.(turnOmega, state.speed / 3.6);
+    // ARCADE crosswind (Phase C) — the strafe's apparent wind, one sign
+    // chain for all three effects: strafe right (vx > 0) ⇒ world −x ⇒
+    // air sweeps −x past the car. Airflow shears ribbons downstream, rain
+    // streaks gain a −vx lateral velocity, CFD rotates its Newtonian flow
+    // dir by β = atan2(−vx, vFwd) (gated at 5° inside setSideslip). Sim:
+    // strafeVx is 0 ⇒ every call is the identity.
+    const strafeVx = state.mode === 'arcade' ? game.lateral.vx : 0;
+    airflow.setCrosswind?.(-strafeVx);
+    rain.setCrosswind?.(-strafeVx);
+    cfd.setSideslip?.(Math.atan2(-strafeVx, Math.max(state.speed / 3.6, 1)));
     try { airflow.update(dt, state.time); } catch (e) { console.error('[airflow.update]', e); }
     try { rain.update(dt, state.time); }    catch (e) { console.error('[rain.update]', e); }
     try { cfd.update(dt, state.time); }     catch (e) { console.error('[cfd.update]', e); }
@@ -1119,6 +1170,11 @@ function setMode(mode) {
     scoring.reset();
     hudVis.scoreShown = 0;
     game.start();      // menu → countdown → running
+    // Phase C immersion — ALL arcade-only: horizon-matched fog, the near
+    // parallax ring, roadside rhythm posts + lane paint.
+    scene.fog = new THREE.Fog(ARCADE_FOG.color, ARCADE_FOG.near, ARCADE_FOG.far);
+    skyline.near.visible = true;
+    track.setArcadeProps(true);
   } else {
     game.reset();
     coinField.reset();
@@ -1134,6 +1190,18 @@ function setMode(mode) {
     // re-set while paused and leave the road shifted).
     const w = trackPath.worldTransform();
     trackGroup.position.set(w.x, 0, w.z);
+    // Phase C teardown — sim is fog-free (scene-config rule), FOV snaps to
+    // base, parallax ring hides and its drift zeroes with the mode.
+    scene.fog = null;
+    skyline.near.visible = false;
+    skyline.near.rotation.y = 0;
+    state._nearDrift = 0;
+    track.setArcadeProps(false);
+    state.fovVis = FOV_CFG.BASE;
+    if (camera.fov !== FOV_CFG.BASE) {
+      camera.fov = FOV_CFG.BASE;
+      camera.updateProjectionMatrix();
+    }
   }
 }
 

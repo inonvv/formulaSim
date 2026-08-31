@@ -28,7 +28,10 @@ vi.mock('three', () => {
 
 import {
   createGame, lateralStep, tiltStep, worldOffsetX, GAME_CFG,
+  FOV_CFG, fovTarget, fovStep, SHAKE_CFG, cameraShake, nearParallaxStep,
 } from '../game-mode.js';
+import { ARCADE_FOG, HORIZON_COLOR } from '../scene-config.js';
+import { SKYLINE_NEAR_R, ARCADE_PROPS } from '../track.js';
 
 const DEG = Math.PI / 180;
 
@@ -294,6 +297,125 @@ describe('tiltStep', () => {
     const prev = { roll: 0.1, yaw: 0.05, steer: 0.02 };
     tiltStep(prev, 5, 50, 0.016);
     expect(prev).toEqual({ roll: 0.1, yaw: 0.05, steer: 0.02 });
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════
+   Phase C — arcade fog (colour MUST equal the skyline horizon)
+══════════════════════════════════════════════════════════════════ */
+describe('Phase C — arcade fog config', () => {
+  it('fog colour equals the skyline horizon colour (single source of truth)', () => {
+    expect(ARCADE_FOG.color).toBe(HORIZON_COLOR);
+  });
+
+  it('fog band is 90..330 m, ending inside the far skyline ring (R 350)', () => {
+    expect(ARCADE_FOG.near).toBe(90);
+    expect(ARCADE_FOG.far).toBe(330);
+    expect(ARCADE_FOG.far).toBeLessThan(350);
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════
+   Phase C — near parallax cylinder (mid-ground depth cue)
+══════════════════════════════════════════════════════════════════ */
+describe('Phase C — near parallax cylinder', () => {
+  it('sits at R 200 — between the track window (160) and the far ring (350)', () => {
+    expect(SKYLINE_NEAR_R).toBe(200);
+    expect(SKYLINE_NEAR_R).toBeGreaterThan(160);
+    expect(SKYLINE_NEAR_R).toBeLessThan(350);
+  });
+
+  it('drift accumulates v·dt/(2π·R) rad per frame', () => {
+    const d1 = nearParallaxStep(0, 50, 0.1);
+    expect(d1).toBeCloseTo((50 * 0.1) / (2 * Math.PI * 200), 9);
+    expect(nearParallaxStep(d1, 50, 0.1)).toBeCloseTo(2 * d1, 9);
+  });
+
+  it('no speed ⇒ no drift; sim never calls it (accumulator unchanged)', () => {
+    expect(nearParallaxStep(0.3, 0, 0.1)).toBe(0.3);
+    expect(nearParallaxStep(0.3, 50, 0)).toBe(0.3);
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════
+   Phase C — rhythm props (row-pool furniture, arcade only)
+══════════════════════════════════════════════════════════════════ */
+describe('Phase C — rhythm props config', () => {
+  it('roadside posts at ±13.5 m every 25 m; lane paint period 8 m', () => {
+    expect(ARCADE_PROPS.POST_X).toBe(13.5);
+    expect(ARCADE_PROPS.POST_SPACING).toBe(25);
+    expect(ARCADE_PROPS.LANE_SPACING).toBe(8);
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════
+   Phase C — dynamic FOV
+══════════════════════════════════════════════════════════════════ */
+describe('Phase C — dynamic FOV', () => {
+  it('target: 50° base → 60° at sf 1, scaled by sf²', () => {
+    expect(fovTarget(0)).toBe(50);
+    expect(fovTarget(1)).toBe(60);
+    expect(fovTarget(0.5)).toBeCloseTo(52.5, 9);   // 50 + 10·0.25
+    expect(fovTarget(2)).toBe(60);                 // sf clamped to 1
+  });
+
+  it('one-pole smoothing with tau 0.45 s', () => {
+    const one = fovStep(50, 1, 0.45);
+    expect(one).toBeCloseTo(50 + 10 * (1 - Math.exp(-1)), 6);
+  });
+
+  it('dt ≤ 0 returns current unchanged', () => {
+    expect(fovStep(53, 1, 0)).toBe(53);
+    expect(fovStep(53, 1, -1)).toBe(53);
+  });
+
+  it('projection-update epsilon is 0.05°', () => {
+    expect(FOV_CFG.BASE).toBe(50);
+    expect(FOV_CFG.MAX).toBe(60);
+    expect(FOV_CFG.TAU).toBe(0.45);
+    expect(FOV_CFG.EPS).toBe(0.05);
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════
+   Phase C — camera shake (accumulated sim time, never Date.now)
+══════════════════════════════════════════════════════════════════ */
+describe('Phase C — camera shake', () => {
+  it('silent at/below the sf 0.7 gate with no edge rumble', () => {
+    for (const sf of [0, 0.3, 0.699, 0.7]) {
+      expect(cameraShake(1.234, sf, 0)).toEqual({ x: 0, y: 0 });
+    }
+  });
+
+  it('at sf 1 the sampled peak lies in the 0.006–0.012 m band', () => {
+    let peak = 0;
+    for (let t = 0; t < 2; t += 1 / 997) {
+      const s = cameraShake(t, 1, 0);
+      peak = Math.max(peak, Math.abs(s.x), Math.abs(s.y));
+    }
+    expect(peak).toBeGreaterThanOrEqual(0.006);
+    expect(peak).toBeLessThanOrEqual(0.012);
+  });
+
+  it('gain grows with sf² above the gate', () => {
+    const a = cameraShake(0.1, 0.8, 0);
+    const b = cameraShake(0.1, 1.0, 0);
+    expect(Math.hypot(b.x, b.y)).toBeGreaterThan(Math.hypot(a.x, a.y));
+  });
+
+  it('edge rumble adds a 0.02–0.03 m component at 28 Hz even below the sf gate', () => {
+    expect(SHAKE_CFG.RUMBLE_HZ).toBe(28);
+    let peak = 0;
+    for (let t = 0; t < 1; t += 1 / 997) {
+      const s = cameraShake(t, 0, 1);
+      peak = Math.max(peak, Math.abs(s.x), Math.abs(s.y));
+    }
+    expect(peak).toBeGreaterThanOrEqual(0.02);
+    expect(peak).toBeLessThanOrEqual(0.03);
+  });
+
+  it('deterministic in sim time (pure — no wall clock)', () => {
+    expect(cameraShake(0.5, 1, 0.5)).toEqual(cameraShake(0.5, 1, 0.5));
   });
 });
 
