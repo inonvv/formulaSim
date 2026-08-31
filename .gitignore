@@ -9,3 +9,4 @@ dist/
 images/
 test-output.txt
 scripts/_shots/
+coverage/
