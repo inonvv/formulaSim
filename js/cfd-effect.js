@@ -21,9 +21,14 @@ function rnd(a, b) { return a + Math.random() * (b - a); }
 /* Arcade sideslip (game plan Phase C): the Newtonian facing term only
  * rotates when |β| exceeds the gate — below it the sim-mode Cp model is
  * byte-identical. setSideslip quantises to 2° buckets so a ramping strafe
- * forces at most a handful of full-surface recolors, not one per frame. */
-const SIDESLIP_GATE  = 5 * Math.PI / 180;   // rad
-const SIDESLIP_QUANT = 2 * Math.PI / 180;   // rad
+ * forces at most a handful of full-surface recolors, not one per frame.
+ * Hysteresis (engage > GATE, release < RELEASE) plus a minimum sim-time
+ * interval between β repaints stop an oscillating strafe near the gate
+ * from thrashing full-surface recolors (~185k verts on GT). */
+const SIDESLIP_GATE        = 5 * Math.PI / 180;   // rad — engage threshold
+const SIDESLIP_RELEASE     = 3 * Math.PI / 180;   // rad — release threshold
+const SIDESLIP_QUANT       = 2 * Math.PI / 180;   // rad
+const SIDESLIP_REPAINT_MIN = 0.25;                // s (accumulated sim time)
 
 /**
  * Piecewise-linear Cp profiles along the car body (car-frame z), PER CAR and
@@ -744,6 +749,8 @@ export class CfdEffect {
     this._measure        = null;   // full measure (axle fields → tire proxies)
     this._modifiers      = [];     // Phase C: injected via setModifiers()
     this._beta           = 0;      // arcade sideslip (rad), gated + quantised
+    this._betaDirty      = false;  // pending sideslip-driven repaint
+    this._betaClock      = SIDESLIP_REPAINT_MIN; // sim time since last β repaint (starts elapsed)
     this._occupancy      = null;   // world-frame body SDF (setOccupancy)
     this._occBaseY       = 0;      // world y = car-local y + occBaseY
 
@@ -821,17 +828,19 @@ export class CfdEffect {
 
   /**
    * Arcade apparent sideslip (game plan Phase C). β = atan2(−vx, vFwd) from
-   * main.js — the strafe's apparent wind direction. Gated at 5° (below it
-   * the stored β is 0 and the Cp model is untouched) and quantised to 2°
-   * buckets; only a bucket CHANGE forces the full-surface recolor.
+   * main.js — the strafe's apparent wind direction. Hysteresis-gated
+   * (engage > 5°, release < 3° — the dead band stops a strafe oscillating
+   * at the gate from flip-flopping buckets) and quantised to 2° buckets;
+   * only a bucket CHANGE schedules the full-surface recolor, and update()
+   * throttles those to one per SIDESLIP_REPAINT_MIN of sim time.
    */
   setSideslip(beta) {
-    const gated = Math.abs(beta) > SIDESLIP_GATE ? beta : 0;
-    const q = Math.round(gated / SIDESLIP_QUANT) * SIDESLIP_QUANT;
+    const abs    = Math.abs(beta);
+    const engage = this._beta !== 0 ? abs >= SIDESLIP_RELEASE : abs > SIDESLIP_GATE;
+    const q = engage ? Math.round(beta / SIDESLIP_QUANT) * SIDESLIP_QUANT : 0;
     if (q === this._beta) return;
-    this._beta           = q;
-    this._speedDirty     = true;
-    this._lastBuiltSpeed = -9999;   // force the recolor threshold
+    this._beta      = q;
+    this._betaDirty = true;   // repainted in update(), independent of speed delta
   }
 
   /**
@@ -891,12 +900,18 @@ export class CfdEffect {
 
     const speedFactor = Math.min(this._speed / 350, 1);
 
-    // Refresh patch / surface vertex colours when speed changes meaningfully
-    if (this._speedDirty && Math.abs(this._speed - this._lastBuiltSpeed) > 5) {
+    // Refresh patch / surface vertex colours when speed changes meaningfully,
+    // or when a sideslip bucket changed — β repaints bypass the speed-delta
+    // gate but are throttled to one per SIDESLIP_REPAINT_MIN of sim time.
+    this._betaClock += dt || 0;
+    const betaDue = this._betaDirty && this._betaClock >= SIDESLIP_REPAINT_MIN;
+    if (betaDue || (this._speedDirty && Math.abs(this._speed - this._lastBuiltSpeed) > 5)) {
       this._updatePatchColors(speedFactor);
       this._updateSurfaceColors(speedFactor);
       this._lastBuiltSpeed = this._speed;
       this._speedDirty     = false;
+      this._betaDirty      = false;         // any repaint bakes the current β
+      if (betaDue) this._betaClock = 0;     // throttle β-driven repaints only
     }
 
     // ── Zone blobs: pulse scale + opacity ─────────────────────────

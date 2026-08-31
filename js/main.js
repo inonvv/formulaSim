@@ -711,6 +711,9 @@ const hudVis = {
   lastCountdown: null,   // last digit rendered (re-triggers the pop anim)
   lastPhase:     null,
   goCount:       0,      // gameover count-up clock (0.8 s to full score)
+  lastScoreTxt:  null,   // last textContent written (skip no-op DOM writes)
+  lastTimerTxt:  null,
+  lastCoinsTxt:  null,
 };
 
 /** Per-frame HUD mirror of game + scoring state (scene must mirror state). */
@@ -731,10 +734,15 @@ function updateArcadeHud(dt) {
   const target = scoring.score;
   if (dt > 0) hudVis.scoreShown += (target - hudVis.scoreShown) * (1 - Math.exp(-dt / 0.3));
   if (Math.abs(target - hudVis.scoreShown) < 0.5) hudVis.scoreShown = target;
-  arcScoreEl.textContent  = String(Math.round(hudVis.scoreShown));
-  arcTimerEl.textContent  = String(Math.ceil(game.timeLeft));
+  // Change-guarded textContent writes — the floats tick every frame but the
+  // DISPLAY values only change a few times a second.
+  const scoreTxt = String(Math.round(hudVis.scoreShown));
+  if (scoreTxt !== hudVis.lastScoreTxt) { hudVis.lastScoreTxt = scoreTxt; arcScoreEl.textContent = scoreTxt; }
+  const timerTxt = String(Math.ceil(game.timeLeft));
+  if (timerTxt !== hudVis.lastTimerTxt) { hudVis.lastTimerTxt = timerTxt; arcTimerEl.textContent = timerTxt; }
   arcTimerEl.classList.toggle('low', game.phase === 'running' && game.timeLeft <= 10);
-  arcCoinCntEl.textContent = String(game.coins);
+  const coinsTxt = String(game.coins);
+  if (coinsTxt !== hudVis.lastCoinsTxt) { hudVis.lastCoinsTxt = coinsTxt; arcCoinCntEl.textContent = coinsTxt; }
   arcComboEl.classList.toggle('show', scoring.mult > 1);
 
   // Countdown overlay — re-trigger the pop animation + tick blip per digit.
@@ -900,7 +908,7 @@ function animateCar(dt) {
     state.carGroup.rotation.y = state.yawVis + at.yaw;
     for (const key of ['FL', 'FR', 'wFL', 'wFR']) {
       const w = state.wheels[key];
-      if (w) w.rotation.y = state.steerVis + at.steer;
+      if (w) { w.rotation.order = 'YXZ'; w.rotation.y = state.steerVis + at.steer; }
     }
     if (state.steeringWheel) state.steeringWheel.rotation.z = (state.steerVis + at.steer) * 2.5;
   }
@@ -1135,6 +1143,7 @@ document.querySelectorAll('.car-btn').forEach(btn => {
   btn.addEventListener('click', async () => {
     const type = btn.dataset.car;
     if (type === state.carType) return;
+    const prevType = state.carType;
     state.carType = type;
 
     document.querySelectorAll('.car-btn').forEach(b => {
@@ -1144,10 +1153,23 @@ document.querySelectorAll('.car-btn').forEach(btn => {
     btn.classList.add('active');
     btn.setAttribute('aria-pressed', 'true');
 
-    await spawnCar(type);
+    try {
+      await spawnCar(type);
+    } catch (e) {
+      // Failed build: the scene still shows the previous car — roll carType
+      // and the pressed-button UI back so state keeps mirroring the scene.
+      console.error('[car-select] spawnCar failed, reverting to', prevType, e);
+      state.carType = prevType;
+      document.querySelectorAll('.car-btn').forEach(b => {
+        const on = b.dataset.car === prevType;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', String(on));
+      });
+      return;
+    }
     // Re-clamp the speed target to the NEW car's vMax (e.g. 350 → 310 on GT).
+    // setSpeed calls syncEffects itself.
     setSpeed(state.targetSpeed);
-    syncEffects();
   });
 });
 

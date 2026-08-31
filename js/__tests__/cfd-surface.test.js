@@ -329,6 +329,15 @@ describe('computeSurfaceCp — arcade sideslip β (Phase C)', () => {
 });
 
 describe('CfdEffect.setSideslip — recolor gating (Phase C)', () => {
+  /** Visible cfd with the repaint workers stubbed + counted. */
+  function spiedCfd() {
+    const cfd = new CfdEffect(makeScene());
+    cfd._visible = true;
+    const patch = vi.spyOn(cfd, '_updatePatchColors').mockImplementation(() => {});
+    const surf  = vi.spyOn(cfd, '_updateSurfaceColors').mockImplementation(() => {});
+    return { cfd, patch, surf };
+  }
+
   it('CSb5. below the 5° gate: β stored as 0, no rebake scheduled', () => {
     const cfd = new CfdEffect(makeScene());
     cfd._speedDirty = false;
@@ -336,26 +345,71 @@ describe('CfdEffect.setSideslip — recolor gating (Phase C)', () => {
     cfd.setSideslip(0.05);                   // 2.9°
     expect(cfd._beta).toBe(0);
     expect(cfd._speedDirty).toBe(false);
+    expect(cfd._betaDirty).toBe(false);
     expect(cfd._lastBuiltSpeed).toBe(100);
   });
 
-  it('CSb6. above the gate: β quantised to 2° and a recolor forced', () => {
+  it('CSb6. above the gate: β quantised to 2° and a β-repaint scheduled (speed gate untouched)', () => {
     const cfd = new CfdEffect(makeScene());
     cfd._speedDirty = false;
     cfd._lastBuiltSpeed = 100;
     cfd.setSideslip(-0.15);                  // −8.59° → −8° bucket
     expect(cfd._beta).toBeCloseTo(-8 * Math.PI / 180, 6);
-    expect(cfd._speedDirty).toBe(true);
-    expect(cfd._lastBuiltSpeed).toBe(-9999);
+    expect(cfd._betaDirty).toBe(true);
+    // β repaints ride their own flag — the speed-delta gate stays untouched.
+    expect(cfd._speedDirty).toBe(false);
+    expect(cfd._lastBuiltSpeed).toBe(100);
   });
 
   it('CSb7. same 2° bucket twice does not re-schedule a rebake', () => {
     const cfd = new CfdEffect(makeScene());
     cfd.setSideslip(-0.15);
-    cfd._speedDirty = false;
-    cfd._lastBuiltSpeed = 50;
+    cfd._betaDirty = false;
     cfd.setSideslip(-0.149);                 // −8.54° — same −8° bucket
-    expect(cfd._speedDirty).toBe(false);
-    expect(cfd._lastBuiltSpeed).toBe(50);
+    expect(cfd._betaDirty).toBe(false);
+  });
+
+  it('CSb8. return-to-zero repaints even when speed has not moved', () => {
+    const { cfd, surf } = spiedCfd();
+    cfd.setSpeed(200);
+    cfd.update(0.3, 0);                      // speed-driven paint, β = 0
+    expect(surf).toHaveBeenCalledTimes(1);
+    cfd.setSideslip(-0.15);                  // engage −8°
+    cfd.update(0.3, 0);
+    expect(surf).toHaveBeenCalledTimes(2);
+    cfd.setSideslip(0);                      // strafe released — back to sim Cp
+    cfd.update(0.3, 0);                      // speed delta is 0: β path must fire
+    expect(cfd._beta).toBe(0);
+    expect(surf).toHaveBeenCalledTimes(3);
+  });
+
+  it('CSb9. β repaints are throttled to one per 0.25 s of accumulated sim time', () => {
+    const { cfd, surf } = spiedCfd();
+    cfd.setSpeed(200);
+    cfd.update(0.3, 0);                      // flush the speed paint
+    expect(surf).toHaveBeenCalledTimes(1);
+    cfd.setSideslip(-0.15);                  // first β repaint — immediate
+    cfd.update(0.016, 0);
+    expect(surf).toHaveBeenCalledTimes(2);
+    cfd.setSideslip(-0.20);                  // new bucket inside the window
+    cfd.update(0.016, 0);                    // 0.016 s elapsed — held back
+    cfd.update(0.016, 0);
+    expect(surf).toHaveBeenCalledTimes(2);
+    cfd.update(0.25, 0);                     // window elapsed — pending paint fires
+    expect(surf).toHaveBeenCalledTimes(3);
+  });
+
+  it('CSb10. hysteresis: engage > 5°, keep tracking down to 3°, release below 3°', () => {
+    const cfd = new CfdEffect(makeScene());
+    cfd.setSideslip(0.06);                   // 3.4° while released — still gated
+    expect(cfd._beta).toBe(0);
+    cfd.setSideslip(0.10);                   // 5.7° — engages (6° bucket)
+    expect(cfd._beta).toBeCloseTo(6 * Math.PI / 180, 6);
+    cfd.setSideslip(0.06);                   // 3.4° while ENGAGED — keeps tracking
+    expect(cfd._beta).toBeCloseTo(4 * Math.PI / 180, 6);
+    cfd.setSideslip(0.04);                   // 2.3° — below release → 0
+    expect(cfd._beta).toBe(0);
+    cfd.setSideslip(0.06);                   // 3.4° released again — stays 0
+    expect(cfd._beta).toBe(0);
   });
 });
