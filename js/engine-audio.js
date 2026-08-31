@@ -8,7 +8,7 @@
  *
  * Graph (built ONCE):
  *   engine voice: fund (sawtooth) ─ fundGain ─┐
- *                 harm2 ×2 (square, −8 dB) ───┼─ engineGain ─ lowpass ─ master ─ dest
+ *                 harm2 ×2 (square, −8 dB, rolls to ~−13 dB at vMax) ─┼─ engineGain ─ lowpass ─ master ─ dest
  *                 sub ×0.5 (sine, −6 dB) ─────┘                 ▲
  *   exhaust:      noise loop ─ bandpass 90–260 Hz ─ noiseGain ──┘ (−14 dB max)
  *   rain layer:   noise loop ─ HP 1.8 kHz ─ LP 6 kHz ─ rainGain ─ master
@@ -360,9 +360,16 @@ export class EngineAudio {
     n.lfoGain.gain.setTargetAtTime(
       IDLE_LFO_AMP * Math.max(0, 1 - sf / 0.1), t, SMOOTH_TAU);
 
-    // Brightness opens with revs: 350 → 5200 Hz.
+    // Brightness opens with revs: 350 → 3640 Hz. Capped well below the old
+    // 5.2 kHz top — fully open, the saw/square partials landed square in the
+    // ear's 2–5 kHz sensitivity peak and read as a scream above ~300 km/h.
     n.lowpass.frequency.setTargetAtTime(
-      350 + 4850 * Math.min(1, 0.65 * sf + 0.35 * rig), t, SMOOTH_TAU);
+      350 + 3290 * Math.min(1, 0.65 * sf + 0.35 * rig), t, SMOOTH_TAU);
+
+    // Square harmonic rolls off with revs (−8 dB → ~−13 dB at vMax): the
+    // ×2 square's odd partials are the buzzy component at high rpm.
+    n.harm2Gain.gain.setTargetAtTime(
+      HARM2_GAIN * (1 - 0.45 * sf), t, SMOOTH_TAU);
 
     // Exhaust rumble: band sweeps 90 → 260 Hz, level rises with rpm.
     n.exhaustBP.frequency.setTargetAtTime(90 + 170 * sf, t, SMOOTH_TAU);

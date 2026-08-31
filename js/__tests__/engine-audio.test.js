@@ -525,3 +525,60 @@ describe('EngineAudio — coin pickup + countdown blips (EA8)', () => {
     });
   });
 });
+
+/* ── EA9 — high-rev harshness cap (300+ km/h shrillness fix) ────── */
+
+function lastTarget(param) {
+  const w = param.calls.filter((c) => c.m === 'setTargetAtTime');
+  return w.length ? w[w.length - 1].v : param.value;
+}
+
+describe('EngineAudio — high-rev timbre stays civil (EA9)', () => {
+  function targetsAt(speed) {
+    const { ea } = makeEngine();
+    ea.resume();
+    ea.setSpeed(speed);
+    // Push past the shift-blip window so update() owns the params again.
+    ea.ctx.currentTime = 1;
+    ea.update(0.016);
+    return {
+      lowpassHz: lastTarget(ea.nodes.lowpass.frequency),
+      harm2Gain: lastTarget(ea.nodes.harm2Gain.gain),
+    };
+  }
+
+  it('EA9a. lowpass brightness is capped ≤ 3700 Hz even at vMax (was ~5.2 kHz scream)', () => {
+    expect(targetsAt(350).lowpassHz).toBeLessThanOrEqual(3700);
+    expect(targetsAt(300).lowpassHz).toBeLessThanOrEqual(3700);
+  });
+
+  it('EA9b. brightness still opens with revs (monotonic 0 → 150 → 300)', () => {
+    const lo = targetsAt(0).lowpassHz;
+    const mid = targetsAt(150).lowpassHz;
+    const hi = targetsAt(300).lowpassHz;
+    expect(mid).toBeGreaterThan(lo);
+    expect(hi).toBeGreaterThan(mid);
+    expect(lo).toBeGreaterThanOrEqual(350);
+  });
+
+  it('EA9c. square-harmonic gain rolls off with rpmRatio — ~−5 dB by vMax', () => {
+    const g0 = targetsAt(0).harm2Gain;
+    const gMid = targetsAt(175).harm2Gain;
+    const gTop = targetsAt(350).harm2Gain;
+    expect(gMid).toBeLessThan(g0);
+    expect(gTop).toBeLessThan(gMid);
+    // exact curve: HARM2_GAIN · (1 − 0.45·sf), sf = speed/350
+    expect(gTop).toBeCloseTo(0.398 * (1 - 0.45), 3);
+    expect(g0).toBeCloseTo(0.398 * (1 - 0.45 * rpmRatio(0)), 3);
+  });
+
+  it('EA9d. harm2 roll-off is a scheduled write (EA6 zipper rule holds)', () => {
+    const { ea } = makeEngine();
+    ea.resume();
+    const before = ea.nodes.harm2Gain.gain.directSets.length;
+    ea.setSpeed(340);
+    ea.ctx.currentTime = 1;
+    ea.update(0.016);
+    expect(ea.nodes.harm2Gain.gain.directSets.length).toBe(before);
+  });
+});
