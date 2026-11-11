@@ -46,5 +46,6 @@ node scripts/verify-spa.mjs            # drives two laps of Spa in a real browse
 - `js/lap-sim.js` — quasi-steady-state lap-time solver
 - `js/circuit-hud.js` — minimap + lap timing
 - `js/circuits/` — circuit data (see `assets/models/ATTRIBUTION.md`)
+- `js/track-layout.js` — roadside rules: road width, kerbs, gravel, barriers, trees, scenery placement
 - `js/main.js` — scene setup, state, UI wiring
 - `assets/models/` — GLB car models (see ATTRIBUTION.md)

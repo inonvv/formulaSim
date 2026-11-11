@@ -138,6 +138,33 @@ export class TrackPath {
     return this._circuit.elevationAt(this._lapOffset + s) - this._h0;
   }
 
+  /**
+   * Lateral position [m, + = right] of the ROAD CENTRE relative to the
+   * driven line at track-space s. The car follows a racing line that
+   * slides across the track; the road is drawn where it really is, so the
+   * car is seen running wide on entry and clipping the apex. 0 off-circuit.
+   */
+  centerOffsetAt(s) {
+    return this._circuit ? this._circuit.lineOffsetAt(this._lapOffset + s) : 0;
+  }
+
+  /** Lap distance for a track-space s (0 off-circuit). */
+  lapAt(s) {
+    return this._circuit ? this._circuit.wrap(this._lapOffset + s) : 0;
+  }
+
+  /**
+   * Track-space s of the occurrence of lap distance `lapS` nearest the car
+   * (signed distance within ±half a lap). NaN off-circuit.
+   */
+  trackSOfLap(lapS) {
+    if (!this._circuit) return NaN;
+    const L = this._circuit.length;
+    let d = ((lapS - this.lapS) % L + L) % L;
+    if (d > L / 2) d -= L;
+    return this._car.s + d;
+  }
+
   /** Road gradient dh/ds at track-space s (+ = uphill). 0 off-circuit. */
   gradeAt(s) {
     return this._circuit ? this._circuit.gradeAt(this._lapOffset + s) : 0;
