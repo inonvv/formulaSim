@@ -79,7 +79,8 @@ export function saveAudioSettings(storage, settings) {
  * turbo    whistle level (0 = naturally aspirated)
  * crackle  overrun pops                                               */
 export const VOICES = {
-  F1: { rough: 0.27, tilt: 6.5, formants: [280, 760, 1750], sub: 1.25, turbo: 1.0, crackle: 0.6 },
+  // F1: the "deep" voice — chosen by ear from three rendered variants.
+  F1: { rough: 0.34, tilt: 4.8, formants: [220, 600, 1400], sub: 1.7,  turbo: 1.0, crackle: 0.6 },
   F2: { rough: 0.30, tilt: 6.5, formants: [260, 700, 1600], sub: 1.25, turbo: 0.8, crackle: 0.4 },
   F3: { rough: 0.33, tilt: 6.5, formants: [250, 680, 1500], sub: 1.3,  turbo: 0.0, crackle: 0.5 },
   GT: { rough: 0.38, tilt: 6.5, formants: [210, 560, 1300], sub: 1.4,  turbo: 0.0, crackle: 0.9 },
