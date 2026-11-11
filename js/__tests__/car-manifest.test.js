@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { CAR_MANIFEST, getManifest } from '../car-manifest.js';
+import { CAR_MANIFEST } from '../car-manifest.js';
 
 describe('CAR_MANIFEST', () => {
   it('has entries for f1 and gt', () => {
@@ -105,13 +105,5 @@ describe('CAR_MANIFEST', () => {
       'TwiXeR_992_gt3rs_door_L_TwiXeR_992_rubbertrim.004_0',
       'TwiXeR_992_gt3rs_carbon_hood_TwiXeR_992_metal_radiator.002_0',
     ]);
-  });
-
-  it('getManifest("f1") returns CAR_MANIFEST.f1', () => {
-    expect(getManifest('f1')).toBe(CAR_MANIFEST.f1);
-  });
-
-  it('getManifest("UNKNOWN") returns null', () => {
-    expect(getManifest('UNKNOWN')).toBeNull();
   });
 });

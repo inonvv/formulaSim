@@ -19,7 +19,6 @@ import {
   rowPose,
   steerAngleRad,
   smoothAngle,
-  rollAngleRad,
   rainLateralAccel,
   ribbonDrift,
   rowWindow,
@@ -564,15 +563,6 @@ describe('Car visual helpers', () => {
     let v = 0;
     for (let i = 0; i < 300; i++) v = smoothAngle(v, 1, 1 / 60);
     expect(v).toBeCloseTo(1, 3);
-  });
-
-  it('rollAngleRad: left turn (ω>0) rolls right side down (negative rot.z), capped 7°', () => {
-    const roll = rollAngleRad(50, 0.14); // a_lat = 7 m/s² ≈ 0.71 g
-    expect(roll).toBeLessThan(0);
-    expect(Math.abs(roll)).toBeCloseTo(0.7136 * (7 * Math.PI) / 180, 3); // linear below 1 g
-    expect(Math.abs(rollAngleRad(80, 0.30))).toBeLessThanOrEqual((7 * Math.PI) / 180 + 1e-9); // 2.4 g clamps
-    expect(rollAngleRad(50, -0.14)).toBeCloseTo(-roll, 9);
-    expect(rollAngleRad(50, 0)).toBe(0);
   });
 });
 

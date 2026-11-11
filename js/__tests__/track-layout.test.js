@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   LAYOUTS, KERB_KAPPA, cornerKappa, outsideOf, insideBlocked, kerbVisible, gravelExtent,
-  tyresVisible, clampToBend, hash01, TREES, treeSpec, inLapRange, expandScenery, treeBlocked, barrierBlocked,
+  tyresVisible, hash01, TREES, treeSpec, inLapRange, expandScenery, treeBlocked, barrierBlocked,
 } from '../track-layout.js';
 import { buildCircuit } from '../circuit.js';
 import { SPA } from '../circuits/spa-data.js';
@@ -68,27 +68,6 @@ describe('corner rules', () => {
     expect(tyresVisible(LAYOUTS.circuit, 0, 1)).toBe(false);
     expect(tyresVisible(LAYOUTS.circuit, 1 / 60, 1)).toBe(true);
     expect(tyresVisible(LAYOUTS.circuit, 1 / 60, -1)).toBe(false);
-  });
-});
-
-describe('clampToBend', () => {
-  it('leaves straights alone', () => {
-    expect(clampToBend(-160, 160, 0)).toEqual([-160, 160]);
-  });
-  it('stops a strip short of the centre of a bend, on the inside only', () => {
-    const [l, r] = clampToBend(-160, 160, 1 / 20);       // left hairpin R 20
-    expect(l).toBeCloseTo(-17, 6);
-    expect(r).toBe(160);
-    const [l2, r2] = clampToBend(-160, 160, -1 / 20);    // right hairpin
-    expect(l2).toBe(-160);
-    expect(r2).toBeCloseTo(17, 6);
-  });
-  it('a strip wholly past the centre collapses to zero width instead of inverting', () => {
-    const [l, r] = clampToBend(-40, -30, 1 / 20);
-    expect(l).toBe(r);
-  });
-  it('wide bends do not clip a normal road', () => {
-    expect(clampToBend(-5.5, 5.5, 1 / 60)).toEqual([-5.5, 5.5]);
   });
 });
 

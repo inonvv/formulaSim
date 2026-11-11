@@ -25,7 +25,7 @@ import { buildOccupancy } from './body-sdf.js';
 import { collectOccupancyMeshes } from './car-loader.js';
 import { createSwapGuard } from './swap-guard.js';
 import { EffectStub } from './effect-stub.js';
-import { gearFromSpeed, wheelRotationRate, rpmRatio, lerpSpeed } from './physics.js';
+import { wheelRotationRate, lerpSpeed } from './physics.js';
 import {
   createVehicleState, stepVehicle, lookAheadCap, defaultSetup, normalizeSetup, getVehicleParams,
 } from './vehicle-model.js';

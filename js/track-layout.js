@@ -24,20 +24,6 @@ export const KERB_KAPPA   = 1 / 400;   // kerbs appear on anything tighter than 
 export const GRAVEL_KAPPA = 1 / 260;   // gravel traps on real corners only
 export const TYRE_KAPPA   = 1 / 170;   // tyre walls where a hit is likely
 
-/**
- * Clamp a ground strip's lateral edges so it never reaches past the centre
- * of a bend: beyond 1/|κ| on the inside the rows cross over each other and
- * the strip folds back on itself (seen as a black patch inside a hairpin).
- * Lateral is metres right of the driven line; κ > 0 is a left turn.
- */
-export function clampToBend(xl, xr, kappa) {
-  if (Math.abs(kappa) < 1e-4) return [xl, xr];
-  const reach = 0.85 / Math.abs(kappa);
-  if (kappa > 0) xl = Math.max(xl, -reach);   // inside is the left
-  else           xr = Math.min(xr, reach);    // inside is the right
-  return xl <= xr ? [xl, xr] : [xr, xr];
-}
-
 /** Half-width [m] of the level shelf the road stands on: asphalt, gravel,
  *  barriers and pit lane all sit flat at road height inside it. */
 export const SHELF = 22;

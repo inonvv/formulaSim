@@ -160,7 +160,3 @@ export const CAR_MANIFEST = {
     ],
   },
 };
-
-export function getManifest(type) {
-  return CAR_MANIFEST[type] ?? null;
-}
