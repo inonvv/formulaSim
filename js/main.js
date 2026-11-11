@@ -1523,6 +1523,11 @@ function setTrack(id) {
   state._turnEdge = null;
   document.getElementById('turn-counter').textContent = '0';
   circuitHud.setCircuit(circuit);
+  // The world jumps to the new track, so the slope it was pitched to is
+  // void — level it now rather than easing out of a hill that is gone.
+  state.gradeVis = 0;
+  trackGroup.rotation.x = 0;
+  document.body.classList.toggle('on-circuit', !!circuit);
   document.querySelectorAll('.track-btn').forEach(b => {
     const on = b.dataset.track === id;
     b.classList.toggle('active', on);

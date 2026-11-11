@@ -104,11 +104,12 @@ export function createCircuitHud(doc = document) {
         el.dot?.setAttribute('cy', p.y.toFixed(1));
       }
       text(el.cur, 'cur', formatLapTime(st.lapTime).slice(0, -2));   // tenths while running
+      // A completed lap shows at once — not on the next throttled refresh.
+      text(el.last, 'last', st.lastLap ? formatLapTime(st.lastLap) : '–');
       clock += dt;
       if (clock < 0.15) return;
       clock = 0;
       text(el.corner, 'corner', st.corner || ' ');
-      text(el.last, 'last', st.lastLap ? formatLapTime(st.lastLap) : '–');
       const h = circuit.elevationAt(st.lapS), g = circuit.gradeAt(st.lapS) * 100;
       text(el.elev, 'elev', `${h >= 0 ? '+' : '−'}${Math.abs(h).toFixed(0)} m · ${g >= 0 ? '+' : '−'}${Math.abs(g).toFixed(0)}%`);
       text(el.lapn, 'lapn', String(st.lapNumber));

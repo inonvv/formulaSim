@@ -59,6 +59,7 @@ await shot(380, 'spa-la-source');
 await shot(1150, 'spa-raidillon');
 await shot(3850, 'spa-pouhon');
 await page.waitForFunction(() => window.__fsim.state.lap.count >= 2, null, { timeout: 900000 });
+await page.waitForFunction(() => document.getElementById('ch-last').textContent.startsWith('1:'), null, { timeout: 30000 }).catch(() => {});
 const r = await page.evaluate(() => ({ last: window.__fsim.state.lap.last, log: window.__fsim._spaLog, hud: document.getElementById('ch-last').textContent }));
 console.log('speeds by lap distance:', JSON.stringify(r.log.samples));
 check(Math.abs(r.last - ideal) < ideal * 0.03, `flying lap ${r.last.toFixed(2)} s vs ideal ${ideal.toFixed(2)} s`);
@@ -76,8 +77,7 @@ check(low > ideal, `low wing ideal ${low.toFixed(2)} s is slower than ${ideal.to
 await page.click('.track-btn[data-track="test"]');
 check(await page.evaluate(() => getComputedStyle(document.getElementById('circuit-hud')).display === 'none'), 'circuit HUD hidden on the test track');
 check(await page.evaluate(() => window.__fsim.trackPath.circuit === null && [...document.querySelectorAll('.turn-btn')].every(b => !b.disabled)), 'test track restored');
-await page.waitForTimeout(1500);
-check(await page.evaluate(() => Math.abs(window.__fsim.state.gradeVis) < 1e-3), 'world pitch back to level');
+check(await page.evaluate(() => window.__fsim.state.gradeVis === 0), 'world pitch back to level');
 
 check(errors.length === 0, `no console errors${errors.length ? ': ' + errors.slice(0, 3).join(' | ') : ''}`);
 await browser.close();

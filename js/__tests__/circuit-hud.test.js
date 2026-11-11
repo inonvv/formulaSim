@@ -78,6 +78,9 @@ describe('createCircuitHud', () => {
     expect(doc.nodes.get('ch-dot').attrs.cx).not.toBe(x1);
     expect(doc.nodes.get('ch-last').textContent).toBe('1:46.400');
     expect(doc.nodes.get('ch-elev').textContent).toMatch(/m · [+−]\d+%$/);
+    // A finished lap is shown immediately, even inside the throttle window.
+    hud.update({ lapS: 10, lapTime: 0.1, lastLap: 105.25, corner: '', lapNumber: 3 }, 0.01);
+    expect(doc.nodes.get('ch-last').textContent).toBe('1:45.250');
     hud.setCircuit(null);
     expect(doc.nodes.get('circuit-hud').classList._s.has('show')).toBe(false);
   });
