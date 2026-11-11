@@ -36,6 +36,7 @@ node scripts/verify-gt-wheels.mjs   # headless GT wheel-split check on the real 
 node scripts/verify-gt-visual.mjs   # Playwright browser smoke (needs npm start running)
 node scripts/verify-vehicle-model.mjs  # vehicle model + telemetry + aero controls in a real browser (needs npm start running)
 node scripts/verify-spa.mjs            # drives two laps of Spa in a real browser, compares with the ideal lap (several minutes)
+node scripts/verify-lap-sweep.mjs      # parks the car every 250 m of the lap and checks the road is actually visible (reads pixels)
 ```
 
 ## Project layout

@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   gearFromSpeed,
   wheelRotationRate,
-  aeroSquishFactor,
   rpmRatio,
   rpmInGear,
   lerpSpeed,
@@ -71,29 +70,6 @@ describe('wheelRotationRate', () => {
     const r1 = wheelRotationRate(100, 2.0);
     const r2 = wheelRotationRate(100, 4.0);
     expect(r2).toBeCloseTo(r1 / 2, 5);
-  });
-});
-
-describe('aeroSquishFactor', () => {
-  it('returns exactly 1 at speed 0', () => {
-    expect(aeroSquishFactor(0)).toBe(1);
-  });
-
-  it('returns a value > 0.95 at 350 km/h (still close to 1)', () => {
-    expect(aeroSquishFactor(350)).toBeGreaterThan(0.95);
-  });
-
-  it('returns a value < 1 at any positive speed', () => {
-    expect(aeroSquishFactor(100)).toBeLessThan(1);
-    expect(aeroSquishFactor(200)).toBeLessThan(1);
-  });
-
-  it('decreases as speed increases', () => {
-    expect(aeroSquishFactor(200)).toBeLessThan(aeroSquishFactor(100));
-  });
-
-  it('clamps at maxSpeed — beyond 350 gives same result as 350', () => {
-    expect(aeroSquishFactor(350)).toBeCloseTo(aeroSquishFactor(400), 5);
   });
 });
 

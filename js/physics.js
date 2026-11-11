@@ -29,16 +29,6 @@ export function wheelRotationRate(speedKmh, circumferenceM) {
 }
 
 /**
- * Aero body squish scale factor (y-axis).
- * Returns a value slightly below 1 at high speed.
- * @param {number} speed - km/h
- * @param {number} maxSpeed
- */
-export function aeroSquishFactor(speed, maxSpeed = 350) {
-  return 1 - Math.min(speed / maxSpeed, 1) * 0.018;
-}
-
-/**
  * Normalised RPM ratio clamped to [0, 1].
  * @param {number} speed - km/h
  * @param {number} maxSpeed
