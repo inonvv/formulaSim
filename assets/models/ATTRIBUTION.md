@@ -25,3 +25,17 @@ line in `index.html` fulfills the visibility requirement of the license.
 Add to `index.html` in a footer or info panel:
 
 > 3D car models © shunqi, Black Snow — CC-BY 4.0
+
+# Circuit data attribution
+
+## Spa-Francorchamps centreline
+
+- **Source:** TUMFTM racetrack-database, `tracks/Spa.csv`
+  — https://github.com/TUMFTM/racetrack-database
+- **Authors:** Institute of Automotive Technology, Technical University of Munich
+- **License:** LGPL-3.0 — https://www.gnu.org/licenses/lgpl-3.0.html
+- **File (shipped):** `js/circuits/spa-data.js` — the x/y centreline rounded to
+  0.1 m (track-width columns reduced to their mean). The racing line used at
+  runtime is computed from it by `js/circuit.js`.
+- **Not from that dataset:** the elevation profile and corner names in the same
+  file are hand-authored approximations, not survey data.

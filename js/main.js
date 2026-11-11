@@ -30,6 +30,10 @@ import {
   createVehicleState, stepVehicle, lookAheadCap, defaultSetup, normalizeSetup, getVehicleParams,
 } from './vehicle-model.js';
 import { createTelemetryHud, telemetryView, vmaxLabel } from './telemetry-hud.js';
+import { buildCircuit } from './circuit.js';
+import { solveLap } from './lap-sim.js';
+import { createCircuitHud } from './circuit-hud.js';
+import { SPA } from './circuits/spa-data.js';
 import {
   createGame, lateralStep, tiltStep, worldOffsetX,
   fovStep, FOV_CFG, cameraShake, nearParallaxStep,
@@ -203,6 +207,11 @@ const state = {
   vehicle:    createVehicleState(),
   aeroSetups: {},         // { [carType]: {wing, rideHeightMm, drs, yawDeg} }
   brakeHeat:  0,          // 0..1 disc temperature proxy driving the brake glow
+  // Circuit mode: 'test' = the random-turn test track, 'spa' = a real lap.
+  trackId:    'test',
+  lapPlan:    null,       // solveLap() result for the active car/setup/grip
+  lap:        { time: 0, last: 0, count: 0 },   // running lap clock
+  gradeVis:   0,          // smoothed road pitch (rad) applied to the world
   infoMode:   false,      // P6 educational layer — part cards on hover
   _infoTargets: [],       // cached raycast subset: occupancy meshes + wheel groups
   // Engine-sound settings — persisted to localStorage('fsim-audio'), restored
@@ -229,6 +238,16 @@ function currentSetup() {
     || (state.aeroSetups[state.carType] = defaultSetup(state.carType));
 }
 
+/* Circuits are built on first use (the racing-line solve costs ~50 ms). */
+const CIRCUIT_DEFS = { spa: SPA };
+const _circuits = {};
+function getCircuit(id) {
+  if (!CIRCUIT_DEFS[id]) return null;
+  return _circuits[id] || (_circuits[id] = buildCircuit(CIRCUIT_DEFS[id]));
+}
+const circuitHud = createCircuitHud(document);
+let _lapPlanDueAt = 0;    // performance.now() after which a stale lap plan is re-solved
+
 /* Corner-limit memo for the look-ahead driver — valid for one
    (car, setup, grip) combination; cleared whenever any of them changes. */
 const _capCache = new Map();
@@ -253,9 +272,33 @@ function stepVehicleModel(dt) {
     return;
   }
   const key = `${type}|${setup.wing}|${setup.rideHeightMm}|${setup.drs}|${setup.yawDeg}|${wet}`;
-  if (key !== _capKey) { _capCache.clear(); _capKey = key; }
-  const capV = lookAheadCap(type, setup, vs.v, ds => trackPath.curvatureAt(s0 + ds), wet, _capCache);
-  stepVehicle(vs, { type, setup, wet, dt, targetV: state.targetSpeed / 3.6, kappa, capV });
+  if (key !== _capKey) {
+    _capCache.clear();
+    _capKey = key;
+    // The ideal lap depends on the same inputs — re-solve once they settle
+    // (a slider drag changes the key every frame).
+    state.lapPlan = null;
+    _lapPlanDueAt = performance.now() + 150;
+    circuitHud.setLap(null);
+  }
+  const circuit = trackPath.circuit;
+  let capV, grade = 0;
+  if (circuit) {
+    if (!state.lapPlan && performance.now() >= _lapPlanDueAt) {
+      state.lapPlan = solveLap(circuit, type, setup, wet);
+      circuitHud.setLap(state.lapPlan);
+    }
+    const lapS = trackPath.lapS;
+    grade = circuit.gradeAt(lapS);
+    // Follow the solved speed profile, looking a beat ahead so the brakes
+    // come on before the braking point rather than after it.
+    capV = state.lapPlan
+      ? Math.min(state.lapPlan.vAt(lapS), state.lapPlan.vAt(lapS + vs.v * 0.15))
+      : lookAheadCap(type, setup, vs.v, ds => trackPath.curvatureAt(s0 + ds), wet, _capCache);
+  } else {
+    capV = lookAheadCap(type, setup, vs.v, ds => trackPath.curvatureAt(s0 + ds), wet, _capCache);
+  }
+  stepVehicle(vs, { type, setup, wet, dt, targetV: state.targetSpeed / 3.6, kappa, capV, grade });
   state.speed = vs.v * 3.6;
 }
 
@@ -868,6 +911,12 @@ function updateChips() {
     chip.textContent = labels[env];
     container.appendChild(chip);
   });
+  if (state.trackId !== 'test') {
+    const chip = document.createElement('div');
+    chip.className = 'chip chip-track';
+    chip.textContent = `🏁 ${(CIRCUIT_DEFS[state.trackId]?.name ?? state.trackId).toUpperCase()}`;
+    container.appendChild(chip);
+  }
   if (currentSetup().drs) {
     const chip = document.createElement('div');
     chip.className = 'chip chip-drs';
@@ -1007,7 +1056,25 @@ function updateTrack(dt) {
   if (trackPath.rebaseIfNeeded()) coinField.rebase(sPreRebase);
   const w = trackPath.worldTransform();
   trackGroup.rotation.y = w.rotY;
-  trackGroup.position.set(w.x, 0, w.z);
+  // Circuit gradient: the car stays level at the origin and the WORLD
+  // pitches about it by the local slope (+ = road ahead climbs). Euler XYZ
+  // applies the yaw first, then this pitch; the translation is pitched too.
+  const circuitNow = trackPath.circuit;
+  const pitchTarget = circuitNow ? Math.atan(circuitNow.gradeAt(trackPath.lapS)) : 0;
+  state.gradeVis += (pitchTarget - state.gradeVis) * Math.min(1, dt / 0.25);
+  if (Math.abs(state.gradeVis) < 1e-5 && pitchTarget === 0) state.gradeVis = 0;
+  const gp = state.gradeVis;
+  trackGroup.rotation.x = gp;
+  trackGroup.position.set(w.x, -w.z * Math.sin(gp), w.z * Math.cos(gp));
+  // Lap clock + circuit HUD.
+  if (circuitNow) {
+    state.lap.time += dt;
+    if (trackPath.lapCount > state.lap.count) {
+      state.lap.count = trackPath.lapCount;
+      state.lap.last = state.lap.time;
+      state.lap.time = 0;
+    }
+  }
   // ARCADE strafe: move the WORLD, not the car (plan decision 1). The sign
   // chain is pinned in game-mode.test.js: strafe right ⇒ world −x ⇒
   // apparent wind hits the +x side. Skyline stays put (infinite parallax).
@@ -1216,6 +1283,15 @@ function animate() {
   // HUD
   updateHUD(state.speed);
   telemetryHud.update(telemetryView(state.vehicle, state.carType, currentSetup()), dt);
+  if (trackPath.circuit) {
+    circuitHud.update({
+      lapS: trackPath.lapS,
+      lapTime: state.lap.time,
+      lastLap: state.lap.last,
+      corner: trackPath.circuit.cornerAt(trackPath.lapS),
+      lapNumber: state.lap.count + 1,
+    }, dt);
+  }
   updateArcadeHud(dt);
 
   composer.render();
@@ -1280,6 +1356,9 @@ function setMode(mode) {
   // Aero setup + telemetry are sim tools — hidden (state preserved) in arcade.
   document.getElementById('section-aero').classList.toggle('collapsed-arcade', mode === 'arcade');
   document.getElementById('telemetry').classList.toggle('hidden-arcade', mode === 'arcade');
+  // Arcade runs on the endless test track (coins need its scheduler).
+  document.getElementById('section-track').classList.toggle('collapsed-arcade', mode === 'arcade');
+  if (mode === 'arcade') setTrack('test');
   if (mode === 'arcade') {
     // Fresh run: zero the coin field / scoring / rolling counter, then
     // straight into the countdown (its overlay + ticks land next frame).
@@ -1425,6 +1504,39 @@ document.getElementById('aero-reset-btn').addEventListener('click', () => setAer
 syncAeroUI();
 window.__fsim.setAero = setAero;   // verify-script hook
 
+/* ── TRACK (test track | real circuit) ───────────────────────────── */
+function setTrack(id) {
+  if (!CIRCUIT_DEFS[id]) id = 'test';
+  if (state.trackId === id) return;
+  state.trackId = id;
+  const circuit = getCircuit(id);
+  trackPath.setCircuit(circuit);       // re-roots track space, bumps epoch
+  track.update(trackPath);
+  // A circuit starts from the grid: standing start, fresh lap clock.
+  state.vehicle.v = 0;
+  state.speed = 0;
+  state.lap = { time: 0, last: 0, count: 0 };
+  state.lapPlan = null;
+  _lapPlanDueAt = 0;
+  _capKey = '';                         // forces the plan / memo to refresh
+  state.turnCount = 0;
+  state._turnEdge = null;
+  document.getElementById('turn-counter').textContent = '0';
+  circuitHud.setCircuit(circuit);
+  document.querySelectorAll('.track-btn').forEach(b => {
+    const on = b.dataset.track === id;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+  // The random-turn scheduler does not run on a circuit — its control is inert.
+  document.querySelectorAll('.turn-btn').forEach(b => { b.disabled = !!circuit; });
+  updateChips();
+}
+document.querySelectorAll('.track-btn').forEach(btn => {
+  btn.addEventListener('click', () => setTrack(btn.dataset.track));
+});
+window.__fsim.setTrack = setTrack;   // verify-script hook
+
 /* ── TURNS frequency ────────────────────────────────────────────── */
 function applyTurnMode(mode) {
   state.turnMode = mode;
@@ -1536,6 +1648,7 @@ document.getElementById('reset-btn').addEventListener('click', () => {
     b.classList.remove('active');
     b.setAttribute('aria-pressed', 'false');
   });
+  setTrack('test');
   // Aero setups back to each car's reference.
   state.aeroSetups = {};
   syncAeroUI();

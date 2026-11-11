@@ -66,9 +66,45 @@ export class TrackPath {
     this._knots = [{ s: 0, x: 0, z: 0, theta: 0 }];
     this._knotsBack = [];
     this._car = { s: 0, x: 0, z: 0, theta: 0 };
+    // Circuit mode (setCircuit): κ comes from a closed circuit's table
+    // instead of the random turn scheduler. _lapOffset is the lap distance
+    // of track-space s = 0 (it advances on every floating-origin rebase).
+    this._circuit = null;
+    this._lapOffset = 0;
+    this._lapDist = 0;        // total metres driven on the circuit
   }
 
   get pose() { return this._car; }
+
+  get circuit() { return this._circuit; }
+
+  /** Lap distance of the car in [0, circuit.length) — 0 off-circuit. */
+  get lapS() {
+    return this._circuit ? this._circuit.wrap(this._lapOffset + this._car.s) : 0;
+  }
+
+  /** Completed laps since the circuit was selected. */
+  get lapCount() {
+    return this._circuit ? Math.floor((this._lapDist + 1e-6) / this._circuit.length) : 0;
+  }
+
+  /**
+   * Drive a closed circuit (buildCircuit() result) or, with null, return to
+   * the random-turn test track. Track space is re-rooted at the car, which
+   * starts at lap distance `startS` heading −z; epoch bumps so consumers
+   * re-place their rows.
+   */
+  setCircuit(circuit, startS = 0) {
+    this._circuit = circuit || null;
+    this._lapOffset = circuit ? circuit.wrap(startS) : 0;
+    this._lapDist = 0;
+    this.turns = [];
+    this._gapTimer = 0;
+    this._knots = [{ s: 0, x: 0, z: 0, theta: 0 }];
+    this._knotsBack = [];
+    this._car = { s: 0, x: 0, z: 0, theta: 0 };
+    this.epoch += 1;
+  }
 
   get turnMode() { return this._turnMode; }
 
@@ -90,6 +126,7 @@ export class TrackPath {
 
   /* κ(s) from the emitted turn list (turns never overlap). */
   curvatureAt(s) {
+    if (this._circuit) return this._circuit.kappaAt(this._lapOffset + s);
     for (const t of this.turns) {
       if (s > t.s0 && s < t.s1) {
         if (t.shape === 'real') {
@@ -189,6 +226,15 @@ export class TrackPath {
   update(dt, v) {
     if (v <= 1e-3) return this._car;
 
+    if (this._circuit) {
+      // Circuit: geometry is fixed — no scheduler, just advance.
+      const sc = this._car.s + v * dt;
+      const pc = this.poseAt(sc);
+      this._lapDist += v * dt;
+      this._car = { s: sc, x: pc.x, z: pc.z, theta: pc.theta };
+      return this._car;
+    }
+
     this._gapTimer += dt;
     if (this._gapTimer >= this._nextGap) {
       const genEnd = this.turns.length
@@ -248,6 +294,7 @@ export class TrackPath {
     this.turns = this.turns
       .filter(t => t.s1 > sc - 50)
       .map(t => ({ ...t, s0: t.s0 - sc, s1: t.s1 - sc, emitS: t.emitS - sc }));
+    if (this._circuit) this._lapOffset = this._circuit.wrap(this._lapOffset + sc);
     const seed = remap(this._car);
     this._knots = [{ s: 0, x: seed.x, z: seed.z, theta: seed.theta }];
     this._knotsBack = [];
