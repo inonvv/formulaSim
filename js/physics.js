@@ -4,22 +4,6 @@
  */
 
 /**
- * Returns gear index (0–8) for the given speed in km/h.
- * 0 = Neutral, 1–8 = gears.
- */
-export function gearFromSpeed(speed) {
-  if (speed < 5)   return 0;
-  if (speed < 50)  return 1;
-  if (speed < 100) return 2;
-  if (speed < 160) return 3;
-  if (speed < 210) return 4;
-  if (speed < 265) return 5;
-  if (speed < 310) return 6;
-  if (speed < 340) return 7;
-  return 8;
-}
-
-/**
  * Wheel rotation rate in rotations per second.
  * @param {number} speedKmh - speed in km/h
  * @param {number} circumferenceM - tyre circumference in metres
@@ -35,28 +19,6 @@ export function wheelRotationRate(speedKmh, circumferenceM) {
  */
 export function rpmRatio(speed, maxSpeed = 350) {
   return Math.min(speed / maxSpeed, 1);
-}
-
-/**
- * Speed band [lo, hi) per gear index 1–8 — MUST mirror gearFromSpeed above.
- * Gear 8's band is closed at 350 (rpmInGear clamps there).
- */
-const GEAR_BANDS = [
-  [5, 50], [50, 100], [100, 160], [160, 210],
-  [210, 265], [265, 310], [310, 340], [340, 350],
-];
-
-/**
- * Position 0..1 inside the current gear's speed band — the "revs" of an
- * engine that climbs through each gear and drops back at every shift.
- * Gear 0 (neutral/idle) returns a constant 0.12 idle tick-over.
- * @param {number} speed - km/h
- */
-export function rpmInGear(speed) {
-  const gear = gearFromSpeed(speed);
-  if (gear === 0) return 0.12;
-  const [lo, hi] = GEAR_BANDS[gear - 1];
-  return Math.min(Math.max((speed - lo) / (hi - lo), 0), 1);
 }
 
 /**
