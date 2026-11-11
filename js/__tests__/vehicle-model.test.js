@@ -326,6 +326,17 @@ describe('stepVehicle', () => {
     expect(vs.throttle).toBeGreaterThan(0.5);
     expect(vs.aero.downforce).toBeGreaterThan(0);
   });
+  it('gradient: uphill costs acceleration and holding throttle, downhill gives it back', () => {
+    const base = { type: 'GT', setup: defaultSetup('GT'), dt: 0.1, targetV: 90, kappa: 0 };
+    const mk = () => { const vs = createVehicleState(); vs.v = 50; return vs; };
+    const flat = stepVehicle(mk(), base).ax;
+    const up   = stepVehicle(mk(), { ...base, grade: 0.15 }).ax;
+    const down = stepVehicle(mk(), { ...base, grade: -0.15 }).ax;
+    expect(up).toBeCloseTo(flat - 9.81 * 0.15, 6);
+    expect(down).toBeCloseTo(flat + 9.81 * 0.15, 6);
+    const hold = (grade) => { const vs = mk(); stepVehicle(vs, { ...base, targetV: 50, grade }); return vs.throttle; };
+    expect(hold(0.1)).toBeGreaterThan(hold(0));
+  });
   it('dt = 0 (paused) changes nothing but stays finite', () => {
     const vs = run('F1', defaultSetup('F1'), 50, 5);
     const v = vs.v;

@@ -40,7 +40,7 @@ export const VEHICLE_PARAMS = {
   F1: {
     label: 'Formula 1', mass: 800, wheelbase: 3.60, track: 1.60, cgHeight: 0.25,
     frontWeight: 0.455, powerKW: 735, driveEff: 0.92, brakeBias: 0.57,
-    mu: 1.80, muLoadSens: 0.10, rollGradDeg: 0.30, pitchGradDeg: 0.22, rollDistFront: 0.52,
+    mu: 2.00, muLoadSens: 0.10, rollGradDeg: 0.30, pitchGradDeg: 0.22, rollDistFront: 0.52,
     wheelRate: { front: 300e3, rear: 250e3 },         // N/m per wheel (incl. heave spring)
     ride: { min: 15, nominal: 35, max: 70, opt: 16, exp: 0.45, floorMm: 4 },
     aero: {
@@ -55,7 +55,7 @@ export const VEHICLE_PARAMS = {
   F2: {
     label: 'Formula 2', mass: 795, wheelbase: 3.135, track: 1.55, cgHeight: 0.27,
     frontWeight: 0.45, powerKW: 462, driveEff: 0.92, brakeBias: 0.57,
-    mu: 1.65, muLoadSens: 0.10, rollGradDeg: 0.40, pitchGradDeg: 0.30, rollDistFront: 0.53,
+    mu: 1.80, muLoadSens: 0.10, rollGradDeg: 0.40, pitchGradDeg: 0.30, rollDistFront: 0.53,
     wheelRate: { front: 240e3, rear: 200e3 },
     ride: { min: 15, nominal: 30, max: 65, opt: 14, exp: 0.35, floorMm: 4 },
     aero: {
@@ -70,7 +70,7 @@ export const VEHICLE_PARAMS = {
   F3: {
     label: 'Formula 3', mass: 673, wheelbase: 2.88, track: 1.50, cgHeight: 0.27,
     frontWeight: 0.45, powerKW: 283, driveEff: 0.92, brakeBias: 0.57,
-    mu: 1.55, muLoadSens: 0.10, rollGradDeg: 0.45, pitchGradDeg: 0.35, rollDistFront: 0.53,
+    mu: 1.70, muLoadSens: 0.10, rollGradDeg: 0.45, pitchGradDeg: 0.35, rollDistFront: 0.53,
     wheelRate: { front: 200e3, rear: 170e3 },
     ride: { min: 15, nominal: 30, max: 65, opt: 14, exp: 0.30, floorMm: 4 },
     aero: {
@@ -87,7 +87,7 @@ export const VEHICLE_PARAMS = {
   GT: {
     label: 'GT (911 GT3 RS)', mass: 1525, wheelbase: 2.457, track: 1.60, cgHeight: 0.45,
     frontWeight: 0.39, powerKW: 386, driveEff: 0.86, brakeBias: 0.62,
-    mu: 1.35, muLoadSens: 0.12, rollGradDeg: 1.50, pitchGradDeg: 1.10, rollDistFront: 0.56,
+    mu: 1.45, muLoadSens: 0.12, rollGradDeg: 1.50, pitchGradDeg: 1.10, rollDistFront: 0.56,
     wheelRate: { front: 110e3, rear: 150e3 },
     ride: { min: 60, nominal: 90, max: 120, opt: 55, exp: 0.45, floorMm: 25 },
     aero: {
@@ -366,6 +366,7 @@ export function createVehicleState() {
  *   targetV   — m/s the user asked for
  *   kappa     — path curvature under the car [1/m] (left +)
  *   capV      — m/s speed cap from the corner look-ahead (Infinity = none)
+ *   grade     — optional road gradient dh/ds (+ = uphill)
  *   forcedV   — optional m/s: impose the speed (observer mode) instead of
  *               integrating the driver model
  */
@@ -381,7 +382,9 @@ export function stepVehicle(vs, inp) {
   // feed-forward that holds the throttle needed to cancel drag at `want`.
   const err = want - vs.v;
   const aeroNow = solveAero(type, setup, vs.v);
-  const hold = clamp(aeroNow.drag * vs.v / (p.powerKW * 1000 * p.driveEff), 0, 1);
+  // Gradient: + = uphill. Gravity adds m·g·grade to the resistance.
+  const grade = Number.isFinite(inp.grade) ? inp.grade : 0;
+  const hold = clamp((aeroNow.drag + p.mass * G * grade) * vs.v / (p.powerKW * 1000 * p.driveEff), 0, 1);
   let throttle = 0, brake = 0;
   if (err >= -0.05) throttle = clamp(hold + Math.max(err, 0) / 3, 0, 1);
   else brake = clamp(-err / 3, 0, 1);
@@ -395,7 +398,7 @@ export function stepVehicle(vs, inp) {
     throttle = vs.ax > 0.3 ? clamp(hold + vs.ax / 12, 0, 1) : (vs.ax < -0.5 ? 0 : hold);
     brake    = vs.ax < -0.5 ? clamp(-vs.ax / 25, 0, 1) : 0;
   } else if (dt > 0) {
-    const a = longAccel(type, setup, vs.v, throttle, brake, wet);
+    const a = longAccel(type, setup, vs.v, throttle, brake, wet) - G * grade;
     let vNew = vs.v + a * dt;
     // Never integrate past the driver's target in one step.
     if ((err > 0 && vNew > want) || (err < 0 && vNew < want) || Math.abs(err) <= 0.05) vNew = want;

@@ -1085,6 +1085,79 @@ button:focus-visible, input:focus-visible {
 .tm-foot { font-size: 0.58rem; color: var(--dim); border-top: 1px solid var(--panel-border); padding-top: 8px; }
 .tm-foot b { color: #fff; font-size: 0.72rem; }
 
+/* ─── Circuit HUD (bottom-left): minimap + lap timing ────────────── */
+#panel-body #section-track.collapsed-arcade { display: none; }
+.track-btn { flex: 1; }
+.track-btn.active[data-track="spa"] {
+  background: color-mix(in srgb, var(--c-aero) 16%, transparent);
+  border-color: var(--c-aero);
+  color: #b6f3ec;
+}
+.turn-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+#circuit-hud {
+  position: fixed;
+  left: 24px;
+  bottom: 24px;
+  width: 248px;
+  display: none;
+  flex-direction: column;
+  background: var(--overlay-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  backdrop-filter: blur(12px);
+  z-index: 10;
+  font-family: var(--mono);
+  pointer-events: none;
+}
+#circuit-hud.show { display: flex; }
+.ch-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--panel-border);
+  font-size: var(--label-fs);
+  letter-spacing: 0.14em;
+  color: var(--dim);
+}
+#ch-corner { color: #fff; letter-spacing: 0.06em; font-weight: 700; text-align: right; }
+.ch-body { display: flex; gap: 10px; padding: 8px 12px 10px; align-items: stretch; }
+#ch-map { width: 96px; height: 131px; flex: 0 0 auto; overflow: visible; }
+#ch-map path { fill: none; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+#ch-start { fill: #fff; opacity: 0.8; }
+#ch-dot { fill: #fff; stroke: var(--accent); stroke-width: 2; filter: drop-shadow(0 0 4px var(--accent)); }
+.ch-times { display: flex; flex-direction: column; gap: 6px; flex: 1 1 auto; min-width: 0; justify-content: center; }
+.ch-t { display: flex; flex-direction: column; }
+.ch-t b { color: #fff; font-size: 0.9rem; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.ch-t-ideal b { color: var(--c-aero); }
+/* Dark text on a solid tint — pale text washed out against the bright sky. */
+.chip-track { border-color: #0f766e; color: #063b36; background: color-mix(in srgb, var(--c-aero) 78%, white); font-weight: 700; }
+/* Narrow desktop windows: the centred speed HUD would run under the circuit
+   panel — dock it against the control panel and slim the circuit panel. */
+@media (min-width: 641px) and (max-width: 1180px) {
+  #circuit-hud { width: 208px; }
+  #circuit-hud .ch-body { gap: 6px; padding: 8px 8px 10px; }
+  #ch-map { width: 78px; height: 106px; }
+  body.on-circuit #hud { left: auto; right: calc(var(--panel-w) + 12px); transform: none; gap: 12px; padding: 10px 16px; }
+  body.on-circuit #rpm-bar { width: 84px; }
+}
+/* Small tablets: no room beside the speed HUD — sit above it instead. */
+@media (min-width: 641px) and (max-width: 900px) {
+  #circuit-hud { bottom: 104px; }
+}
+/* Very short windows (landscape phones): no vertical room under the
+   telemetry panel — sit beside it at the top instead. */
+@media (min-width: 641px) and (max-height: 560px) {
+  #circuit-hud { left: 284px; top: 92px; bottom: auto; width: 190px; }
+}
+@media (max-height: 700px) {
+  #circuit-hud .ch-head { padding: 5px 12px; }
+  #ch-map { width: 70px; height: 96px; }
+  .ch-t b { font-size: 0.78rem; }
+  .ch-times .tm-sub { display: none; }
+}
+
 /* Short viewports: drop the pedal row + footer before the panel hits the HUD */
 @media (max-height: 760px) {
   .tm-pedals, .tm-foot { display: none; }
@@ -1242,6 +1315,14 @@ button:focus-visible, input:focus-visible {
   /* ── Car badge ── */
   #car-badge { top: 16px; left: 16px; }
   #cfd-legend { left: 12px; top: auto; bottom: 150px; }
+  /* Circuit HUD: compact card, top-right under the camera label */
+  #circuit-hud { left: auto; right: 12px; top: 52px; bottom: auto; width: 150px; }
+  #circuit-hud .ch-head { flex-direction: column; gap: 2px; padding: 6px 8px; }
+  #ch-corner { text-align: left; }
+  .ch-body { padding: 6px 8px; gap: 6px; }
+  #ch-map { width: 52px; height: 71px; }
+  .ch-t b { font-size: 0.7rem; }
+  .ch-times .tm-sub, .ch-t:nth-child(4) { display: none; }
   /* Telemetry: compact strip under the badge; tap the header to expand */
   #telemetry { top: 64px; left: 12px; width: 210px; }
   .tm-v { font-size: 1.1rem; }

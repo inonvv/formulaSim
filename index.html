@@ -131,6 +131,28 @@
     </div>
   </div>
 
+  <!-- ── Circuit HUD: minimap + lap timing (circuit mode only) ──── -->
+  <div id="circuit-hud" aria-label="Circuit map and lap times">
+    <div class="ch-head">
+      <span id="ch-name">SPA-FRANCORCHAMPS</span>
+      <span id="ch-corner">&nbsp;</span>
+    </div>
+    <div class="ch-body">
+      <svg id="ch-map" viewBox="0 0 110 150" aria-hidden="true">
+        <g id="ch-map-segs"></g>
+        <circle id="ch-start" r="2.2"></circle>
+        <circle id="ch-dot" r="4"></circle>
+      </svg>
+      <div class="ch-times">
+        <div class="ch-t"><span class="tm-k">LAP <span id="ch-lapn">1</span></span><b id="ch-cur">0:00.0</b></div>
+        <div class="ch-t"><span class="tm-k">LAST</span><b id="ch-last">–</b></div>
+        <div class="ch-t ch-t-ideal"><span class="tm-k">IDEAL · THIS SETUP</span><b id="ch-ideal">…</b></div>
+        <div class="ch-t"><span class="tm-k">ELEVATION</span><b id="ch-elev">+0 m · +0%</b></div>
+        <span class="tm-sub">map colour = ideal speed</span>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Camera label ──────────────────────────────────────────── -->
   <div id="camera-label">ORBIT</div>
 
@@ -167,6 +189,7 @@
       <!-- Mobile-only tab bar (hidden on desktop via CSS) -->
       <div class="mobile-tabs">
         <button class="tab-btn" data-section="section-car" aria-label="Car selection">🚗<span>Car</span></button>
+        <button class="tab-btn" data-section="section-track" aria-label="Track selection">🏁<span>Track</span></button>
         <button class="tab-btn" data-section="section-speed" aria-label="Speed controls">⚡<span>Speed</span></button>
         <button class="tab-btn" data-section="section-aero" aria-label="Aero setup">🪽<span>Aero</span></button>
         <button class="tab-btn" data-section="section-cam" aria-label="Camera modes">📷<span>Cam</span></button>
@@ -194,6 +217,15 @@
           <button class="car-btn" data-car="F2" aria-pressed="false">F2</button>
           <button class="car-btn" data-car="F3" aria-pressed="false">F3</button>
           <button class="car-btn" data-car="GT" aria-pressed="false">GT</button>
+        </div>
+      </section>
+
+      <!-- Track -->
+      <section class="ctrl-group" id="section-track">
+        <label class="group-label">TRACK</label>
+        <div class="btn-row" id="track-btns">
+          <button class="preset-btn track-btn active" data-track="test" aria-pressed="true">TEST TRACK</button>
+          <button class="preset-btn track-btn" data-track="spa" aria-pressed="false">SPA</button>
         </div>
       </section>
 
