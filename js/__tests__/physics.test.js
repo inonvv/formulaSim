@@ -1,55 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
-  gearFromSpeed,
   wheelRotationRate,
   rpmRatio,
-  rpmInGear,
   lerpSpeed,
 } from '../physics.js';
-
-describe('gearFromSpeed', () => {
-  it('returns 0 (neutral) at speed 0', () => {
-    expect(gearFromSpeed(0)).toBe(0);
-  });
-
-  it('returns 0 just below 5 km/h', () => {
-    expect(gearFromSpeed(4.9)).toBe(0);
-  });
-
-  it('returns 1 at 5 km/h', () => {
-    expect(gearFromSpeed(5)).toBe(1);
-  });
-
-  it('returns 1 at 49 km/h', () => {
-    expect(gearFromSpeed(49)).toBe(1);
-  });
-
-  it('returns 2 at 50 km/h', () => {
-    expect(gearFromSpeed(50)).toBe(2);
-  });
-
-  it('returns 4 at 180 km/h', () => {
-    expect(gearFromSpeed(180)).toBe(4);
-  });
-
-  it('returns 8 at 340 km/h', () => {
-    expect(gearFromSpeed(340)).toBe(8);
-  });
-
-  it('returns 8 at 350 km/h', () => {
-    expect(gearFromSpeed(350)).toBe(8);
-  });
-
-  it('is monotone — gear never decreases as speed increases', () => {
-    const speeds = [0, 10, 30, 50, 80, 100, 150, 200, 250, 300, 340, 350];
-    let prev = 0;
-    for (const s of speeds) {
-      const g = gearFromSpeed(s);
-      expect(g).toBeGreaterThanOrEqual(prev);
-      prev = g;
-    }
-  });
-});
 
 describe('wheelRotationRate', () => {
   it('returns 0 at speed 0', () => {
@@ -93,60 +47,6 @@ describe('rpmRatio', () => {
 
   it('accepts a custom maxSpeed', () => {
     expect(rpmRatio(100, 200)).toBeCloseTo(0.5, 5);
-  });
-});
-
-describe('rpmInGear', () => {
-  // gearFromSpeed bands: 0 <5 | 1 5–49 | 2 50–99 | 3 100–159 | 4 160–209
-  //                      5 210–264 | 6 265–309 | 7 310–339 | 8 ≥340
-  const BANDS = [
-    [5, 50], [50, 100], [100, 160], [160, 210],
-    [210, 265], [265, 310], [310, 340], [340, 350],
-  ];
-
-  it('returns the 0.12 idle constant in gear 0 (speed < 5)', () => {
-    expect(rpmInGear(0)).toBeCloseTo(0.12, 5);
-    expect(rpmInGear(4.9)).toBeCloseTo(0.12, 5);
-  });
-
-  it('is ~0 at every gear band start and ~1 just below the next boundary', () => {
-    for (const [lo, hi] of BANDS) {
-      expect(rpmInGear(lo)).toBeCloseTo(0, 5);
-      expect(rpmInGear(hi - 0.01)).toBeGreaterThan(0.99);
-    }
-  });
-
-  it('stays within [0, 1] for all speeds 0–400', () => {
-    for (let s = 0; s <= 400; s += 1) {
-      const r = rpmInGear(s);
-      expect(r).toBeGreaterThanOrEqual(0);
-      expect(r).toBeLessThanOrEqual(1);
-    }
-  });
-
-  it('is monotonic (strictly increasing) inside each gear band', () => {
-    for (const [lo, hi] of BANDS) {
-      let prev = -1;
-      for (let s = lo; s < hi; s += (hi - lo) / 10) {
-        const r = rpmInGear(s);
-        expect(r).toBeGreaterThan(prev);
-        prev = r;
-      }
-    }
-  });
-
-  it('drops at each shift boundary — 49→50 goes near-1 → near-0', () => {
-    expect(rpmInGear(49.9)).toBeGreaterThan(0.95);
-    expect(rpmInGear(50)).toBeCloseTo(0, 5);
-    // Every up-shift boundary resets: value just below >> value at boundary.
-    for (const [, hi] of BANDS.slice(0, -1)) {
-      expect(rpmInGear(hi - 0.01)).toBeGreaterThan(rpmInGear(hi) + 0.9);
-    }
-  });
-
-  it('clamps to 1 above 350 km/h (top of gear 8)', () => {
-    expect(rpmInGear(350)).toBe(1);
-    expect(rpmInGear(400)).toBe(1);
   });
 });
 

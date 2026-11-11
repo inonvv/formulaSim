@@ -18,15 +18,11 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  EngineAudio,
-  fundamentalHz,
-  coinPickupHz,
-  countdownHz,
-  loadAudioSettings,
-  saveAudioSettings,
-  AUDIO_STORE_KEY,
+  EngineAudio, VOICES, HARMONICS, cycleHz, harmonicRecipe, harmonicPhase,
+  loadGain, loadBrightnessHz, jitterCents, windGain, scrubGain, crackleChance,
+  coinPickupHz, countdownHz, loadAudioSettings, saveAudioSettings, AUDIO_STORE_KEY,
 } from '../engine-audio.js';
-import { rpmInGear, rpmRatio } from '../physics.js';
+import { POWERTRAIN, firingHz } from '../powertrain.js';
 
 /* ── Mock Web Audio ─────────────────────────────────────────────── */
 
@@ -56,7 +52,7 @@ class MockAudioContext {
     this.sampleRate = 44100;
     this.destination = { name: 'destination', connect() {} };
     this.allParams = [];
-    this.created = { osc: 0, gain: 0, biquad: 0, buffer: 0, bufferSrc: 0 };
+    this.created = { osc: 0, gain: 0, biquad: 0, buffer: 0, bufferSrc: 0, wave: 0, limiter: 0 };
     this.oscNodes  = [];   // every oscillator in creation order (EA8 one-shots)
     this.gainNodes = [];
   }
@@ -64,7 +60,9 @@ class MockAudioContext {
   close()  { this.state = 'closed';  return Promise.resolve(); }
   createOscillator() {
     this.created.osc++;
-    const osc = { type: 'sine', frequency: makeParam(this, 440), connect() {}, disconnect() {},
+    const osc = { type: 'sine', frequency: makeParam(this, 440), detune: makeParam(this, 0), wave: null,
+                  setPeriodicWave(w) { this.wave = w; this.type = 'custom'; },
+                  connect() {}, disconnect() {},
                   started: null, stopped: null,
                   start(t) { this.started = t ?? 0; }, stop(t) { this.stopped = t ?? 0; } };
     this.oscNodes.push(osc);
@@ -78,8 +76,17 @@ class MockAudioContext {
   }
   createBiquadFilter() {
     this.created.biquad++;
-    return { type: 'lowpass', frequency: makeParam(this, 350), Q: makeParam(this, 1),
+    return { type: 'lowpass', frequency: makeParam(this, 350), Q: makeParam(this, 1), gain: makeParam(this, 0),
              connect() {}, disconnect() {} };
+  }
+  createPeriodicWave(real, imag) {
+    this.created.wave++;
+    return { real: Float32Array.from(real), imag: Float32Array.from(imag) };
+  }
+  createDynamicsCompressor() {
+    this.created.limiter++;
+    const p = () => makeParam(this, 0);
+    return { threshold: p(), knee: p(), ratio: p(), attack: p(), release: p(), connect() {}, disconnect() {} };
   }
   createBuffer(channels, length, rate) {
     this.created.buffer++;
@@ -111,528 +118,142 @@ describe('EngineAudio — lazy graph build (EA1)', () => {
   it('EA1b. all setters are safe (no throw) before resume', () => {
     const { ea } = makeEngine();
     expect(() => {
-      ea.setSpeed(180);
-      ea.setCarType('GT');
-      ea.setRain(true);
-      ea.setMuted(true);
-      ea.setVolume(0.3);
-      ea.setPaused(true);
-      ea.update(0.016);
-      ea.dispose();
+      ea.setSpeed(120); ea.setCarType('GT'); ea.setRain(true); ea.setRainIntensity(0.4);
+      ea.setPaused(true); ea.setMuted(true); ea.setVolume(0.4);
+      ea.setDrive({ throttle: 1, rpm: 9000, rpm01: 0.5, gear: 3, shifted: 1, speedMps: 40 });
+      ea.update(0.016); ea.thunder(); ea.coinPickup(2); ea.countdownBlip(1);
     }).not.toThrow();
+    expect(ea.nodes).toBeNull();
   });
 
-  it('EA1c. resume builds the graph once with fixed node counts; a second resume adds nothing', () => {
+  it('EA1c. resume builds the graph once with fixed node counts; update never grows it', () => {
     const { ea, getCtx, getFactoryCalls } = makeEngine();
     ea.resume();
     const ctx = getCtx();
     expect(getFactoryCalls()).toBe(1);
     expect(ctx.state).toBe('running');
     const counts = { ...ctx.created };
-    // 3 engine-voice oscillators + 1 idle LFO + rasp + turbo whistle
+    // core + core2 + sub + two jitter LFOs + turbo whistle
     expect(counts.osc).toBe(6);
-    // shared 1 s white-noise buffer, looped by exhaust + rain + wind + scrub chains
+    // one shared noise buffer, looped by exhaust + rain + wind + scrub
     expect(counts.buffer).toBe(1);
     expect(counts.bufferSrc).toBe(4);
-    // engine lowpass + exhaust bandpass + rain HP/LP + pop bandpass + wind LP + scrub BP
-    expect(counts.biquad).toBe(7);
-    // fund/harm2/sub voice gains + engine + noise + rain + pop + lfo + master
-    // + rasp + turbo + wind + scrub
-    expect(counts.gain).toBe(13);
+    // 3 formants + engine lowpass + exhaust BP + rain HP/LP + wind LP + scrub BP + pop BP
+    expect(counts.biquad).toBe(10);
+    // core, core2, sub, engine, jitter depth, noise, rain, turbo, wind, scrub, pop, master
+    expect(counts.gain).toBe(12);
+    expect(counts.wave).toBe(1);
+    expect(counts.limiter).toBe(1);
 
     ea.resume();
-    ea.update(0.016);
-    ea.setSpeed(120);   // 0→3 pull-away shift MAY create a one-shot pop source
-    ea.update(0.016);
     expect(getFactoryCalls()).toBe(1);
-    // Persistent graph never grows — only the per-shift one-shot pop source.
-    const { bufferSrc: _ignored, ...persistent } = ctx.created;
-    const { bufferSrc: _ignored0, ...persistent0 } = counts;
-    expect(persistent).toEqual(persistent0);
-    // update() alone NEVER creates anything, sources included.
+    ea.setDrive({ throttle: 1, rpm: 9000, rpm01: 0.5, gear: 3, shifted: 0, speedMps: 40 });
     const snap = { ...ctx.created };
     for (let i = 0; i < 20; i++) ea.update(0.016);
     expect(ctx.created).toEqual(snap);
   });
-});
 
-/* ── EA2 — pitch model ──────────────────────────────────────────── */
-
-describe('EngineAudio — fundamental pitch model (EA2)', () => {
-  it('EA2a. monotonic within a gear — 100 km/h (gear-2 top) > 55 km/h (gear-2 low)', () => {
-    expect(fundamentalHz('F1', 99)).toBeGreaterThan(fundamentalHz('F1', 55));
-    expect(fundamentalHz('GT', 99)).toBeGreaterThan(fundamentalHz('GT', 55));
-  });
-
-  it('EA2b. F1 fundamental > GT at the same speed', () => {
-    for (const s of [0, 30, 80, 180, 280, 350]) {
-      expect(fundamentalHz('F1', s)).toBeGreaterThan(fundamentalHz('GT', s));
-    }
-  });
-
-  it('EA2c. finite and within [30, 400] Hz for every speed 0–350', () => {
-    for (let s = 0; s <= 350; s += 5) {
-      for (const type of ['F1', 'F2', 'F3', 'GT']) {
-        const f = fundamentalHz(type, s);
-        expect(Number.isFinite(f)).toBe(true);
-        expect(f).toBeGreaterThanOrEqual(30);
-        expect(f).toBeLessThanOrEqual(400);
-      }
-    }
-  });
-
-  it('EA2d. F1 rises through the gears — gear-band tops climb with speed', () => {
-    // Top of each gear (just below the shift): the F1 global-rpm scale makes
-    // each successive gear scream higher — the downshifting-ladder signature.
-    const tops = [49.9, 99.9, 159.9, 209.9, 264.9, 309.9, 339.9, 350];
-    let prev = 0;
-    for (const s of tops) {
-      const f = fundamentalHz('F1', s);
-      expect(f).toBeGreaterThan(prev);
-      prev = f;
-    }
-  });
-});
-
-/* ── f2-f3-cars P2: F2/F3 engine voices ─────────────────────────── */
-
-describe('EngineAudio — F2/F3 voices + pitch ordering (P2)', () => {
-  it('P2a. F2 voice is the turbo-V6 mid ladder: (48 + rig·120)·(0.90 + 0.20·sf)', () => {
-    for (const s of [0, 80, 200, 335]) {
-      const rig = rpmInGear(s), sf = rpmRatio(s);
-      expect(fundamentalHz('F2', s)).toBeCloseTo((48 + rig * 120) * (0.90 + 0.20 * sf), 6);
-    }
-  });
-
-  it('P2b. F3 voice is the flat NA-V6 ladder: 42 + rig·100', () => {
-    for (const s of [0, 80, 200, 300]) {
-      const rig = rpmInGear(s);
-      expect(fundamentalHz('F3', s)).toBeCloseTo(42 + rig * 100, 6);
-    }
-  });
-
-  it('P2c. PITCH ORDERING (hard requirement): F1 > F2 > F3 > GT at 200 km/h mid-gear and across speeds', () => {
-    for (const s of [60, 120, 200, 300]) {
-      const f1 = fundamentalHz('F1', s);
-      const f2 = fundamentalHz('F2', s);
-      const f3 = fundamentalHz('F3', s);
-      const gt = fundamentalHz('GT', s);
-      expect(f1).toBeGreaterThan(f2);
-      expect(f2).toBeGreaterThan(f3);
-      expect(f3).toBeGreaterThan(gt);
-    }
-  });
-
-  it('P2d. F2/F3 stay monotonic within a gear (55 → 99 km/h)', () => {
-    expect(fundamentalHz('F2', 99)).toBeGreaterThan(fundamentalHz('F2', 55));
-    expect(fundamentalHz('F3', 99)).toBeGreaterThan(fundamentalHz('F3', 55));
-  });
-});
-
-/* ── EA3 — shift blip ───────────────────────────────────────────── */
-
-describe('EngineAudio — gear-shift blip (EA3)', () => {
-  function blipMarks(param) {
-    return param.calls.filter(c => c.m === 'expRamp');
-  }
-
-  it('EA3a. crossing 49→50 km/h triggers exactly one blip (gain dip + recovery ramps)', () => {
-    const { ea, getCtx } = makeEngine();
-    ea.resume();
-    ea.setSpeed(45);           // pull-away shift 0→1 (its own blip/pop)
-    getCtx().currentTime = 1;  // past the pull-away blip window
-    ea.update(0.016);
-    const g = ea.nodes.engineGain.gain;
-    const before = blipMarks(g).length;
-    const srcBefore = getCtx().created.bufferSrc;
-    ea.setSpeed(50);           // gear 1 → 2
-    const marks = blipMarks(g).slice(before);
-    expect(marks.length).toBe(2);                       // dip + recover
-    expect(marks[0].v).toBeLessThan(marks[1].v);        // dips below recovery
-    expect(marks[0].v).toBeCloseTo(marks[1].v * 0.35, 2);
-    // fundamental dips 12% then recovers
-    const f = blipMarks(ea.nodes.fund.frequency);
-    const fm = f.slice(-2);
-    expect(fm[0].v).toBeCloseTo(fm[1].v * 0.88, 2);
-    // upshift pop: exactly one extra one-shot noise source
-    expect(getCtx().created.bufferSrc).toBe(srcBefore + 1);
-  });
-
-  it('EA3b. no blip within a gear', () => {
+  it('EA1d. the two voice oscillators carry the custom cycle wave', () => {
     const { ea } = makeEngine();
     ea.resume();
-    ea.setSpeed(55);
-    ea.update(0.016);
-    const g = ea.nodes.engineGain.gain;
-    const before = blipMarks(g).length;
-    ea.setSpeed(60); ea.update(0.016);
-    ea.setSpeed(75); ea.update(0.016);
-    ea.setSpeed(99); ea.update(0.016);
-    expect(blipMarks(g).length).toBe(before);
+    expect(ea.nodes.core.type).toBe('custom');
+    expect(ea.nodes.core2.wave).toBe(ea.nodes.core.wave);
+    expect(ea.nodes.core.wave.real.length).toBe(HARMONICS + 1);
+    expect(ea.nodes.sub.type).toBe('sine');
   });
 
-  it('EA3c. downshift blips but does NOT pop (no new noise source)', () => {
-    const { ea, getCtx } = makeEngine();
-    ea.resume();
-    ea.setSpeed(55);
-    const srcAfterUpshifts = getCtx().created.bufferSrc;
-    const g = ea.nodes.engineGain.gain;
-    const before = blipMarks(g).length;
-    ea.setSpeed(45);           // gear 2 → 1
-    expect(blipMarks(g).length).toBe(before + 2);
-    expect(getCtx().created.bufferSrc).toBe(srcAfterUpshifts);
-  });
-});
-
-/* ── EA4 — mute / volume ────────────────────────────────────────── */
-
-describe('EngineAudio — mute and volume (EA4)', () => {
-  it('EA4a. setMuted(true) schedules masterGain → 0', () => {
-    const { ea } = makeEngine();
-    ea.resume();
-    ea.setMuted(true);
-    const last = ea.nodes.masterGain.gain.calls.at(-1);
-    expect(last.m).toBe('setTargetAtTime');
-    expect(last.v).toBe(0);
-  });
-
-  it('EA4b. volume follows the perceptual square curve — 0.6 → 0.36', () => {
-    const { ea } = makeEngine();
-    ea.resume();
-    ea.setVolume(0.6);
-    expect(ea.nodes.masterGain.gain.calls.at(-1).v).toBeCloseTo(0.36, 5);
-  });
-
-  it('EA4c. mute preserves volume — unmute restores volume²', () => {
-    const { ea } = makeEngine();
-    ea.resume();
-    ea.setVolume(0.6);
-    ea.setMuted(true);
-    expect(ea.nodes.masterGain.gain.calls.at(-1).v).toBe(0);
-    ea.setMuted(false);
-    expect(ea.nodes.masterGain.gain.calls.at(-1).v).toBeCloseTo(0.36, 5);
-  });
-
-  it('EA4d. pre-resume settings apply at graph build (init value, not scheduled)', () => {
-    const { ea } = makeEngine();
-    ea.setVolume(0.5);
-    ea.resume();
-    expect(ea.nodes.masterGain.gain.value).toBeCloseTo(0.25, 5);
-
-    const { ea: eb } = makeEngine();
-    eb.setMuted(true);
-    eb.setVolume(0.8);
-    eb.resume();
-    expect(eb.nodes.masterGain.gain.value).toBe(0);
-  });
-});
-
-/* ── EA5 — rain layer ───────────────────────────────────────────── */
-
-describe('EngineAudio — rain-on-bodywork layer (EA5)', () => {
-  it('EA5a. rainGain stays 0 while rain is off', () => {
-    const { ea } = makeEngine();
-    ea.resume();
-    ea.setSpeed(180);
-    ea.update(0.016);
-    expect(ea.nodes.rainGain.gain.value).toBe(0);
-  });
-
-  it('EA5b. exact 0.04 + 0.06·sf mapping when raining', () => {
-    const { ea } = makeEngine();
-    ea.resume();
-    ea.setRain(true);
-    ea.setSpeed(175);          // sf = 0.5
-    ea.update(0.016);
-    expect(ea.nodes.rainGain.gain.value).toBeCloseTo(0.04 + 0.06 * 0.5, 5);
-    ea.setSpeed(0);
-    ea.update(0.016);
-    expect(ea.nodes.rainGain.gain.value).toBeCloseTo(0.04, 5);
-    ea.setRain(false);
-    ea.update(0.016);
-    expect(ea.nodes.rainGain.gain.value).toBe(0);
-  });
-});
-
-/* ── EA6 — no zipper noise ──────────────────────────────────────── */
-
-describe('EngineAudio — scheduled writes only after init (EA6)', () => {
-  it('EA6a. no direct `.value =` param writes after resume (init only)', () => {
+  it('EA1e. changing car rebuilds the wave and retunes the formants; same car does not', () => {
     const { ea, getCtx } = makeEngine();
     ea.resume();
     const ctx = getCtx();
-    const initSets = ctx.allParams.map(p => p.directSets.length);
-    // A busy session: speed sweep with shifts, car swap, rain, pause, volume.
+    ea.setCarType('F1');
+    expect(ctx.created.wave).toBe(1);
     ea.setCarType('GT');
-    ea.setRain(true);
-    for (let s = 0; s <= 350; s += 25) { ea.setSpeed(s); ea.update(0.016); }
-    ea.setPaused(true);  ea.update(0.016);
-    ea.setPaused(false); ea.update(0.016);
-    ea.setVolume(0.2);
-    ea.setMuted(true);
-    ea.update(0.016);
-    ctx.allParams.forEach((p, i) => {
-      // Params born after the snapshot (one-shot pop sources) baseline at 0.
-      expect(p.directSets.length, `param #${i} got a direct .value write post-init`)
-        .toBe(initSets[i] ?? 0);
-    });
-  });
-
-  it('EA6b. update() smooths with setTargetAtTime (τ ≈ 60 ms) — fund freq tracks speed', () => {
-    const { ea, getCtx } = makeEngine();
-    ea.resume();
-    ea.setSpeed(120);
-    getCtx().currentTime = 1;  // past the shift-blip window (blip owns fund until then)
-    ea.update(0.016);
-    const call = ea.nodes.fund.frequency.calls.findLast(c => c.m === 'setTargetAtTime');
-    expect(call).toBeTruthy();
-    expect(call.v).toBeCloseTo(fundamentalHz('F1', 120), 3);
-    expect(call.tau).toBeGreaterThan(0.02);
-    expect(call.tau).toBeLessThan(0.2);
-  });
-
-  it('EA6c. setPaused idles the engine — freq → idle value, engine gain halved', () => {
-    const { ea, getCtx } = makeEngine();
-    ea.resume();
-    ea.setSpeed(180);
-    getCtx().currentTime = 1;  // past the shift-blip window
-    ea.update(0.016);
-    const runGain = ea.nodes.engineGain.gain.value;
-    ea.setPaused(true);
-    ea.update(0.016);
-    const f = ea.nodes.fund.frequency.calls.findLast(c => c.m === 'setTargetAtTime');
-    expect(f.v).toBeCloseTo(fundamentalHz('F1', 0), 3);
-    expect(ea.nodes.engineGain.gain.value).toBeLessThan(runGain * 0.75);
+    expect(ctx.created.wave).toBe(2);
+    const targets = ea.nodes.formants.map(f => [...f.frequency.calls].reverse().find(c => c.m === 'setTargetAtTime').v);
+    expect(targets).toEqual(VOICES.GT.formants);
   });
 });
 
-/* ── EA7 — localStorage settings ────────────────────────────────── */
+/* ── EA2 — the voice (pure) ─────────────────────────────────────── */
 
-describe('EngineAudio — localStorage settings (EA7)', () => {
-  function mockStorage(seed = {}) {
-    const map = new Map(Object.entries(seed));
-    return {
-      getItem: k => (map.has(k) ? map.get(k) : null),
-      setItem: (k, v) => map.set(k, String(v)),
-      _map: map,
-    };
-  }
-
-  it('EA7a. defaults when nothing stored: unmuted, volume 0.6', () => {
-    expect(loadAudioSettings(mockStorage())).toEqual({ muted: false, volume: 0.6 });
+describe('EngineAudio — combustion-pulse voice (EA2)', () => {
+  it('EA2a. one engine cycle is two revolutions; six firings per cycle', () => {
+    expect(cycleHz(12000)).toBeCloseTo(100, 9);
+    expect(firingHz('F1', 12000)).toBeCloseTo(6 * cycleHz(12000), 9);
   });
-
-  it('EA7b. save → load round-trip under the fsim-audio key', () => {
-    const st = mockStorage();
-    saveAudioSettings(st, { muted: true, volume: 0.25 });
-    expect(st._map.has(AUDIO_STORE_KEY)).toBe(true);
-    expect(loadAudioSettings(st)).toEqual({ muted: true, volume: 0.25 });
+  it('EA2b. firing harmonics lead; the bank-to-bank order gives body; half-orders give the growl', () => {
+    const a = harmonicRecipe(VOICES.F1, 6);
+    expect(a[0]).toBe(0);
+    expect(a[6]).toBeGreaterThan(a[5]);
+    expect(a[6]).toBeGreaterThan(a[7]);
+    expect(a[3]).toBeGreaterThan(a[2]);            // an octave below the firing note
+    expect(a[3]).toBeGreaterThan(a[4]);
+    expect(a[1]).toBeGreaterThan(0);               // half-orders are never silent
+    expect(a[5]).toBeGreaterThan(0);
   });
-
-  it('EA7c. junk-tolerant — malformed JSON or out-of-range values fall back to defaults', () => {
-    expect(loadAudioSettings(mockStorage({ [AUDIO_STORE_KEY]: '{not json' })))
-      .toEqual({ muted: false, volume: 0.6 });
-    expect(loadAudioSettings(mockStorage({ [AUDIO_STORE_KEY]: '{"muted":"yes","volume":7}' })))
-      .toEqual({ muted: false, volume: 0.6 });
-    expect(loadAudioSettings(null)).toEqual({ muted: false, volume: 0.6 });
+  it('EA2c. the spectrum falls away — nothing harsh on top', () => {
+    for (const v of Object.values(VOICES)) {
+      const a = harmonicRecipe(v, 6);
+      expect(a[36]).toBeLessThan(a[6] * 0.08);
+      expect(a[60]).toBeLessThan(a[6] * 0.03);
+      for (let k = 12; k + 6 <= HARMONICS; k += 6) expect(a[k + 6]).toBeLessThan(a[k]);
+    }
   });
-
-  it('EA7d. restored settings drive the graph on init — muted stored ⇒ master 0 at build', () => {
-    const st = mockStorage({ [AUDIO_STORE_KEY]: '{"muted":true,"volume":0.4}' });
-    const s = loadAudioSettings(st);
-    const { ea } = makeEngine();
-    ea.setMuted(s.muted);
-    ea.setVolume(s.volume);
-    ea.resume();
-    expect(ea.nodes.masterGain.gain.value).toBe(0);
-    ea.setMuted(false);
-    expect(ea.nodes.masterGain.gain.calls.at(-1).v).toBeCloseTo(0.16, 5);
+  it('EA2d. it is not a few bare partials: energy is spread over many harmonics', () => {
+    for (const [name, v] of Object.entries(VOICES)) {
+      const a = harmonicRecipe(v, 6);
+      let total = 0, top = 0, audible = 0;
+      for (let k = 1; k <= HARMONICS; k++) { total += a[k] * a[k]; top = Math.max(top, a[k] * a[k]); }
+      for (let k = 1; k <= HARMONICS; k++) if (a[k] * a[k] > top * 0.01) audible++;
+      expect(top / total, name).toBeLessThan(0.45);          // no single dominant whine
+      expect(audible, name).toBeGreaterThanOrEqual(12);
+    }
   });
-});
-
-/* ── EA8 — arcade pickup + countdown blips (game plan Phase B) ────── */
-
-describe('EngineAudio — coin pickup + countdown blips (EA8)', () => {
-  it('EA8a. coinPickupHz: base 988 Hz, +1 semitone per streak step, capped +12', () => {
-    expect(coinPickupHz(1)).toBeCloseTo(988, 6);
-    expect(coinPickupHz(2)).toBeCloseTo(988 * Math.pow(2, 1 / 12), 6);
-    expect(coinPickupHz(5)).toBeCloseTo(988 * Math.pow(2, 4 / 12), 6);
-    expect(coinPickupHz(13)).toBeCloseTo(988 * 2, 6);      // +12 semitones
-    expect(coinPickupHz(40)).toBeCloseTo(988 * 2, 6);      // capped
-    expect(coinPickupHz(0)).toBeCloseTo(988, 6);           // junk-tolerant floor
+  it('EA2e. the GT is rougher and darker than the F1', () => {
+    expect(VOICES.GT.rough).toBeGreaterThan(VOICES.F1.rough);
+    VOICES.GT.formants.forEach((f, i) => expect(f).toBeLessThan(VOICES.F1.formants[i]));
   });
-
-  it('EA8b. countdownHz rises 3 → 2 → 1 → GO', () => {
-    const f3 = countdownHz(3), f2 = countdownHz(2), f1 = countdownHz(1), go = countdownHz(0);
-    expect(f2).toBeGreaterThan(f3);
-    expect(f1).toBeGreaterThan(f2);
-    expect(go).toBeGreaterThan(f1);
+  it('EA2f. phases are deterministic and scattered', () => {
+    expect(harmonicPhase(7)).toBe(harmonicPhase(7));
+    const ph = [];
+    for (let k = 1; k <= 40; k++) { const p = harmonicPhase(k); expect(p).toBeGreaterThanOrEqual(0); expect(p).toBeLessThan(Math.PI * 2); ph.push(p); }
+    expect(new Set(ph.map(p => p.toFixed(2))).size).toBeGreaterThan(30);
   });
-
-  it('EA8c. pre-resume coinPickup/countdownBlip are safe no-ops (graph stays unbuilt)', () => {
-    const { ea, getFactoryCalls } = makeEngine();
-    expect(() => { ea.coinPickup(3); ea.countdownBlip(2); }).not.toThrow();
-    expect(getFactoryCalls()).toBe(0);
-  });
-
-  it('EA8d. coinPickup: one triangle one-shot at coinPickupHz, gain 0.15 exp-decaying over 0.15 s', () => {
-    const { ea, getCtx } = makeEngine();
-    ea.resume();
-    const ctx = getCtx();
-    const oscBefore = ctx.oscNodes.length, gainBefore = ctx.gainNodes.length;
-    ctx.currentTime = 2;
-    ea.coinPickup(5);
-    expect(ctx.oscNodes.length).toBe(oscBefore + 1);
-    expect(ctx.gainNodes.length).toBe(gainBefore + 1);
-    const osc = ctx.oscNodes.at(-1);
-    expect(osc.type).toBe('triangle');
-    const fset = osc.frequency.calls.find(c => c.m === 'setValueAtTime');
-    expect(fset.v).toBeCloseTo(coinPickupHz(5), 6);
-    expect(osc.started).toBe(2);
-    expect(osc.stopped).toBeCloseTo(2.15, 6);
-    const g = ctx.gainNodes.at(-1).gain;
-    expect(g.calls.find(c => c.m === 'setValueAtTime').v).toBeCloseTo(0.15, 6);
-    const ramp = g.calls.find(c => c.m === 'expRamp');
-    expect(ramp.v).toBeLessThanOrEqual(0.001);
-    expect(ramp.t).toBeCloseTo(2.15, 6);
-  });
-
-  it('EA8e. countdownBlip: one-shot osc at countdownHz(step); repeated calls never grow the persistent graph', () => {
-    const { ea, getCtx } = makeEngine();
-    ea.resume();
-    const ctx = getCtx();
-    const before = ctx.oscNodes.length;
-    ea.countdownBlip(3);
-    ea.countdownBlip(0);
-    expect(ctx.oscNodes.length).toBe(before + 2);
-    const [t3, go] = ctx.oscNodes.slice(-2);
-    expect(t3.frequency.calls.find(c => c.m === 'setValueAtTime').v).toBeCloseTo(countdownHz(3), 6);
-    expect(go.frequency.calls.find(c => c.m === 'setValueAtTime').v).toBeCloseTo(countdownHz(0), 6);
-    // one-shots stop themselves — persistent node families untouched
-    expect(t3.stopped).toBeGreaterThan(t3.started);
-    expect(ctx.created.biquad).toBe(7);
-    expect(ctx.created.bufferSrc).toBe(4);
-  });
-
-  it('EA8f. one-shots never write params directly (no zipper) — scheduled methods only', () => {
-    const { ea, getCtx } = makeEngine();
-    ea.resume();
-    const ctx = getCtx();
-    const snapshot = ctx.allParams.length;
-    ea.coinPickup(2);
-    ea.countdownBlip(1);
-    ctx.allParams.slice(snapshot).forEach((p, i) => {
-      expect(p.directSets.length, `one-shot param #${i} used a direct .value write`).toBe(0);
-    });
-  });
-});
-
-/* ── EA9 — high-rev harshness cap (300+ km/h shrillness fix) ────── */
-
-function lastTarget(param) {
-  const w = param.calls.filter((c) => c.m === 'setTargetAtTime');
-  return w.length ? w[w.length - 1].v : param.value;
-}
-
-describe('EngineAudio — high-rev timbre stays civil (EA9)', () => {
-  function targetsAt(speed) {
-    const { ea } = makeEngine();
-    ea.resume();
-    ea.setSpeed(speed);
-    // Push past the shift-blip window so update() owns the params again.
-    ea.ctx.currentTime = 1;
-    ea.update(0.016);
-    return {
-      lowpassHz: lastTarget(ea.nodes.lowpass.frequency),
-      harm2Gain: lastTarget(ea.nodes.harm2Gain.gain),
-    };
-  }
-
-  it('EA9a. lowpass brightness is capped ≤ 3700 Hz even at vMax (was ~5.2 kHz scream)', () => {
-    expect(targetsAt(350).lowpassHz).toBeLessThanOrEqual(3700);
-    expect(targetsAt(300).lowpassHz).toBeLessThanOrEqual(3700);
-  });
-
-  it('EA9b. brightness still opens with revs (monotonic 0 → 150 → 300)', () => {
-    const lo = targetsAt(0).lowpassHz;
-    const mid = targetsAt(150).lowpassHz;
-    const hi = targetsAt(300).lowpassHz;
-    expect(mid).toBeGreaterThan(lo);
-    expect(hi).toBeGreaterThan(mid);
-    expect(lo).toBeGreaterThanOrEqual(350);
-  });
-
-  it('EA9c. square-harmonic gain rolls off with rpmRatio — ~−5 dB by vMax', () => {
-    const g0 = targetsAt(0).harm2Gain;
-    const gMid = targetsAt(175).harm2Gain;
-    const gTop = targetsAt(350).harm2Gain;
-    expect(gMid).toBeLessThan(g0);
-    expect(gTop).toBeLessThan(gMid);
-    // exact curve: HARM2_GAIN · (1 − 0.45·sf), sf = speed/350
-    expect(gTop).toBeCloseTo(0.398 * (1 - 0.45), 3);
-    expect(g0).toBeCloseTo(0.398 * (1 - 0.45 * rpmRatio(0)), 3);
-  });
-
-  it('EA9d. harm2 roll-off is a scheduled write (EA6 zipper rule holds)', () => {
-    const { ea } = makeEngine();
-    ea.resume();
-    const before = ea.nodes.harm2Gain.gain.directSets.length;
-    ea.setSpeed(340);
-    ea.ctx.currentTime = 1;
-    ea.update(0.016);
-    expect(ea.nodes.harm2Gain.gain.directSets.length).toBe(before);
-  });
-});
-
-/* ── EA10 — driven mode (vehicle model + gearbox) ───────────────── */
-import {
-  VOICES, drivenFundamentalHz, loadGain, loadBrightnessHz, windGain, scrubGain, crackleChance,
-} from '../engine-audio.js';
-import { POWERTRAIN } from '../powertrain.js';
-
-describe('EngineAudio — driven mode pure mappings (EA10)', () => {
-  it('EA10a. fundamental is half the firing frequency, clamped to 28–420 Hz', () => {
-    expect(drivenFundamentalHz('F1', 12000)).toBeCloseTo(300, 9);
-    expect(drivenFundamentalHz('GT', 9000)).toBeCloseTo(225, 9);
-    expect(drivenFundamentalHz('GT', 950)).toBe(28);
-    expect(drivenFundamentalHz('F1', 99999)).toBe(420);
-  });
-  it('EA10b. an upshift drops the note by the ratio step, not to the floor', () => {
-    const p = POWERTRAIN.F1;
-    const before = drivenFundamentalHz('F1', p.shift);
-    const after  = drivenFundamentalHz('F1', p.shift * p.vGear[2] / p.vGear[3]);   // 3rd → 4th
-    expect(after / before).toBeGreaterThan(0.75);
-    expect(after / before).toBeLessThan(0.92);
-  });
-  it('EA10c. load: full throttle is louder and brighter than a lift at the same revs', () => {
+  it('EA2g. load: full throttle is louder and brighter than a lift; brightness is capped', () => {
     expect(loadGain(0.8, 1)).toBeGreaterThan(loadGain(0.8, 0) * 2);
-    expect(loadBrightnessHz(0.8, 1)).toBeGreaterThan(loadBrightnessHz(0.8, 0) + 800);
+    expect(loadBrightnessHz(0.8, 1)).toBeGreaterThan(loadBrightnessHz(0.8, 0) + 600);
     for (const r of [0, 0.5, 1, 9]) for (const l of [0, 1, 9]) {
-      expect(loadBrightnessHz(r, l)).toBeLessThanOrEqual(3640 + 1e-9);   // EA9 cap holds
-      expect(loadBrightnessHz(r, l)).toBeGreaterThanOrEqual(350);
+      expect(loadBrightnessHz(r, l)).toBeLessThanOrEqual(3000);
+      expect(loadBrightnessHz(r, l)).toBeGreaterThanOrEqual(400);
     }
     expect(loadGain(1, 1)).toBeCloseTo(0.70, 9);
   });
-  it('EA10d. wind grows with v², is louder in the wet, and is capped', () => {
+  it('EA2h. jitter is lumpy at tick-over and nearly steady at speed', () => {
+    expect(jitterCents(0, 0)).toBeGreaterThan(20);
+    expect(jitterCents(0.5, 1)).toBeLessThan(6);
+    expect(jitterCents(1, 1)).toBeGreaterThan(0);
+  });
+  it('EA2i. wind grows with v², louder in the wet, capped', () => {
     expect(windGain(0, false)).toBe(0);
     expect(windGain(45, false)).toBeCloseTo(windGain(90, false) / 4, 9);
     expect(windGain(60, true)).toBeGreaterThan(windGain(60, false));
     expect(windGain(500, true)).toBeLessThanOrEqual(0.24 + 1e-9);
   });
-  it('EA10e. tyres are silent until worked hard, and quieter (hiss, not squeal) in the wet', () => {
+  it('EA2j. tyres are silent until worked hard, quieter in the wet', () => {
     expect(scrubGain(0.5, 50, false)).toBe(0);
     expect(scrubGain(1.0, 50, false)).toBeGreaterThan(0);
     expect(scrubGain(1.0, 50, true)).toBeLessThan(scrubGain(1.0, 50, false));
     expect(scrubGain(1.0, 0, false)).toBe(0);
     expect(scrubGain(9, 50, false)).toBeLessThanOrEqual(0.12 + 1e-9);
   });
-  it('EA10f. crackle only on a closed throttle at high revs', () => {
+  it('EA2k. crackle only on a closed throttle at high revs', () => {
     expect(crackleChance(VOICES.GT, 0.8, 1, 0.016)).toBe(0);
     expect(crackleChance(VOICES.GT, 0.2, 0, 0.016)).toBe(0);
     expect(crackleChance(VOICES.GT, 0.8, 0, 0.016)).toBeGreaterThan(0);
     expect(crackleChance(VOICES.GT, 0.8, 0, 99)).toBe(1);
   });
-  it('EA10g. only the turbo cars whistle', () => {
+  it('EA2l. only the turbo cars whistle', () => {
     expect(VOICES.F1.turbo).toBeGreaterThan(0);
     expect(VOICES.F2.turbo).toBeGreaterThan(0);
     expect(VOICES.F3.turbo).toBe(0);
@@ -640,35 +261,31 @@ describe('EngineAudio — driven mode pure mappings (EA10)', () => {
   });
 });
 
-describe('EngineAudio — driven mode graph behaviour (EA11)', () => {
-  const drive = (o = {}) => ({ throttle: 1, rpm: 10000, rpm01: 0.65, gear: 4, shifted: 0, speedMps: 60, usage: 0.3, wet: false, ...o });
-  const lastTarget = (param) => [...param.calls].reverse().find(c => c.m === 'setTargetAtTime')?.v;
+/* ── EA3 — driven behaviour ─────────────────────────────────────── */
 
-  it('EA11a. setDrive before resume is safe; legacy mode is untouched without it', () => {
-    const { ea, getCtx } = makeEngine();
-    expect(() => ea.setDrive(drive())).not.toThrow();
-    ea.setDrive(null);
+const drive = (o = {}) => ({ throttle: 1, rpm: 10000, rpm01: 0.65, gear: 4, shifted: 0, speedMps: 60, usage: 0.3, wet: false, ...o });
+const lastTarget = (param) => [...param.calls].reverse().find(c => c.m === 'setTargetAtTime')?.v;
+
+describe('EngineAudio — follows the engine (EA3)', () => {
+  it('EA3a. pitch is the cycle frequency of the real rpm; the sub sits at half the firing rate', () => {
+    const { ea } = makeEngine();
     ea.resume();
-    ea.setSpeed(200);
+    ea.setDrive(drive({ rpm: 8400 }));
+    ea.setSpeed(300);                      // ignored for pitch in driven mode
     ea.update(0.016);
-    expect(lastTarget(getCtx().oscNodes[0].frequency)).toBeCloseTo(fundamentalHz('F1', 200), 9);
-    expect(ea.debugState().driven).toBe(false);
-  });
-  it('EA11b. pitch follows rpm, not speed; layers get scheduled writes only', () => {
-    const { ea, getCtx } = makeEngine();
-    ea.resume();
-    const ctx = getCtx();
-    ctx.allParams.forEach(p => { p.directSets.length = 0; });
-    ea.setDrive(drive({ rpm: 8000 }));
-    ea.setSpeed(300);                    // ignored for pitch and shifts in driven mode
-    ea.update(0.016);
-    expect(lastTarget(ea.nodes.fund.frequency)).toBeCloseTo(drivenFundamentalHz('F1', 8000), 9);
-    expect(lastTarget(ea.nodes.rasp.frequency)).toBeCloseTo(drivenFundamentalHz('F1', 8000) * 1.5, 9);
-    expect(lastTarget(ea.nodes.windGain.gain)).toBeCloseTo(windGain(60, false), 9);
-    expect(ctx.allParams.every(p => p.directSets.length === 0)).toBe(true);   // EA6 zipper rule
+    expect(lastTarget(ea.nodes.core.frequency)).toBeCloseTo(70, 9);
+    expect(lastTarget(ea.nodes.core2.frequency)).toBeCloseTo(70, 9);
+    expect(lastTarget(ea.nodes.sub.frequency)).toBeCloseTo(210, 9);
     expect(ea.debugState().driven).toBe(true);
+    expect(ea.debugState().firingHz).toBeCloseTo(420, 9);
   });
-  it('EA11c. lifting off drops the engine level and closes the filter', () => {
+  it('EA3b. an upshift drops the note by the ratio step, not to the floor', () => {
+    const p = POWERTRAIN.F1;
+    const after = cycleHz(p.shift * p.vGear[2] / p.vGear[3]) / cycleHz(p.shift);   // 3rd → 4th
+    expect(after).toBeGreaterThan(0.75);
+    expect(after).toBeLessThan(0.92);
+  });
+  it('EA3c. lifting off drops the engine level and closes the filter', () => {
     const { ea } = makeEngine();
     ea.resume();
     ea.setDrive(drive({ throttle: 1 }));
@@ -679,37 +296,49 @@ describe('EngineAudio — driven mode graph behaviour (EA11)', () => {
     expect(lastTarget(ea.nodes.engineGain.gain)).toBeLessThan(gOn * 0.6);
     expect(lastTarget(ea.nodes.lowpass.frequency)).toBeLessThan(fOn);
   });
-  it('EA11d. a reported shift blips once; setSpeed gear-band crossings no longer do', () => {
+  it('EA3d. a reported shift blips once: level dips and recovers', () => {
     const { ea } = makeEngine();
     ea.resume();
     ea.setDrive(drive());
     ea.update(0.016);
     const ramps = () => ea.nodes.engineGain.gain.calls.filter(c => c.m === 'expRamp').length;
     const r0 = ramps();
-    ea.setSpeed(49); ea.setSpeed(51); ea.setSpeed(101);      // legacy band crossings
+    ea.setSpeed(49); ea.setSpeed(51); ea.setSpeed(101);      // speed alone never shifts in driven mode
     expect(ramps()).toBe(r0);
     ea.setDrive(drive({ gear: 5, shifted: 1 }));
-    expect(ramps()).toBe(r0 + 2);                            // dip + recovery
+    expect(ramps()).toBe(r0 + 2);
     ea.setDrive(drive({ gear: 5, shifted: 0 }));
     expect(ramps()).toBe(r0 + 2);
   });
-  it('EA11e. downshift flares the note up, upshift sags it', () => {
+  it('EA3e. downshift flares the note up, upshift sags it — on both voice oscillators', () => {
     const { ea } = makeEngine();
     ea.resume();
-    ea.setDrive(drive({ gear: 3, shifted: -1, rpm: 9000 }));
-    const f = drivenFundamentalHz('F1', 9000);
+    const fc = cycleHz(9000);
     const firstRamp = (calls) => calls.filter(c => c.m === 'expRamp').slice(-2)[0].v;
-    expect(firstRamp(ea.nodes.fund.frequency.calls)).toBeCloseTo(f * 1.10, 6);
+    ea.setDrive(drive({ gear: 3, shifted: -1, rpm: 9000 }));
+    expect(firstRamp(ea.nodes.core.frequency.calls)).toBeCloseTo(fc * 1.10, 6);
+    expect(firstRamp(ea.nodes.core2.frequency.calls)).toBeCloseTo(fc * 1.10, 6);
     ea.setDrive(drive({ gear: 4, shifted: 1, rpm: 9000 }));
-    expect(firstRamp(ea.nodes.fund.frequency.calls)).toBeCloseTo(f * 0.88, 6);
+    expect(firstRamp(ea.nodes.core.frequency.calls)).toBeCloseTo(fc * 0.88, 6);
   });
-  it('EA11f. turbo spools with load on the F1 and stays silent on the GT', () => {
+  it('EA3f. upshift pops (one noise one-shot); downshift does not', () => {
+    const { ea, getCtx } = makeEngine();
+    ea.resume();
+    ea._rng = () => 0.999999;                                 // no crackle
+    ea.setDrive(drive());
+    const base = getCtx().created.bufferSrc;
+    ea.setDrive(drive({ gear: 5, shifted: 1 }));
+    expect(getCtx().created.bufferSrc).toBe(base + 1);
+    ea.setDrive(drive({ gear: 4, shifted: -1 }));
+    expect(getCtx().created.bufferSrc).toBe(base + 1);
+  });
+  it('EA3g. turbo spools with load on the F1 and stays silent on the GT', () => {
     const { ea } = makeEngine();
     ea.resume();
     ea.setDrive(drive({ throttle: 1, rpm01: 0.9 }));
     for (let i = 0; i < 120; i++) ea.update(0.016);
     expect(ea.debugState().boost).toBeGreaterThan(0.7);
-    expect(lastTarget(ea.nodes.turboGain.gain)).toBeGreaterThan(0.015);
+    expect(lastTarget(ea.nodes.turboGain.gain)).toBeGreaterThan(0.005);
     ea.setDrive(drive({ throttle: 0, rpm01: 0.9 }));
     for (let i = 0; i < 120; i++) ea.update(0.016);
     expect(ea.debugState().boost).toBeLessThan(0.05);
@@ -718,7 +347,7 @@ describe('EngineAudio — driven mode graph behaviour (EA11)', () => {
     for (let i = 0; i < 120; i++) ea.update(0.016);
     expect(lastTarget(ea.nodes.turboGain.gain)).toBeLessThan(1e-4);
   });
-  it('EA11g. overrun crackle fires one-shot pops only off-throttle at revs; never on throttle', () => {
+  it('EA3h. overrun crackle fires only off-throttle at revs', () => {
     const { ea, getCtx } = makeEngine();
     ea.resume();
     ea._rng = () => 0;                                        // always under the chance
@@ -730,11 +359,8 @@ describe('EngineAudio — driven mode graph behaviour (EA11)', () => {
     ea.setDrive(drive({ throttle: 0, rpm01: 0.9 }));
     for (let i = 0; i < 10; i++) ea.update(0.016);
     expect(ctx.created.bufferSrc).toBe(base + 10);
-    ea._rng = () => 0.999999;                                 // never
-    for (let i = 0; i < 10; i++) ea.update(0.016);
-    expect(ctx.created.bufferSrc).toBe(base + 10);
   });
-  it('EA11h. paused idles the driven engine: idle pitch, no wind, no crackle', () => {
+  it('EA3i. paused idles the engine: idle pitch, half level, no wind, no crackle', () => {
     const { ea, getCtx } = makeEngine();
     ea.resume();
     ea._rng = () => 0;
@@ -742,17 +368,187 @@ describe('EngineAudio — driven mode graph behaviour (EA11)', () => {
     ea.setPaused(true);
     const base = getCtx().created.bufferSrc;
     ea.update(0.016);
-    expect(lastTarget(ea.nodes.fund.frequency)).toBeCloseTo(drivenFundamentalHz('F1', POWERTRAIN.F1.idle), 9);
+    expect(lastTarget(ea.nodes.core.frequency)).toBeCloseTo(cycleHz(POWERTRAIN.F1.idle), 9);
+    expect(lastTarget(ea.nodes.engineGain.gain)).toBeCloseTo(loadGain(0, 0) * 0.5, 9);
     expect(lastTarget(ea.nodes.windGain.gain)).toBe(0);
     expect(getCtx().created.bufferSrc).toBe(base);
   });
-  it('EA11i. rain layer keeps its exact speed mapping in driven mode', () => {
+  it('EA3j. without setDrive the same voice is derived from speed through the gearbox', () => {
+    const { ea } = makeEngine();
+    ea.resume();
+    ea.setSpeed(0);
+    ea.update(0.016);
+    expect(lastTarget(ea.nodes.core.frequency)).toBeCloseTo(cycleHz(POWERTRAIN.F1.idle), 6);
+    const ramps = () => ea.nodes.engineGain.gain.calls.filter(c => c.m === 'expRamp').length;
+    const r0 = ramps();
+    for (let v = 5; v <= 200; v += 5) ea.setSpeed(v);         // runs up through the box
+    expect(ramps()).toBeGreaterThanOrEqual(r0 + 4);           // at least two upshift blips
+    expect(ea.debugState().gear).toBeGreaterThanOrEqual(3);
+    expect(ea.debugState().driven).toBe(false);
+    expect(ea.debugState().load).toBe(1);
+    ea.setDrive(drive());
+    ea.setDrive(null);
+    expect(ea.debugState().driven).toBe(false);
+  });
+});
+
+/* ── EA4 — mute and volume ──────────────────────────────────────── */
+
+describe('EngineAudio — mute and volume (EA4)', () => {
+  const TRIM = 0.42;
+  it('EA4a. setMuted(true) schedules masterGain → 0', () => {
+    const { ea } = makeEngine();
+    ea.resume();
+    ea.setMuted(true);
+    expect(lastTarget(ea.nodes.masterGain.gain)).toBe(0);
+  });
+  it('EA4b. volume follows the perceptual square curve, with headroom trim', () => {
+    const { ea } = makeEngine();
+    ea.resume();
+    ea.setVolume(0.6);
+    expect(lastTarget(ea.nodes.masterGain.gain)).toBeCloseTo(0.36 * TRIM, 9);
+    ea.setVolume(7);
+    expect(lastTarget(ea.nodes.masterGain.gain)).toBeCloseTo(TRIM, 9);       // never above the trim
+  });
+  it('EA4c. mute preserves volume — unmute restores it', () => {
+    const { ea } = makeEngine();
+    ea.resume();
+    ea.setVolume(0.5);
+    ea.setMuted(true);
+    ea.setMuted(false);
+    expect(lastTarget(ea.nodes.masterGain.gain)).toBeCloseTo(0.25 * TRIM, 9);
+  });
+  it('EA4d. pre-resume settings apply at graph build', () => {
+    const { ea } = makeEngine();
+    ea.setMuted(true);
+    ea.setVolume(0.9);
+    ea.resume();
+    expect(ea.nodes.masterGain.gain.value).toBe(0);
+    expect(ea.debugState().masterTarget).toBe(0);
+  });
+  it('EA4e. a limiter sits on the output', () => {
+    const { ea } = makeEngine();
+    ea.resume();
+    expect(ea.nodes.limiter).toBeTruthy();
+    expect(ea.nodes.limiter.ratio.value).toBeGreaterThanOrEqual(8);
+  });
+});
+
+/* ── EA5 — rain layer ───────────────────────────────────────────── */
+
+describe('EngineAudio — rain-on-bodywork layer (EA5)', () => {
+  it('EA5a. rainGain stays 0 while rain is off', () => {
+    const { ea } = makeEngine();
+    ea.resume();
+    ea.setSpeed(200);
+    ea.update(0.016);
+    expect(lastTarget(ea.nodes.rainGain.gain)).toBe(0);
+  });
+  it('EA5b. 0.04 + 0.06·sf when raining, scaled by intensity', () => {
     const { ea } = makeEngine();
     ea.resume();
     ea.setRain(true);
     ea.setSpeed(175);
-    ea.setDrive(drive({ wet: true }));
     ea.update(0.016);
     expect(lastTarget(ea.nodes.rainGain.gain)).toBeCloseTo(0.04 + 0.06 * 0.5, 9);
+    ea.setRainIntensity(0);
+    ea.update(0.016);
+    expect(lastTarget(ea.nodes.rainGain.gain)).toBeCloseTo((0.04 + 0.06 * 0.5) * 0.4, 9);
+  });
+});
+
+/* ── EA6 — scheduled writes only ────────────────────────────────── */
+
+describe('EngineAudio — scheduled writes only after init (EA6)', () => {
+  it('EA6a. no direct `.value =` param writes after resume — updates, shifts, car change, one-shots', () => {
+    const { ea, getCtx } = makeEngine();
+    ea.resume();
+    const ctx = getCtx();
+    ctx.allParams.forEach(p => { p.directSets.length = 0; });
+    ea._rng = () => 0;
+    ea.setDrive(drive({ shifted: 1 }));
+    ea.update(0.016);
+    ea.setDrive(drive({ throttle: 0, shifted: -1 }));
+    ea.update(0.016);
+    ea.setCarType('GT');
+    ea.setRain(true); ea.setVolume(0.3); ea.setMuted(true); ea.setPaused(true);
+    ea.update(0.016);
+    ea.thunder(0.2); ea.coinPickup(3); ea.countdownBlip(0);
+    expect(ctx.allParams.every(p => p.directSets.length === 0)).toBe(true);
+  });
+  it('EA6b. update() smooths with setTargetAtTime (τ ≈ 60 ms)', () => {
+    const { ea } = makeEngine();
+    ea.resume();
+    ea.setDrive(drive());
+    ea.update(0.016);
+    const c = [...ea.nodes.core.frequency.calls].reverse().find(x => x.m === 'setTargetAtTime');
+    expect(c.tau).toBeCloseTo(0.06, 9);
+  });
+});
+
+/* ── EA7 — settings persistence ─────────────────────────────────── */
+
+describe('EngineAudio — localStorage settings (EA7)', () => {
+  const store = () => { const m = new Map(); return { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, v) }; };
+  it('EA7a. defaults when nothing stored: unmuted, volume 0.6', () => {
+    expect(loadAudioSettings(store())).toEqual({ muted: false, volume: 0.6 });
+  });
+  it('EA7b. save → load round-trip under the fsim-audio key', () => {
+    const s = store();
+    saveAudioSettings(s, { muted: true, volume: 0.25 });
+    expect(JSON.parse(s.getItem(AUDIO_STORE_KEY))).toEqual({ muted: true, volume: 0.25 });
+    expect(loadAudioSettings(s)).toEqual({ muted: true, volume: 0.25 });
+  });
+  it('EA7c. junk-tolerant — malformed JSON or out-of-range values fall back to defaults', () => {
+    const s = store();
+    s.setItem(AUDIO_STORE_KEY, '{not json');
+    expect(loadAudioSettings(s)).toEqual({ muted: false, volume: 0.6 });
+    s.setItem(AUDIO_STORE_KEY, JSON.stringify({ muted: 'yes', volume: 7 }));
+    expect(loadAudioSettings(s)).toEqual({ muted: false, volume: 0.6 });
+    expect(loadAudioSettings(null)).toEqual({ muted: false, volume: 0.6 });
+  });
+});
+
+/* ── EA8 — one-shots ────────────────────────────────────────────── */
+
+describe('EngineAudio — one-shots (EA8)', () => {
+  it('EA8a. coinPickupHz: base 988 Hz, +1 semitone per streak step, capped +12', () => {
+    expect(coinPickupHz(1)).toBeCloseTo(988, 6);
+    expect(coinPickupHz(2)).toBeCloseTo(988 * Math.pow(2, 1 / 12), 6);
+    expect(coinPickupHz(99)).toBeCloseTo(988 * 2, 6);
+    expect(coinPickupHz(undefined)).toBeCloseTo(988, 6);
+  });
+  it('EA8b. countdownHz rises 3 → 2 → 1 → GO', () => {
+    expect(countdownHz(3)).toBeLessThan(countdownHz(2));
+    expect(countdownHz(2)).toBeLessThan(countdownHz(1));
+    expect(countdownHz(0)).toBeCloseTo(countdownHz(3) * 2, 6);
+  });
+  it('EA8c. coin and countdown are one oscillator each that stops itself; the persistent graph is untouched', () => {
+    const { ea, getCtx } = makeEngine();
+    ea.resume();
+    const ctx = getCtx();
+    const before = { ...ctx.created };
+    ea.coinPickup(1);
+    ea.countdownBlip(3);
+    expect(ctx.created.osc).toBe(before.osc + 2);
+    expect(ctx.created.biquad).toBe(before.biquad);
+    expect(ctx.created.bufferSrc).toBe(before.bufferSrc);
+    const [coin, tick] = ctx.oscNodes.slice(-2);
+    expect(coin.type).toBe('triangle');
+    expect(coin.frequency.calls.find(c => c.m === 'setValueAtTime').v).toBeCloseTo(coinPickupHz(1), 6);
+    expect(tick.frequency.calls.find(c => c.m === 'setValueAtTime').v).toBeCloseTo(countdownHz(3), 6);
+    expect(coin.stopped).toBeGreaterThan(coin.started);
+  });
+  it('EA8d. thunder is one noise source through its own lowpass, with a long tail', () => {
+    const { ea, getCtx } = makeEngine();
+    ea.resume();
+    const ctx = getCtx();
+    const before = { ...ctx.created };
+    ea.thunder(0.5);
+    expect(ctx.created.bufferSrc).toBe(before.bufferSrc + 1);
+    expect(ctx.created.biquad).toBe(before.biquad + 1);
+    expect(ctx.created.gain).toBe(before.gain + 1);
+    const g = ctx.gainNodes[ctx.gainNodes.length - 1].gain.calls.filter(c => c.m === 'expRamp');
+    expect(g[g.length - 1].t).toBeGreaterThan(2);
   });
 });
