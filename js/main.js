@@ -34,6 +34,7 @@ import { buildCircuit } from './circuit.js';
 import { solveLap } from './lap-sim.js';
 import { createCircuitHud } from './circuit-hud.js';
 import { SPA } from './circuits/spa-data.js';
+import { SPA_SCENERY } from './circuits/spa-scenery.js';
 import {
   createGame, lateralStep, tiltStep, worldOffsetX,
   fovStep, FOV_CFG, cameraShake, nearParallaxStep,
@@ -240,6 +241,7 @@ function currentSetup() {
 
 /* Circuits are built on first use (the racing-line solve costs ~50 ms). */
 const CIRCUIT_DEFS = { spa: SPA };
+const CIRCUIT_SCENERY = { spa: SPA_SCENERY };
 const _circuits = {};
 function getCircuit(id) {
   if (!CIRCUIT_DEFS[id]) return null;
@@ -1518,6 +1520,9 @@ function setTrack(id) {
   state.trackId = id;
   const circuit = getCircuit(id);
   trackPath.setCircuit(circuit);       // re-roots track space, bumps epoch
+  // Roadside follows the track type: narrow road, verges, gravel, forest
+  // and the circuit's own scenery — or the wide test-track apron.
+  track.setLayout(circuit ? 'circuit' : 'test', circuit, CIRCUIT_SCENERY[id] ?? null);
   track.update(trackPath);
   // A circuit starts from the grid: standing start, fresh lap clock.
   state.vehicle.v = 0;

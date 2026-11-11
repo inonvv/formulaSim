@@ -17,8 +17,11 @@ import {
   WINDOW_BEHIND, WINDOW_AHEAD,
 } from './track-path.js';
 import { HORIZON_COLOR } from './scene-config.js';
+import {
+  LAYOUTS, TREES, clampToBend, cornerKappa, insideBlocked, kerbVisible, gravelExtent, tyresVisible,
+  treeSpec, inLapRange, expandScenery, treeBlocked, barrierBlocked,
+} from './track-layout.js';
 
-const ROAD_W      = 30;     // full ground width (m)
 const GRASS_W     = 320;    // grass apron width (m) — fills the view to the sides
 const RIBBON_DS   = 2;      // ground ribbon row spacing (m)
 const SURFACE_Y   = -0.34;
@@ -267,9 +270,16 @@ export function buildSkyline() {
   return { group, near, setGroundDrop };
 }
 
-/* ── Ground ribbon — path-following textured strip (asphalt or grass) ── */
-function buildGroundRibbon(groundTex, width = ROAD_W, y = SURFACE_Y, uRepeat = 18, matOpts = {}) {
-  const rows = poolSize(RIBBON_DS);            // fixed vertex count
+/* ── Ground ribbon — path-following textured strip ───────────────── *
+ * extent(path, s) → [xLeft, xRight] lateral edges in metres from the DRIVEN
+ * line (right +). A zero-width extent draws nothing, so one ribbon can come
+ * and go along the lap (gravel traps, pit lanes).                          */
+const GROUND_AHEAD = 260;   // m — ground reaches past the furniture window so
+                            // distant scenery stands on something
+const U_PER_M = 18 / 30;    // texture tiles per metre across (≈1.67 m / tile)
+
+function buildGroundRibbon(groundTex, extent, y = SURFACE_Y, matOpts = {}) {
+  const rows = poolSize(RIBBON_DS, WINDOW_BEHIND, GROUND_AHEAD);   // fixed vertex count
   const positions = new Float32Array(rows * 2 * 3);
   const uvs       = new Float32Array(rows * 2 * 2);
   const indices   = [];
@@ -294,21 +304,23 @@ function buildGroundRibbon(groundTex, width = ROAD_W, y = SURFACE_Y, uRepeat = 1
   mesh.frustumCulled = false;   // verts move in track space every frame
 
   function update(path) {
-    const { kMin, kMax } = rowWindow(path.pose.s, RIBBON_DS);
+    if (!mesh.visible) return;
+    const { kMin, kMax } = rowWindow(path.pose.s, RIBBON_DS, WINDOW_BEHIND, GROUND_AHEAD);
     for (let r = 0; r < rows; r++) {
       const k = Math.min(kMin + r, kMax);     // tail rows degenerate on kMax
       const s = k * RIBBON_DS;
-      const L = rowPose(path, s, -width / 2);
-      const R = rowPose(path, s,  width / 2);
-      const i = r * 2 * 3;
+      const e = extent(path, s);
+      const [xl, xr] = clampToBend(e[0], e[1], path.curvatureAt(s));
+      const L = rowPose(path, s, xl);
+      const R = rowPose(path, s, xr);
       const h = y + path.heightAt(s);   // real road height (0 on the flat test track)
+      const i = r * 2 * 3;
       positions[i]     = L.x; positions[i + 1] = h; positions[i + 2] = L.z;
       positions[i + 3] = R.x; positions[i + 4] = h; positions[i + 5] = R.z;
       const j = r * 2 * 2;
-      // matches the old PlaneGeometry(30,70) + repeat(18,36): one tile ≈ 1.67×1.94 m
-      const v = s / (70 / 36);
-      uvs[j] = 0;  uvs[j + 1] = v;
-      uvs[j + 2] = uRepeat; uvs[j + 3] = v;
+      const v = s / (70 / 36);          // one tile ≈ 1.94 m along the road
+      uvs[j] = xl * U_PER_M;      uvs[j + 1] = v;
+      uvs[j + 2] = xr * U_PER_M;  uvs[j + 3] = v;
     }
     geo.attributes.position.needsUpdate = true;
     geo.attributes.uv.needsUpdate = true;
@@ -318,35 +330,124 @@ function buildGroundRibbon(groundTex, width = ROAD_W, y = SURFACE_Y, uRepeat = 1
   return { mesh, update };
 }
 
+/* ── Small canvas textures for scenery ───────────────────────────── */
+function canvasTex(w, h, draw, repeat = false) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const tex = new THREE.CanvasTexture(c);
+  if (repeat) tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function makeGravelTexture() {
+  return canvasTex(256, 256, (ctx) => {
+    ctx.fillStyle = '#b9a98a';
+    ctx.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 5000; i++) {
+      const v = 120 + Math.floor(Math.random() * 90);
+      ctx.fillStyle = `rgb(${v + 20},${v + 8},${v - 18})`;
+      ctx.fillRect(Math.random() * 256, Math.random() * 256, 1.6, 1.6);
+    }
+  }, true);
+}
+
+/* Rows of spectators: dark tiers with a scatter of bright shirts. */
+function makeCrowdTexture() {
+  return canvasTex(256, 128, (ctx, w, h) => {
+    ctx.fillStyle = '#3a3f4a';
+    ctx.fillRect(0, 0, w, h);
+    const shirts = ['#e8e8e8', '#d23b3b', '#2f6fd0', '#f0c330', '#3aa860', '#f08a2c', '#1d1d22', '#c9c9d4'];
+    for (let row = 0; row < 12; row++) {
+      ctx.fillStyle = row % 2 ? '#2d313a' : '#353a45';
+      ctx.fillRect(0, row * (h / 12), w, h / 12 - 2);
+      for (let x = 2; x < w; x += 5) {
+        if (Math.random() < 0.22) continue;                 // empty seat
+        ctx.fillStyle = shirts[Math.floor(Math.random() * shirts.length)];
+        ctx.fillRect(x, row * (h / 12) + 1, 3.4, h / 12 - 5);
+      }
+    }
+  }, true);
+}
+
+/* Pit garage front: door openings below, glazed hospitality band above. */
+function makePitTexture() {
+  return canvasTex(256, 128, (ctx, w, h) => {
+    ctx.fillStyle = '#d9dce2';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#5d7f9c';
+    ctx.fillRect(0, 10, w, 34);                              // glass band
+    ctx.fillStyle = '#c2c6cf';
+    for (let x = 0; x < w; x += 16) ctx.fillRect(x, 10, 2, 34);
+    ctx.fillStyle = '#c0392b';
+    ctx.fillRect(0, 50, w, 6);                               // fascia stripe
+    ctx.fillStyle = '#1b1d22';
+    for (let x = 6; x < w; x += 64) ctx.fillRect(x, 62, 52, 66);   // garage doors
+  }, true);
+}
+
+function makeTextTexture(text, bg, fg, w = 256, h = 64) {
+  return canvasTex(w, h, (ctx) => {
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = fg;
+    ctx.font = `bold ${Math.floor(h * 0.62)}px Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, w / 2, h / 2 + 2);
+  });
+}
+
+function makeCheckerTexture() {
+  return canvasTex(128, 16, (ctx, w, h) => {
+    for (let x = 0; x < w; x += 8) for (let y = 0; y < h; y += 8) {
+      ctx.fillStyle = ((x + y) / 8) % 2 ? '#111' : '#f4f4f4';
+      ctx.fillRect(x, y, 8, 8);
+    }
+  });
+}
+
 /* ── Generic row pool — one Object3D per grid line, recycled ──────── */
-function makeRowPool({ spacing, build, place }) {
+function makeRowPool({ spacing, build, place, version }) {
   const n = poolSize(spacing);
   const items = [];
   for (let i = 0; i < n; i++) {
     const obj = build(i);
     obj.userData.k = null;
     obj.userData.epoch = -1;
+    obj.userData.ver = -1;
     items.push(obj);
   }
 
+  let lastVer = 0;
   function update(path) {
     const { kMin, kMax } = rowWindow(path.pose.s, spacing);
+    const ver = version ? version() : 0;
+    if (ver !== lastVer) {
+      // Layout switched: rows left outside the new window would linger at
+      // their old spot in the old style — retire them until re-placed.
+      lastVer = ver;
+      for (const obj of items) { obj.userData.k = null; obj.visible = false; }
+    }
     for (let k = kMin; k <= kMax; k++) {
       const obj = items[poolIndex(k, n)];
-      if (obj.userData.k === k && obj.userData.epoch === path.epoch) continue;
+      if (obj.userData.k === k && obj.userData.epoch === path.epoch && obj.userData.ver === ver) continue;
       place(obj, k, path);
       obj.userData.k = k;
       obj.userData.epoch = path.epoch;
+      obj.userData.ver = ver;
     }
   }
 
   return { items, update };
 }
 
-/* Position a row object at grid line k with lateral offset and yaw. */
+/* Position a row object at grid line k: `lateralX` metres right of the ROAD
+ * CENTRE (which itself slides relative to the driven line on a circuit). */
 function placeRow(obj, k, spacing, lateralX, y, path) {
   const s = k * spacing;
-  const rp = rowPose(path, s, lateralX);
+  const rp = rowPose(path, s, lateralX + path.centerOffsetAt(s));
   obj.position.set(rp.x, y + path.heightAt(s), rp.z);
   // Yaw with the road, then pitch with its slope (YXZ: the pitch is about
   // the row's own lateral axis) so paint and kerbs lie ON a gradient
@@ -360,54 +461,112 @@ export function buildTrack() {
   const grp = new THREE.Group();
   grp.name = 'track';
 
+  // Active roadside layout + circuit scenery (setLayout swaps both).
+  let layout = LAYOUTS.test;
+  let layoutVer = 0;
+  let scenery = { items: [], pitlanes: [], keepOut: [] };
+  const version = () => layoutVer;
+  const lapLen = (path) => path.circuit?.length ?? 1;
+
   // Grass apron first (renders under the asphalt): same path-following
   // ribbon, much wider, slightly lower — replaces the bare sky-bright void
   // either side of the road. Tile density matches the asphalt (~1.67 m/tile).
   // Matte, no sky reflection: at grazing angles the environment map washed
   // the grass out to near-white, which read as a pale strip against the
   // (unlit) far ground wherever the two met.
-  const grass = buildGroundRibbon(makeGrassTexture(), GRASS_W, GRASS_Y, GRASS_W / (30 / 18),
-    { roughness: 1, metalness: 0, envMapIntensity: 0.12, color: 0x537649 });
+  const grass = buildGroundRibbon(makeGrassTexture(),
+    (path, s) => { const c = path.centerOffsetAt(s); return [c - GRASS_W / 2, c + GRASS_W / 2]; },
+    GRASS_Y, { roughness: 1, metalness: 0, envMapIntensity: 0.12, color: 0x537649 });
   grp.add(grass.mesh);
 
+  // Gravel traps — outside of corners, between the road and the barrier.
+  const gravel = buildGroundRibbon(makeGravelTexture(), (path, s) => {
+    const c = path.centerOffsetAt(s);
+    const g = gravelExtent(layout, cornerKappa(path, s));
+    return g ? [c + g[0], c + g[1]] : [c, c];
+  }, GRASS_Y + 0.02, { roughness: 1, metalness: 0, envMapIntensity: 0.1, color: 0x9a927f });
+  gravel.mesh.visible = false;
+  grp.add(gravel.mesh);
+
   const groundTex = makeAsphaltTexture();
-  const ribbon = buildGroundRibbon(groundTex);
+
+  // Pit lane apron — asphalt beside the road where the scenery defines one.
+  const pitlane = buildGroundRibbon(groundTex, (path, s) => {
+    const c = path.centerOffsetAt(s);
+    const lap = path.lapAt(s);
+    for (const p of scenery.pitlanes) {
+      if (!inLapRange(lap, p.from, p.to, lapLen(path))) continue;
+      const a = p.side * p.x0, b = p.side * p.x1;
+      return a < b ? [c + a, c + b] : [c + b, c + a];
+    }
+    return [c, c];
+  }, SURFACE_Y - 0.01);
+  pitlane.mesh.visible = false;
+  grp.add(pitlane.mesh);
+
+  const ribbon = buildGroundRibbon(groundTex, (path, s) => {
+    const c = path.centerOffsetAt(s);
+    return [c - layout.roadW / 2, c + layout.roadW / 2];
+  });
   grp.add(ribbon.mesh);
 
   const pools = [];
 
-  /* ── Start / finish band — one per 70 m ─────────────────────────── */
+  /* ── Start / finish band — one per 70 m (test track only) ───────── */
   const sfGeo = new THREE.PlaneGeometry(12, 0.45);
   sfGeo.rotateX(-Math.PI / 2);
   const sfMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
   pools.push(makeRowPool({
-    spacing: 70,
+    spacing: 70, version,
     build: () => { const m = new THREE.Mesh(sfGeo, sfMat); grp.add(m); return m; },
-    place: (m, k, path) => placeRow(m, k, 70, 0, SURFACE_Y + 0.007, path),
+    place: (m, k, path) => {
+      m.visible = !layout.circuit;
+      placeRow(m, k, 70, 0, SURFACE_Y + 0.007, path);
+    },
   }));
 
-  /* ── Centre-line dashes — every 4 m ─────────────────────────────── */
+  /* ── Centre-line dashes — every 4 m (test track only) ───────────── */
   const dashGeo = new THREE.PlaneGeometry(0.12, 2.2);
   dashGeo.rotateX(-Math.PI / 2);
   const dashMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
   pools.push(makeRowPool({
-    spacing: 4,
+    spacing: 4, version,
     build: () => { const m = new THREE.Mesh(dashGeo, dashMat); grp.add(m); return m; },
-    place: (m, k, path) => placeRow(m, k, 4, 0, SURFACE_Y + 0.008, path),
+    place: (m, k, path) => {
+      m.visible = !layout.circuit;
+      placeRow(m, k, 4, 0, SURFACE_Y + 0.008, path);
+    },
   }));
 
-  /* ── Red/white rumble strips — every 0.6 m, both sides ──────────── */
+  /* ── White edge lines — circuit only, continuous along both edges ── */
+  const edgeGeo = new THREE.PlaneGeometry(0.16, 4.1);
+  edgeGeo.rotateX(-Math.PI / 2);
+  for (const side of [-1, 1]) {
+    pools.push(makeRowPool({
+      spacing: 4, version,
+      build: () => { const m = new THREE.Mesh(edgeGeo, dashMat); m.visible = false; grp.add(m); return m; },
+      place: (m, k, path) => {
+        m.visible = !!layout.circuit;
+        if (layout.circuit) placeRow(m, k, 4, side * layout.edgeLineX, SURFACE_Y + 0.008, path);
+      },
+    }));
+  }
+
+  /* ── Red/white kerbs — every 0.6 m, both sides ──────────────────── *
+   * Test track: continuous. Circuit: only through corners.            */
   const rumbleGeo   = new THREE.PlaneGeometry(0.9, 0.58);
   rumbleGeo.rotateX(-Math.PI / 2);
   const rumbleRed   = new THREE.MeshBasicMaterial({ color: 0xcc1111 });
   const rumbleWhite = new THREE.MeshBasicMaterial({ color: 0xeeeeee });
   for (const side of [-1, 1]) {
     pools.push(makeRowPool({
-      spacing: 0.6,
+      spacing: 0.6, version,
       build: () => { const m = new THREE.Mesh(rumbleGeo, rumbleRed); grp.add(m); return m; },
       place: (m, k, path) => {
+        m.visible = kerbVisible(layout, layout.circuit ? cornerKappa(path, k * 0.6) : 0);
+        if (!m.visible) return;
         m.material = k % 2 === 0 ? rumbleRed : rumbleWhite;
-        placeRow(m, k, 0.6, side * 5.55, SURFACE_Y + 0.009, path);
+        placeRow(m, k, 0.6, side * layout.rumbleX, SURFACE_Y + 0.009, path);
       },
     }));
   }
@@ -419,27 +578,36 @@ export function buildTrack() {
     roughness: 0.35,
     metalness: 0.75,
   });
+  // A roadside row gives way to a pit wall, and is dropped on the inside of
+  // a bend too tight to hold it (it would land across the corner).
+  const roadsideHidden = (path, s, lateral) => layout.circuit && (
+    insideBlocked(path.curvatureAt(s), lateral)
+    || barrierBlocked(scenery.keepOut, path.lapAt(s), Math.sign(lateral), lapLen(path)));
   for (const side of [-1, 1]) {
     pools.push(makeRowPool({
-      spacing: 4,
+      spacing: 4, version,
       build: () => {
         const m = new THREE.Mesh(armcoGeo, armcoMat);
         m.castShadow = m.receiveShadow = true;
         grp.add(m);
         return m;
       },
-      place: (m, k, path) => placeRow(m, k, 4, side * 6.4, -0.15, path),
+      place: (m, k, path) => {
+        m.visible = !roadsideHidden(path, k * 4, side * layout.armcoX);
+        if (m.visible) placeRow(m, k, 4, side * layout.armcoX, -0.15, path);
+      },
     }));
   }
 
-  /* ── Tyre stacks — every 1.2 m, two high, both sides ────────────── */
+  /* ── Tyre stacks — every 1.2 m, two high ────────────────────────── *
+   * Test track: both sides. Circuit: outside of tight corners only.    */
   const tyreGeo  = new THREE.CylinderGeometry(0.22, 0.22, 0.2, 16);
   const tyreMats = [0x222222, 0xdd1111].map(c => new THREE.MeshStandardMaterial({
     color: c, roughness: 0.82, metalness: 0.05,
   }));
   for (const side of [-1, 1]) {
     pools.push(makeRowPool({
-      spacing: 1.2,
+      spacing: 1.2, version,
       build: () => {
         const stack = new THREE.Group();
         for (let row = 0; row < 2; row++) {
@@ -452,12 +620,258 @@ export function buildTrack() {
         return stack;
       },
       place: (stack, k, path) => {
+        const s = k * 1.2;
+        stack.visible = tyresVisible(layout, layout.circuit ? cornerKappa(path, s) : 0, side)
+          && !roadsideHidden(path, s, side * layout.tyreX);
+        if (!stack.visible) return;
         stack.children.forEach((tyre, row) => {
           tyre.material = tyreMats[(((k + row) % 2) + 2) % 2]; // positive mod — k can be negative
         });
-        placeRow(stack, k, 1.2, side * 7.2, SURFACE_Y + 0.22, path);
+        placeRow(stack, k, 1.2, side * layout.tyreX, SURFACE_Y + 0.22, path);
       },
     }));
+  }
+
+  /* ── Forest — instanced trees both sides (circuit only) ─────────── *
+   * Three draw calls for ~400 trees. Rows recycle through the same
+   * sliding window as the furniture; a row is rebuilt only when its grid
+   * line changes. Trees are dropped where they would stand on a building,
+   * on the inside of a tight bend, or on another stretch of track.      */
+  const treeRows = poolSize(TREES.spacing, TREES.behind, TREES.ahead);
+  const treeCap  = treeRows * 2 * TREES.perRow;
+  const coniferGeo = new THREE.ConeGeometry(2.4, 10, 7);
+  coniferGeo.translate(0, 7, 0);
+  const leafyGeo = new THREE.IcosahedronGeometry(3.4, 1);
+  leafyGeo.scale(1, 1.15, 1);
+  leafyGeo.translate(0, 6.6, 0);
+  const trunkGeo = new THREE.CylinderGeometry(0.28, 0.4, 4.4, 6);
+  trunkGeo.translate(0, 2.2, 0);
+  const foliageMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0, envMapIntensity: 0.1, flatShading: true });
+  const trunkMat   = new THREE.MeshStandardMaterial({ color: 0x2a1f16, roughness: 1, metalness: 0, envMapIntensity: 0.1 });
+  const mkInst = (geo, mat) => {
+    const im = new THREE.InstancedMesh(geo, mat, treeCap);
+    im.frustumCulled = false;
+    im.visible = false;
+    im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    grp.add(im);
+    return im;
+  };
+  const conifers = mkInst(coniferGeo, foliageMat);
+  const leafies  = mkInst(leafyGeo, foliageMat);
+  const trunks   = mkInst(trunkGeo, trunkMat);
+  const treeRowK = new Int32Array(treeRows).fill(-2147483648);
+  let treeEpoch = -1, treeVer = -1;
+  const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
+  const _zero = new THREE.Matrix4().makeScale(0, 0, 0);
+  const _col = new THREE.Color();
+  const _yAxis = new THREE.Vector3(0, 1, 0);
+
+  function updateTrees(path) {
+    const on = !!layout.circuit && !!path.circuit;
+    conifers.visible = leafies.visible = trunks.visible = on;
+    if (!on) return;
+    if (treeEpoch !== path.epoch || treeVer !== layoutVer) {
+      treeRowK.fill(-2147483648);
+      treeEpoch = path.epoch; treeVer = layoutVer;
+    }
+    const { kMin, kMax } = rowWindow(path.pose.s, TREES.spacing, TREES.behind, TREES.ahead);
+    const L = lapLen(path);
+    let dirty = false;
+    for (let k = kMin; k <= kMax; k++) {
+      const slot = poolIndex(k, treeRows);
+      if (treeRowK[slot] === k) continue;
+      treeRowK[slot] = k;
+      dirty = true;
+      for (let si = 0; si < 2; si++) {
+        const side = si === 0 ? -1 : 1;
+        for (let j = 0; j < TREES.perRow; j++) {
+          const idx = (slot * 2 + si) * TREES.perRow + j;
+          const t = treeSpec(k, side, j);
+          const s = k * TREES.spacing + t.ds;
+          const lap = path.lapAt(s);
+          const hide = insideBlocked(cornerKappa(path, s), t.lateral)
+            || treeBlocked(scenery.keepOut, lap, t.lateral, L)
+            || path.circuit.clearanceAt(lap, t.lateral) < 18;
+          if (hide) {
+            conifers.setMatrixAt(idx, _zero); leafies.setMatrixAt(idx, _zero); trunks.setMatrixAt(idx, _zero);
+            continue;
+          }
+          const rp = rowPose(path, s, t.lateral + path.centerOffsetAt(s));
+          _p.set(rp.x, GRASS_Y + path.heightAt(s), rp.z);
+          _q.setFromAxisAngle(_yAxis, t.shade * Math.PI * 2);
+          _s.set(t.scale, t.scale * (0.9 + 0.3 * t.shade), t.scale);
+          _m4.compose(_p, _q, _s);
+          trunks.setMatrixAt(idx, _m4);
+          const crown = t.conifer ? conifers : leafies;
+          const other = t.conifer ? leafies : conifers;
+          crown.setMatrixAt(idx, _m4);
+          other.setMatrixAt(idx, _zero);
+          // Dark Ardennes pine vs lighter broadleaf, each with a little variation.
+          // (Lightness is low on purpose: the scene's lighting is very
+          // bright and washes mid-tones out to pastel.)
+          if (t.conifer) _col.setHSL(0.37 + 0.03 * t.shade, 0.55, 0.035 + 0.02 * t.shade);
+          else           _col.setHSL(0.28 + 0.05 * t.shade, 0.60, 0.06 + 0.03 * t.shade);
+          crown.setColorAt(idx, _col);
+        }
+      }
+    }
+    if (dirty) {
+      for (const im of [conifers, leafies, trunks]) im.instanceMatrix.needsUpdate = true;
+      for (const im of [conifers, leafies]) if (im.instanceColor) im.instanceColor.needsUpdate = true;
+    }
+  }
+
+  /* ── Lap-anchored scenery (circuit only) ────────────────────────── *
+   * Buildings and signs defined per circuit (circuits/*-scenery.js) and
+   * placed at fixed lap distances. Prefabs are generic shapes.           */
+  const sceneryGrp = new THREE.Group();
+  sceneryGrp.name = 'scenery';
+  grp.add(sceneryGrp);
+  const concrete = new THREE.MeshStandardMaterial({ color: 0x5a5e64, roughness: 0.95, metalness: 0, envMapIntensity: 0.15 });
+  const steel    = new THREE.MeshStandardMaterial({ color: 0x4b5058, roughness: 0.6, metalness: 0.5, envMapIntensity: 0.3 });
+  const whiteMat = new THREE.MeshStandardMaterial({ color: 0x8f9296, roughness: 0.8, metalness: 0, envMapIntensity: 0.15 });
+  const roofMat  = new THREE.MeshStandardMaterial({ color: 0x70757d, roughness: 0.7, metalness: 0.2, envMapIntensity: 0.2 });
+  let crowdTex = null, pitTex = null, checkerTex = null;
+  const textMats = new Map();
+  const textMat = (text, bg, fg) => {
+    const key = `${text}|${bg}|${fg}`;
+    if (!textMats.has(key)) textMats.set(key, new THREE.MeshBasicMaterial({ map: makeTextTexture(text, bg, fg) }));
+    return textMats.get(key);
+  };
+  const box = (w, h, d, mat, x, y, z) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z);
+    return m;
+  };
+
+  /* Local frame of every prefab: −z = direction of travel, +x = AWAY from
+     the road (the placer mirrors left-hand items), y = 0 at ground level. */
+  const PREFABS = {
+    grandstand(it) {
+      const g = new THREE.Group();
+      const len = it.len, D = 11, H0 = 0.8, H1 = 7.6;
+      crowdTex ??= makeCrowdTexture();
+      // Raked seating: one quad rising away from the road.
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+        0, H0, -len / 2,  0, H0, len / 2,  D, H1, len / 2,  D, H1, -len / 2,
+      ]), 3));
+      geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([0, 0, len / 12, 0, len / 12, 1, 0, 1]), 2));
+      geo.setIndex([0, 1, 2, 0, 2, 3]);
+      geo.computeVertexNormals();
+      g.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: crowdTex, roughness: 1, metalness: 0, envMapIntensity: 0.1, side: THREE.DoubleSide })));
+      g.add(box(0.3, H0, len, concrete, 0.15, H0 / 2, 0));                 // front wall
+      g.add(box(0.4, H1, len, concrete, D + 0.2, H1 / 2, 0));              // back wall
+      g.add(box(D + 2.5, 0.25, len, roofMat, D / 2 + 0.6, H1 + 2.6, 0));   // roof
+      for (const z of [-len / 2 + 0.4, len / 2 - 0.4]) g.add(box(0.3, H1 + 2.6, 0.3, steel, D + 0.2, (H1 + 2.6) / 2, z));
+      return g;
+    },
+    pit(it) {
+      const g = new THREE.Group();
+      pitTex ??= makePitTexture();
+      const front = new THREE.MeshStandardMaterial({ map: pitTex.clone(), roughness: 0.8, metalness: 0.05, envMapIntensity: 0.2 });
+      front.map.needsUpdate = true;
+      front.map.repeat.set(it.len / 20, 1);
+      // BoxGeometry face order: +x, −x, +y, −y, +z, −z. −x faces the road.
+      const m = new THREE.Mesh(new THREE.BoxGeometry(10, 7, it.len), [whiteMat, front, roofMat, whiteMat, whiteMat, whiteMat]);
+      m.position.set(5, 3.5, 0);
+      g.add(m);
+      return g;
+    },
+    wall(it) {
+      const g = new THREE.Group();
+      g.add(box(0.3, 1.0, it.len + 0.05, whiteMat, 0, 0.5, 0));
+      // Catch fence posts on top of the pit wall.
+      g.add(box(0.06, 2.2, 0.06, steel, 0, 2.1, -it.len / 2 + 0.3));
+      g.add(box(0.06, 2.2, 0.06, steel, 0, 2.1, it.len / 2 - 0.3));
+      return g;
+    },
+    hoarding(it) {
+      const WORDS = [['FORMULASIM', '#c62828', '#ffffff'], ['APEX', '#0d47a1', '#ffffff'], ['DOWNFORCE', '#f9a825', '#111111'],
+        ['GRIP', '#1b5e20', '#ffffff'], ['SLIPSTREAM', '#eceff1', '#111111'], ['7.0 KM', '#111111', '#ffffff']];
+      const [text, bg, fg] = WORDS[it.index % WORDS.length];
+      const g = new THREE.Group();
+      const m = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.1, it.len - 0.4),
+        [steel, textMat(text, bg, fg), steel, steel, steel, steel]);
+      m.position.set(0, 0.75, 0);
+      g.add(m);
+      return g;
+    },
+    board(it) {
+      const g = new THREE.Group();
+      g.add(box(0.08, 1.4, 0.08, steel, 0, 0.7, 0));
+      const p = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.8), textMat(it.text, '#f4f4f4', '#111111'));
+      p.material.side = THREE.DoubleSide;
+      p.position.set(0, 1.75, 0);          // PlaneGeometry normal +z = faces the approaching car
+      g.add(p);
+      return g;
+    },
+    gantry() {
+      const g = new THREE.Group();
+      checkerTex ??= makeCheckerTexture();
+      const span = LAYOUTS.circuit.roadW + 4;
+      for (const x of [-span / 2, span / 2]) g.add(box(0.4, 6.4, 0.4, steel, x, 3.2, 0));
+      g.add(box(span + 0.4, 0.9, 0.5, steel, 0, 6.4, 0));
+      const lightMat = new THREE.MeshBasicMaterial({ color: 0xff2a1a });
+      for (let i = -2; i <= 2; i++) {
+        const l = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 8), lightMat);
+        l.position.set(i * 0.9, 6.4, 0.32);
+        g.add(l);
+      }
+      const line = new THREE.Mesh(new THREE.PlaneGeometry(LAYOUTS.circuit.roadW, 1.0),
+        new THREE.MeshBasicMaterial({ map: checkerTex }));
+      line.rotation.x = -Math.PI / 2;
+      line.position.set(0, 0.012, 0);
+      g.add(line);
+      return g;
+    },
+    arch(it) {
+      const g = new THREE.Group();
+      const span = LAYOUTS.circuit.armcoX * 2 + 1;
+      for (const x of [-span / 2, span / 2]) g.add(box(0.5, 7, 0.5, steel, x, 3.5, 0));
+      const banner = new THREE.Mesh(new THREE.BoxGeometry(span, 1.5, 0.3),
+        [steel, steel, steel, steel, textMat(it.text || 'FORMULASIM', '#12151c', '#ffffff'), textMat(it.text || 'FORMULASIM', '#12151c', '#ffffff')]);
+      banner.position.set(0, 7.2, 0);
+      g.add(banner);
+      return g;
+    },
+  };
+
+  let sceneryObjs = [];   // [{ obj, it, key }]
+  function buildScenery() {
+    for (const o of sceneryObjs) sceneryGrp.remove(o.obj);
+    sceneryObjs = [];
+    for (const it of scenery.items) {
+      const make = PREFABS[it.type];
+      if (!make) continue;
+      const obj = make(it);
+      obj.visible = false;
+      obj.traverse(c => { if (c.isMesh) { c.castShadow = false; c.receiveShadow = false; } });
+      sceneryGrp.add(obj);
+      sceneryObjs.push({ obj, it, key: '' });
+    }
+  }
+
+  const SCENERY_BEHIND = 150, SCENERY_AHEAD = 300;
+  function updateScenery(path) {
+    sceneryGrp.visible = !!layout.circuit && !!path.circuit;
+    if (!sceneryGrp.visible) return;
+    const sCar = path.pose.s;
+    for (const o of sceneryObjs) {
+      const sT = path.trackSOfLap(o.it.s);
+      const d = sT - sCar;
+      if (!(d > -SCENERY_BEHIND && d < SCENERY_AHEAD)) { o.obj.visible = false; continue; }
+      o.obj.visible = true;
+      const key = `${path.epoch}|${Math.round(sT * 4)}`;
+      if (o.key === key) continue;              // track-space position unchanged
+      o.key = key;
+      const side = o.it.side ?? 1;
+      const rp = rowPose(path, sT, side * (o.it.lateral ?? 0) + path.centerOffsetAt(sT));
+      o.obj.position.set(rp.x, SURFACE_Y + path.heightAt(sT), rp.z);
+      // Left-hand items are turned round so their local +x still points
+      // away from the road.
+      o.obj.rotation.y = rp.rotY + (side < 0 ? Math.PI : 0);
+    }
   }
 
   /* ── ARCADE rhythm props (Phase C) — hidden in sim mode ─────────── *
@@ -510,12 +924,33 @@ export function buildTrack() {
     for (const o of arcadeItems) o.visible = !!on;
   }
 
+  /**
+   * Switch the roadside between the test-track apron and a real circuit.
+   * @param {'test'|'circuit'} name
+   * @param {object|null} circuit      — buildCircuit() result (for scenery)
+   * @param {Array|null}  sceneryDefs  — circuits/*-scenery.js definition
+   */
+  function setLayout(name, circuit = null, sceneryDefs = null) {
+    layout = LAYOUTS[name] || LAYOUTS.test;
+    layoutVer += 1;                                   // every pooled row re-places
+    scenery = (layout.circuit && circuit && sceneryDefs)
+      ? expandScenery(sceneryDefs, circuit)
+      : { items: [], pitlanes: [], keepOut: [] };
+    gravel.mesh.visible = !!layout.circuit;
+    pitlane.mesh.visible = !!layout.circuit && scenery.pitlanes.length > 0;
+    buildScenery();
+  }
+
   /* Re-place every out-of-date row + rebuild the ground ribbons. */
   function update(path) {
     grass.update(path);
+    gravel.update(path);
+    pitlane.update(path);
     ribbon.update(path);
     for (const p of pools) p.update(path);
+    updateTrees(path);
+    updateScenery(path);
   }
 
-  return { group: grp, groundTex, update, setArcadeProps, WINDOW_BEHIND, WINDOW_AHEAD };
+  return { group: grp, groundTex, update, setArcadeProps, setLayout, WINDOW_BEHIND, WINDOW_AHEAD };
 }

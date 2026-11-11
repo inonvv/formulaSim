@@ -103,6 +103,31 @@ export function buildCircuit(def, ds = 5) {
     xyAt: (s) => ({ x: lerpTable(x, s), y: lerpTable(y, s) }),
     elevationAt,
     gradeAt: (s) => (elevationAt(s + 2.5) - elevationAt(s - 2.5)) / 5,
+    /** Signed slide of the driven line from the centreline [m], + = left. */
+    lineOffsetAt: (s) => (lineOffset ? lerpTable(lineOffset, s) : 0),
+    /**
+     * Distance [m] from the point `lateral` metres to the RIGHT of the line
+     * at lap distance s to the nearest OTHER stretch of track (anything more
+     * than `skip` metres away along the lap). Scenery uses it to avoid
+     * planting a grandstand on a neighbouring straight.
+     */
+    clearanceAt: (sIn, lateral, skip = 150) => {
+      const f = (((sIn % length) + length) % length) / step;
+      const i = Math.round(f) % N;
+      const tx = at(x, i + 1) - at(x, i - 1), ty = at(y, i + 1) - at(y, i - 1);
+      const tl = Math.hypot(tx, ty) || 1;
+      const qx = x[i] + (ty / tl) * lateral, qy = y[i] - (tx / tl) * lateral;   // right = (ty, −tx)
+      const gap = Math.ceil(skip / step);
+      let best = Infinity;
+      for (let j = 0; j < N; j += 2) {
+        const d = Math.abs(j - i);
+        if (Math.min(d, N - d) <= gap) continue;
+        const dx = x[j] - qx, dy = y[j] - qy;
+        const dd = dx * dx + dy * dy;
+        if (dd < best) best = dd;
+      }
+      return Math.sqrt(best);
+    },
     cornerAt: (sIn) => {
       const s = ((sIn % length) + length) % length;
       for (const c of corners) if (s >= c.from && s < c.to) return c.name;

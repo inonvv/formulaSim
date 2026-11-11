@@ -298,3 +298,43 @@ describe('TrackPath elevation', () => {
     expect(rel()).toBeCloseTo(spa.elevationAt(tp.lapS + ahead) - spa.elevationAt(tp.lapS), 9);
   });
 });
+
+describe('road centre offset + scenery helpers', () => {
+  const spa = buildCircuit(SPA);
+  it('lineOffsetAt interpolates the racing-line slide and is 0 without one', () => {
+    expect(buildCircuit(circleDef(100)).lineOffsetAt(50)).toBe(0);
+    let lo = Infinity, hi = -Infinity;
+    for (let s = 0; s < spa.length; s += 5) { const o = spa.lineOffsetAt(s); lo = Math.min(lo, o); hi = Math.max(hi, o); }
+    expect(hi).toBeGreaterThan(2);
+    expect(lo).toBeLessThan(-2);
+    expect(spa.lineOffsetAt(spa.length + 40)).toBeCloseTo(spa.lineOffsetAt(40), 9);
+    // La Source is a right-hander: at the apex the line is on the inside (right ⇒ negative).
+    let apex = 0; for (let s = 380; s < 430; s += 5) apex = Math.min(apex, spa.lineOffsetAt(s));
+    expect(apex).toBeLessThan(-2);
+  });
+  it('TrackPath.centerOffsetAt is the road centre relative to the car line (right +)', () => {
+    const tp = new TrackPath(() => 0.5);
+    expect(tp.centerOffsetAt(10)).toBe(0);
+    tp.setCircuit(spa, 300);
+    expect(tp.centerOffsetAt(100)).toBeCloseTo(spa.lineOffsetAt(400), 12);
+    expect(tp.lapAt(100)).toBeCloseTo(400, 9);
+    expect(tp.lapAt(-400)).toBeCloseTo(spa.length - 100, 6);
+  });
+  it('trackSOfLap finds the nearest occurrence ahead or behind', () => {
+    const tp = new TrackPath(() => 0.5);
+    expect(Number.isNaN(tp.trackSOfLap(100))).toBe(true);
+    tp.setCircuit(spa, 6900);
+    expect(tp.trackSOfLap(6950)).toBeCloseTo(50, 6);
+    expect(tp.trackSOfLap(50)).toBeCloseTo(spa.length - 6900 + 50, 6);   // across the line, ahead
+    expect(tp.trackSOfLap(6800)).toBeCloseTo(-100, 6);                   // behind
+    for (let i = 0; i < 30; i++) tp.update(0.1, 50);                     // drive 150 m
+    expect(tp.trackSOfLap(50)).toBeCloseTo(spa.length - 6900 + 50, 4);   // track-space s is stable
+  });
+  it('clearanceAt: open countryside is clear, a point thrown onto another straight is not', () => {
+    const c = buildCircuit(stadiumDef(400, 60));
+    // On the bottom straight heading +x (CCW): the top straight is 120 m to the LEFT.
+    expect(c.clearanceAt(200, 40)).toBeGreaterThan(100);     // 40 m right = outside the stadium
+    expect(c.clearanceAt(200, -115)).toBeLessThan(10);       // 115 m left ≈ on the far straight
+    expect(c.clearanceAt(200, -60)).toBeGreaterThan(50);     // infield centre
+  });
+});
