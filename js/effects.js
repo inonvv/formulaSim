@@ -589,6 +589,7 @@ export class AirflowEffect {
     this._turnOmega    = 0;    // car yaw rate (rad/s) while turning
     this._pathBend     = null; // pathBendTable sample — the road's own curve
     this._crosswind    = 0;    // arcade strafe apparent wind, m/s (setCrosswind)
+    this._aeroGains    = { frontWing: 1, rearWing: 1, floor: 1 };   // setAeroSetup
 
     this._build(getProfile('F1'), null);
     this.group.visible = false;
@@ -796,7 +797,7 @@ export class AirflowEffect {
       ? measure.groundContactY + measure.wheelRadius
       : null;
 
-    const add = (anchor, type, cfg, yBand) => {
+    const add = (anchor, type, cfg, yBand, wing) => {
       if (!anchor) return;
       const entry = {
         type,
@@ -806,6 +807,7 @@ export class AirflowEffect {
       };
       if (type === 'vortex') entry.gamma    = cfg.gamma;
       else                    entry.strength = cfg.strength;
+      if (wing) entry.wing = wing;   // 'front' | 'rear' — scaled by setAeroSetup
       if (yBand) entry.yBand = yBand;
       else if (Number.isFinite(anchor.y)) entry.yBand = [anchor.y - 0.25, anchor.y + 0.18];
       out.push(entry);
@@ -848,8 +850,8 @@ export class AirflowEffect {
     const wingBand = (a) => (a?.bbox && Number.isFinite(a.bbox.minY) && Number.isFinite(a.bbox.maxY))
       ? [a.bbox.minY - 0.1, a.bbox.maxY + 0.1]
       : (Number.isFinite(a?.y) ? [a.y - 0.15, a.y + 0.15] : null);
-    if (anchors.frontWing) add(anchors.frontWing, 'vortex', MOD_STR.FRONT_WING_VORT, wingBand(anchors.frontWing));
-    if (anchors.rearWing)  add(anchors.rearWing,  'vortex', MOD_STR.REAR_WING_VORT,  wingBand(anchors.rearWing));
+    if (anchors.frontWing) add(anchors.frontWing, 'vortex', MOD_STR.FRONT_WING_VORT, wingBand(anchors.frontWing), 'front');
+    if (anchors.rearWing)  add(anchors.rearWing,  'vortex', MOD_STR.REAR_WING_VORT,  wingBand(anchors.rearWing), 'rear');
 
     // Tire bluff bodies — ideal-cylinder doublets in PHYSICAL car-local xz
     // (wheels must stay circular under the anisotropic ξ/η mapping), gated
@@ -1072,7 +1074,12 @@ export class AirflowEffect {
       // (see SINK_CAPTURE_CAP); sources/vortices/doublets are untouched.
       if (m.type === 'sink')   return { ...m, strength: Math.min(m.strength * scale, SINK_CAPTURE_CAP) };
       if (m.type === 'source') return { ...m, strength: m.strength * scale };
-      if (m.type === 'vortex') return { ...m, gamma: m.gamma * scale };
+      if (m.type === 'vortex') {
+        // Wing circulation follows the wing's loading (wing level / DRS).
+        const g = m.wing === 'front' ? this._aeroGains.frontWing
+                : m.wing === 'rear'  ? this._aeroGains.rearWing : 1;
+        return { ...m, gamma: m.gamma * scale * g };
+      }
       return m;
     });
     if (bucket > 0 && this._shedVortices) {
@@ -1385,6 +1392,40 @@ export class AirflowEffect {
    * the same point as the road bend so air and road never diverge. */
   setCrosswind(c) { this._crosswind = c || 0; }
 
+  /* Aero-setup gains from the vehicle model ({frontWing, rearWing, floor},
+   * ×1 at the reference setup). A loaded wing turns the air harder: its
+   * bound circulation (trace-time vortex gamma) and the upwash it leaves in
+   * its wake both scale with the gain. Quantised to 0.05 — a change retraces
+   * the ribbons once, exactly like a speed-bucket change. */
+  setAeroSetup(gains) {
+    const q = (v) => Math.round((Number.isFinite(v) ? v : 1) / 0.05) * 0.05;
+    const next = { frontWing: q(gains?.frontWing), rearWing: q(gains?.rearWing), floor: q(gains?.floor) };
+    const cur = this._aeroGains;
+    const wingChanged = cur.frontWing !== next.frontWing || cur.rearWing !== next.rearWing;
+    this._aeroGains = next;
+    if (wingChanged && this._paths) this._retracePaths();
+  }
+
+  /** Extra ribbon height [m] from wing upwash at car-local (z, seed y).
+   *  Zero at the reference setup, so the default picture is unchanged. */
+  _wingUpwash(zCar, seedY, speedFactor) {
+    const g = this._aeroGains;
+    const a = this._measure?.anchors;
+    let dy = 0;
+    const one = (anchor, gain, amp, fallbackY, fallbackZ) => {
+      if (gain === 1) return;
+      const wz = Number.isFinite(anchor?.z) ? anchor.z : fallbackZ;
+      const wy = Number.isFinite(anchor?.y) ? anchor.y : fallbackY;
+      const dz = zCar - wz;
+      if (dz < -0.4) return;
+      const hBand = Math.exp(-(((seedY - wy) / 0.45) ** 2));
+      dy += (gain - 1) * amp * hBand * (1 - Math.exp(-(dz + 0.4) / 1.1));
+    };
+    one(a?.rearWing,  g.rearWing,  0.42, 0.85,  this._halfL * 0.75);
+    one(a?.frontWing, g.frontWing, 0.20, 0.10, -this._halfL * 0.95);
+    return dy * (0.35 + 0.65 * speedFactor);
+  }
+
   setVisible(v) {
     this._visible = v;
     this.group.visible = v;
@@ -1447,7 +1488,8 @@ export class AirflowEffect {
           // Per-vertex vertical delta from side-view potential flow — same as
           // the old smoke system so ribbons still rise over the nose & halo.
           const dy = this._verticalDelta(eta, seed.y);
-          y = seed.y + dy * Math.max(0, Math.min(1, (eta + 1) / 2));
+          y = seed.y + dy * Math.max(0, Math.min(1, (eta + 1) / 2))
+            + this._wingUpwash(zCar, seed.y, speedFactor);
         }
 
         const w = this._toWorld(xi, eta, y);

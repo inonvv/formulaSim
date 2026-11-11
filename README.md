@@ -11,6 +11,9 @@ Interactive 3D wind-tunnel simulator for racing cars — a cinematic, educationa
 - **Airflow mode** — ribbon streamlines with RK4-traced paths around the real car body
 - **Rain mode** — droplet streaks, rooster tails, wet-surface reflections
 - **CFD mode** — pressure-coefficient (Cp) visualisation painted directly on the car body via vertex colors, with per-car Cp tables, zone blobs, and vortex cores
+- **Computed vehicle model** — downforce and drag from ½ρv²·C·A, dynamic ride height, per-tyre loads under longitudinal and lateral weight transfer, tyre grip with load sensitivity, power- and drag-limited acceleration, and a driver that brakes for the corners ahead
+- **Telemetry HUD** — downforce, drag, aero balance, ride height, g-g plot, four tyre-load bars coloured by grip used, throttle/brake, and the top speed of the current setup
+- **Aero setup** — wing level, ride height, yaw (crosswind) and DRS; the numbers, the Cp paint and the streamlines all respond
 - **Camera modes** — Orbit / Trackside / Cockpit / Drone
 
 ## Getting started
@@ -26,6 +29,7 @@ npm start        # dev server on http://localhost:3000
 npx vitest run                      # unit suite
 node scripts/verify-gt-wheels.mjs   # headless GT wheel-split check on the real GLB
 node scripts/verify-gt-visual.mjs   # Playwright browser smoke (needs npm start running)
+node scripts/verify-vehicle-model.mjs  # vehicle model + telemetry + aero controls in a real browser (needs npm start running)
 ```
 
 ## Project layout
@@ -34,5 +38,7 @@ node scripts/verify-gt-visual.mjs   # Playwright browser smoke (needs npm start 
 - `js/car-loader.js` — GLB loading, wheel splitting, anchor measurement
 - `js/effects.js` — airflow and rain effects
 - `js/cfd-effect.js` — CFD pressure visualisation
+- `js/vehicle-model.js` — pure vehicle physics (aero, wheel loads, grip, driver model)
+- `js/telemetry-hud.js` — telemetry view-model + DOM mirror
 - `js/main.js` — scene setup, state, UI wiring
 - `assets/models/` — GLB car models (see ATTRIBUTION.md)

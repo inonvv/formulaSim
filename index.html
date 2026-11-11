@@ -64,6 +64,73 @@
     <span id="car-badge-name">Formula One</span>
   </div>
 
+  <!-- ── Telemetry (computed vehicle model — vehicle-model.js) ──── -->
+  <div id="telemetry" aria-label="Vehicle telemetry">
+    <button id="telemetry-head" aria-expanded="true" aria-controls="telemetry-body">
+      <span class="tm-title">TELEMETRY</span>
+      <span id="tm-flags"></span>
+      <span class="tm-caret" aria-hidden="true">&#9662;</span>
+    </button>
+    <div id="telemetry-body">
+      <div class="tm-grid">
+        <div class="tm-cell tm-cell-df">
+          <span class="tm-k">DOWNFORCE</span>
+          <span class="tm-n"><span class="tm-v" id="tm-df">0.0</span><span class="tm-u">kN</span></span>
+          <span class="tm-sub" id="tm-dfw">0.00× car weight</span>
+        </div>
+        <div class="tm-cell tm-cell-drag">
+          <span class="tm-k">DRAG</span>
+          <span class="tm-n"><span class="tm-v" id="tm-drag">0.0</span><span class="tm-u">kN</span></span>
+          <span class="tm-sub" id="tm-dragp">0 kW to push air</span>
+        </div>
+        <div class="tm-cell">
+          <span class="tm-k">AERO BALANCE</span>
+          <span class="tm-n"><span class="tm-v" id="tm-bal">45</span><span class="tm-u">% front</span></span>
+          <span class="tm-sub" id="tm-ld">L/D 0.00</span>
+        </div>
+        <div class="tm-cell">
+          <span class="tm-k">RIDE HEIGHT</span>
+          <span class="tm-n"><span class="tm-v" id="tm-ride">35</span><span class="tm-u">mm</span></span>
+          <span class="tm-sub" id="tm-rides">set 35 mm</span>
+        </div>
+      </div>
+
+      <div class="tm-dyn">
+        <div class="tm-gg-wrap">
+          <span class="tm-k">G-FORCE</span>
+          <div id="tm-gg">
+            <div class="tm-gg-ring tm-gg-ring-2"></div>
+            <div class="tm-gg-ring tm-gg-ring-1"></div>
+            <div class="tm-gg-cross-h"></div><div class="tm-gg-cross-v"></div>
+            <div id="tm-gg-dot"></div>
+            <span id="tm-gg-scale">6 g</span>
+          </div>
+          <div class="tm-gg-read">
+            <span>LAT <b id="tm-lat">0.0</b> g</span>
+            <span>LONG <b id="tm-lon">+0.0</b> g</span>
+          </div>
+        </div>
+        <div class="tm-wheels-wrap">
+          <span class="tm-k">TYRE LOAD kN</span>
+          <div id="tm-wheels">
+            <div class="tm-car-outline"></div>
+            <div class="tm-wheel tm-w-fl"><div class="tm-wbar"><div class="tm-wfill" id="tm-w-FL"></div></div><span id="tm-wv-FL">0.0</span></div>
+            <div class="tm-wheel tm-w-fr"><div class="tm-wbar"><div class="tm-wfill" id="tm-w-FR"></div></div><span id="tm-wv-FR">0.0</span></div>
+            <div class="tm-wheel tm-w-rl"><div class="tm-wbar"><div class="tm-wfill" id="tm-w-RL"></div></div><span id="tm-wv-RL">0.0</span></div>
+            <div class="tm-wheel tm-w-rr"><div class="tm-wbar"><div class="tm-wfill" id="tm-w-RR"></div></div><span id="tm-wv-RR">0.0</span></div>
+          </div>
+          <span class="tm-sub">colour = grip used</span>
+        </div>
+      </div>
+
+      <div class="tm-pedals">
+        <span class="tm-k">THR</span><div class="tm-pbar"><div id="tm-thr"></div></div>
+        <span class="tm-k">BRK</span><div class="tm-pbar"><div id="tm-brk"></div></div>
+      </div>
+      <div class="tm-foot">Top speed with this setup <b id="tm-vmax">–</b> km/h</div>
+    </div>
+  </div>
+
   <!-- ── Camera label ──────────────────────────────────────────── -->
   <div id="camera-label">ORBIT</div>
 
@@ -101,6 +168,7 @@
       <div class="mobile-tabs">
         <button class="tab-btn" data-section="section-car" aria-label="Car selection">🚗<span>Car</span></button>
         <button class="tab-btn" data-section="section-speed" aria-label="Speed controls">⚡<span>Speed</span></button>
+        <button class="tab-btn" data-section="section-aero" aria-label="Aero setup">🪽<span>Aero</span></button>
         <button class="tab-btn" data-section="section-cam" aria-label="Camera modes">📷<span>Cam</span></button>
         <button class="tab-btn" data-section="section-env" aria-label="Environment effects">🌬<span>Env</span></button>
         <button class="tab-btn" data-section="section-play" aria-label="Playback controls">▶<span>Play</span></button>
@@ -139,6 +207,21 @@
           <button class="preset-btn" data-speed="180">MED</button>
           <button class="preset-btn" data-speed="280">FAST</button>
           <button class="preset-btn" data-speed="350">MAX</button>
+        </div>
+      </section>
+
+      <!-- Aero setup (drives the vehicle model + the CFD / airflow picture) -->
+      <section class="ctrl-group" id="section-aero">
+        <label class="group-label" for="wing-slider">WING LEVEL — <span id="wing-label-val">50</span>%</label>
+        <input type="range" id="wing-slider" min="0" max="100" step="5" value="50" aria-label="Wing level percent" />
+        <div class="range-ends"><span>LOW DRAG</span><span>HIGH DOWNFORCE</span></div>
+        <label class="group-label" for="ride-slider">RIDE HEIGHT — <span id="ride-label-val">35</span> mm</label>
+        <input type="range" id="ride-slider" min="15" max="70" step="1" value="35" aria-label="Static ride height millimetres" />
+        <label class="group-label" for="yaw-slider">YAW (CROSSWIND) — <span id="yaw-label-val">0</span>&deg;</label>
+        <input type="range" id="yaw-slider" min="-12" max="12" step="1" value="0" aria-label="Yaw angle degrees" />
+        <div class="btn-row">
+          <button id="drs-btn" class="preset-btn drs-btn" aria-pressed="false" aria-label="Toggle DRS">DRS CLOSED</button>
+          <button id="aero-reset-btn" class="preset-btn" aria-label="Reset aero setup">DEFAULT</button>
         </div>
       </section>
 

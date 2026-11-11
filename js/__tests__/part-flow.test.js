@@ -761,6 +761,41 @@ describe('Phase 4 — speed-coherent flow shape', () => {
     expect(maxDisp).toBeGreaterThanOrEqual(0.08);
   });
 
+  it('aero setup: wing gain scales the wing vortices at trace time and retraces once per change', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    airflow.setCarType('F1', glbF1Measure());
+    airflow.setSpeed(280);
+    const rearGamma = () => airflow._activeModifiers.find(m => m.wing === 'rear').gamma;
+    const frontGamma = () => airflow._activeModifiers.find(m => m.wing === 'front').gamma;
+    const g0 = rearGamma(), f0 = frontGamma();
+    const count = airflow._traceCount;
+    airflow.setAeroSetup({ frontWing: 1, rearWing: 1, floor: 1 });        // reference ⇒ no-op
+    airflow.setAeroSetup({ frontWing: 1.01, rearWing: 0.99, floor: 0.7 }); // inside quantum / floor only
+    expect(airflow._traceCount).toBe(count);
+    airflow.setAeroSetup({ frontWing: 1, rearWing: 0.4, floor: 1 });      // DRS open
+    expect(airflow._traceCount).toBe(count + 1);
+    expect(rearGamma()).toBeCloseTo(g0 * 0.4, 10);
+    expect(frontGamma()).toBeCloseTo(f0, 10);
+    // Base table (CFD-facing) is never mutated.
+    expect(airflow.getModifiers().find(m => m.wing === 'rear').gamma).toBe(1.0);
+  });
+
+  it('aero setup: wing upwash is zero at the reference and signed by the gain behind the rear wing', async () => {
+    const { AirflowEffect } = await import('../effects.js');
+    const airflow = new AirflowEffect(makeScene());
+    const m = glbF1Measure();
+    airflow.setCarType('F1', m);
+    const rw = m.anchors.rearWing;
+    expect(airflow._wingUpwash(rw.z + 2, rw.y, 1)).toBe(0);
+    airflow.setAeroSetup({ frontWing: 1, rearWing: 1.35, floor: 1 });
+    expect(airflow._wingUpwash(rw.z + 2, rw.y, 1)).toBeGreaterThan(0.05);
+    expect(airflow._wingUpwash(rw.z - 3, rw.y, 1)).toBe(0);              // upstream untouched
+    expect(airflow._wingUpwash(rw.z + 2, rw.y + 3, 1)).toBeLessThan(1e-6); // far above the wing
+    airflow.setAeroSetup({ frontWing: 1, rearWing: 0.4, floor: 1 });      // DRS ⇒ wake flattens
+    expect(airflow._wingUpwash(rw.z + 2, rw.y, 1)).toBeLessThan(-0.05);
+  });
+
   it('P4.3 same speed bucket ⇒ NO retrace and identical path objects (determinism)', async () => {
     const { AirflowEffect } = await import('../effects.js');
     const airflow = new AirflowEffect(makeScene());
