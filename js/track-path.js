@@ -148,6 +148,11 @@ export class TrackPath {
     return this._circuit ? this._circuit.lineOffsetAt(this._lapOffset + s) : 0;
   }
 
+  /** Room to one side at track-space s — see circuit.sideRoomAt. */
+  sideRoomAt(s, side) {
+    return this._circuit ? this._circuit.sideRoomAt(this._lapOffset + s, side) : { room: Infinity, dh: 0 };
+  }
+
   /** Lap distance for a track-space s (0 off-circuit). */
   lapAt(s) {
     return this._circuit ? this._circuit.wrap(this._lapOffset + s) : 0;

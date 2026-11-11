@@ -38,6 +38,96 @@ export function clampToBend(xl, xr, kappa) {
   return xl <= xr ? [xl, xr] : [xr, xr];
 }
 
+/** Half-width [m] of the level shelf the road stands on: asphalt, gravel,
+ *  barriers and pit lane all sit flat at road height inside it. */
+export const SHELF = 22;
+
+/**
+ * The ground to one side of the road, given the room to the next stretch
+ * of track (hairpin legs, parallel straights):
+ *   • a level shelf at road height out to `flat`,
+ *   • then a bank that reaches `dh` at `reach`.
+ * The ground between two stretches is split at the midpoint, where the
+ * bank meets the neighbour's bank at the mean of the two road heights — so
+ * neither verge lies across the other road, and no road is buried.
+ * @param {number} room      distance to the other stretch (Infinity = none)
+ * @param {number} dhOther   that stretch's height minus ours
+ * @param {number} maxReach  widest the verge may be
+ * @param {number} minReach  road edge + margin (never narrower)
+ * @param {number} shelf     wanted shelf half-width
+ */
+export function vergeReach(room, dhOther, maxReach, minReach, shelf = SHELF) {
+  if (!Number.isFinite(room)) return { reach: maxReach, flat: Math.min(shelf, maxReach), dh: 0 };
+  const mid = room / 2;
+  const reach = Math.max(minReach, Math.min(maxReach, mid));
+  // Close neighbours: the shelf shrinks to leave at least a metre of bank.
+  const flat = Math.max(Math.min(shelf, reach - 1), Math.min(minReach, reach));
+  const run = mid - flat;                       // bank length to the midpoint
+  const dh = run > 1e-6 ? (dhOther / 2) * Math.min(1, (reach - flat) / run) : dhOther / 2;
+  return { reach, flat, dh };
+}
+
+/**
+ * Ground height offset [m] at `lateral` metres from the line, relative to
+ * the road at that station; null when that spot belongs to the next
+ * stretch of track (nothing of ours should stand there).
+ */
+export function groundOffset(room, dhOther, lateral, shelf = SHELF) {
+  const a = Math.abs(lateral);
+  if (!Number.isFinite(room)) return 0;
+  const mid = room / 2;
+  if (a > mid - 2) return null;
+  const flat = Math.min(shelf, mid - 1);
+  if (a <= flat) return 0;
+  return (dhOther / 2) * ((a - flat) / (mid - flat));
+}
+
+/**
+ * Cross-section of the ground on ONE side of the road at one station, as
+ * distances from the road centre (all ≥ 0, non-decreasing):
+ *
+ *   road edge a ─ grass ─ z0 [zone: gravel | pit lane] z1 ─ grass ─ flat ─ bank ─ reach
+ *
+ * The strips are laid SIDE BY SIDE and share their edges. (Stacked layers
+ * each triangulate a sloping, fanning corner differently and poke through
+ * one another — seen as green lines across the asphalt.)
+ *
+ * @param {object} layout  LAYOUTS entry
+ * @param {number} side    +1 right, −1 left
+ * @param {object} p
+ *   c          road centre relative to the driven line (right +)
+ *   kappa      curvature at this station (left +)
+ *   kappaNear  strongest curvature nearby (cornerKappa) — gravel trigger
+ *   room, dh   sideRoomAt() for this side (measured from the line)
+ *   pit        {x0, x1} when a pit lane runs on this side here, else null
+ *   maxReach   widest the ground may extend
+ */
+export function rowSide(layout, side, p) {
+  const a = layout.roadW / 2;
+  const room = Number.isFinite(p.room) ? Math.max(p.room - side * p.c, 2 * (a + 1.5)) : Infinity;
+  const v = vergeReach(room, p.dh, p.maxReach, a + 1.5);
+  let z0 = a, z1 = a, zone = 'none';
+  const lim = Math.max(a, v.flat - 0.2);
+  if (p.pit) {
+    zone = 'pit'; z0 = Math.min(p.pit.x0, lim); z1 = Math.min(p.pit.x1, lim);
+  } else {
+    const g = gravelExtent(layout, p.kappaNear);
+    if (g && (g[0] > 0 ? 1 : -1) === side) {
+      zone = 'gravel'; z0 = Math.min(layout.gravelFrom, lim); z1 = Math.min(layout.gravelTo, lim);
+    }
+  }
+  let out = { a, z0, z1, zone, flat: v.flat, reach: v.reach, dh: v.dh };
+  // Inside of a bend: nothing may reach past the centre of curvature.
+  if (Math.abs(p.kappa) > 1e-4 && (p.kappa > 0 ? -1 : 1) === side) {
+    const vmax = Math.max(0, 0.85 / Math.abs(p.kappa) - side * p.c);
+    const cl = (x) => Math.min(x, vmax);
+    const reach = cl(out.reach);
+    out = { ...out, a: cl(a), z0: cl(z0), z1: cl(z1), flat: cl(out.flat), reach,
+      dh: out.reach - out.flat > 1e-6 ? out.dh * Math.max(0, reach - cl(out.flat)) / (out.reach - out.flat) : 0 };
+  }
+  return out;
+}
+
 /** Signed curvature of the strongest bend within ±30 m of s. */
 export function cornerKappa(path, s) {
   let best = 0;

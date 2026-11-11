@@ -18,7 +18,7 @@ import {
 } from './track-path.js';
 import { HORIZON_COLOR } from './scene-config.js';
 import {
-  LAYOUTS, TREES, clampToBend, cornerKappa, insideBlocked, kerbVisible, gravelExtent, tyresVisible,
+  LAYOUTS, TREES, rowSide, groundOffset, cornerKappa, insideBlocked, kerbVisible, gravelExtent, tyresVisible,
   treeSpec, inLapRange, expandScenery, treeBlocked, barrierBlocked,
 } from './track-layout.js';
 
@@ -270,15 +270,17 @@ export function buildSkyline() {
   return { group, near, setGroundDrop };
 }
 
-/* ── Ground ribbon — path-following textured strip ───────────────── *
- * extent(path, s) → [xLeft, xRight] lateral edges in metres from the DRIVEN
- * line (right +). A zero-width extent draws nothing, so one ribbon can come
- * and go along the lap (gravel traps, pit lanes).                          */
+/* ── Ground — path-following strips laid side by side ─────────────── *
+ * One station every RIBBON_DS metres; at each, track-layout.rowSide()
+ * gives the cross-section (road · verge · gravel / pit lane · verge ·
+ * bank) and every strip takes its two edges from it. Neighbouring strips
+ * share those edges exactly, so nothing overlaps and nothing can poke
+ * through on a sloping, fanning corner.                                  */
 const GROUND_AHEAD = 260;   // m — ground reaches past the furniture window so
                             // distant scenery stands on something
 const U_PER_M = 18 / 30;    // texture tiles per metre across (≈1.67 m / tile)
 
-function buildGroundRibbon(groundTex, extent, y = SURFACE_Y, matOpts = {}) {
+function makeStrip(tex, matOpts, pick) {
   const rows = poolSize(RIBBON_DS, WINDOW_BEHIND, GROUND_AHEAD);   // fixed vertex count
   const positions = new Float32Array(rows * 2 * 3);
   const uvs       = new Float32Array(rows * 2 * 2);
@@ -291,43 +293,13 @@ function buildGroundRibbon(groundTex, extent, y = SURFACE_Y, matOpts = {}) {
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geo.setAttribute('uv',       new THREE.BufferAttribute(uvs, 2));
   geo.setIndex(indices);
-
   const mat = new THREE.MeshStandardMaterial({
-    map: groundTex,
-    roughness: 0.88,
-    metalness: 0.04,
-    side: THREE.DoubleSide,
-    ...matOpts,
+    map: tex, roughness: 0.88, metalness: 0.04, side: THREE.DoubleSide, ...matOpts,
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   mesh.frustumCulled = false;   // verts move in track space every frame
-
-  function update(path) {
-    if (!mesh.visible) return;
-    const { kMin, kMax } = rowWindow(path.pose.s, RIBBON_DS, WINDOW_BEHIND, GROUND_AHEAD);
-    for (let r = 0; r < rows; r++) {
-      const k = Math.min(kMin + r, kMax);     // tail rows degenerate on kMax
-      const s = k * RIBBON_DS;
-      const e = extent(path, s);
-      const [xl, xr] = clampToBend(e[0], e[1], path.curvatureAt(s));
-      const L = rowPose(path, s, xl);
-      const R = rowPose(path, s, xr);
-      const h = y + path.heightAt(s);   // real road height (0 on the flat test track)
-      const i = r * 2 * 3;
-      positions[i]     = L.x; positions[i + 1] = h; positions[i + 2] = L.z;
-      positions[i + 3] = R.x; positions[i + 4] = h; positions[i + 5] = R.z;
-      const j = r * 2 * 2;
-      const v = s / (70 / 36);          // one tile ≈ 1.94 m along the road
-      uvs[j] = xl * U_PER_M;      uvs[j + 1] = v;
-      uvs[j + 2] = xr * U_PER_M;  uvs[j + 3] = v;
-    }
-    geo.attributes.position.needsUpdate = true;
-    geo.attributes.uv.needsUpdate = true;
-    geo.computeVertexNormals();
-  }
-
-  return { mesh, update };
+  return { mesh, geo, positions, uvs, rows, pick };
 }
 
 /* ── Small canvas textures for scenery ───────────────────────────── */
@@ -468,47 +440,82 @@ export function buildTrack() {
   const version = () => layoutVer;
   const lapLen = (path) => path.circuit?.length ?? 1;
 
-  // Grass apron first (renders under the asphalt): same path-following
-  // ribbon, much wider, slightly lower — replaces the bare sky-bright void
-  // either side of the road. Tile density matches the asphalt (~1.67 m/tile).
+  /* ── Ground strips ───────────────────────────────────────────────
+   * pick(row) → [x0, x1, dh0, dh1]: the strip's two edges at this station
+   * (metres right of the DRIVEN line) and their height offsets. A strip
+   * with x0 === x1 draws nothing there, so gravel and pit lane come and go
+   * along the lap. */
   // Matte, no sky reflection: at grazing angles the environment map washed
-  // the grass out to near-white, which read as a pale strip against the
-  // (unlit) far ground wherever the two met.
-  const grass = buildGroundRibbon(makeGrassTexture(),
-    (path, s) => { const c = path.centerOffsetAt(s); return [c - GRASS_W / 2, c + GRASS_W / 2]; },
-    GRASS_Y, { roughness: 1, metalness: 0, envMapIntensity: 0.12, color: 0x537649 });
-  grp.add(grass.mesh);
-
-  // Gravel traps — outside of corners, between the road and the barrier.
-  const gravel = buildGroundRibbon(makeGravelTexture(), (path, s) => {
-    const c = path.centerOffsetAt(s);
-    const g = gravelExtent(layout, cornerKappa(path, s));
-    return g ? [c + g[0], c + g[1]] : [c, c];
-  }, GRASS_Y + 0.02, { roughness: 1, metalness: 0, envMapIntensity: 0.1, color: 0x9a927f });
-  gravel.mesh.visible = false;
-  grp.add(gravel.mesh);
-
+  // the grass out to near-white against the (unlit) far ground.
+  const grassMat  = { roughness: 1, metalness: 0, envMapIntensity: 0.12, color: 0x537649 };
+  const gravelMat = { roughness: 1, metalness: 0, envMapIntensity: 0.1, color: 0x9a927f };
+  const grassTex  = makeGrassTexture();
+  const gravelTex = makeGravelTexture();
   const groundTex = makeAsphaltTexture();
+  const strips = [makeStrip(groundTex, {}, (row) => [row.c - row.L.a, row.c + row.R.a, 0, 0])];
+  for (const side of [-1, 1]) {
+    const S = side < 0 ? 'L' : 'R';
+    const at = (row, v) => row.c + side * v;
+    const span = (row, v0, v1, dh0 = 0, dh1 = 0) => (side < 0
+      ? [at(row, v1), at(row, v0), dh1, dh0]
+      : [at(row, v0), at(row, v1), dh0, dh1]);
+    strips.push(makeStrip(grassTex, grassMat, (row) => span(row, row[S].a, row[S].z0)));
+    strips.push(makeStrip(gravelTex, gravelMat, (row) => (row[S].zone === 'gravel'
+      ? span(row, row[S].z0, row[S].z1) : span(row, row[S].z0, row[S].z0))));
+    strips.push(makeStrip(groundTex, {}, (row) => (row[S].zone === 'pit'
+      ? span(row, row[S].z0, row[S].z1) : span(row, row[S].z0, row[S].z0))));
+    strips.push(makeStrip(grassTex, grassMat, (row) => span(row, row[S].z1, row[S].flat)));
+    strips.push(makeStrip(grassTex, grassMat, (row) => span(row, row[S].flat, row[S].reach, 0, row[S].dh)));
+  }
+  for (const st of strips) grp.add(st.mesh);
 
-  // Pit lane apron — asphalt beside the road where the scenery defines one.
-  const pitlane = buildGroundRibbon(groundTex, (path, s) => {
-    const c = path.centerOffsetAt(s);
-    const lap = path.lapAt(s);
+  const _row = { c: 0, L: null, R: null };
+  const pitOn = (path, lap, side) => {
     for (const p of scenery.pitlanes) {
-      if (!inLapRange(lap, p.from, p.to, lapLen(path))) continue;
-      const a = p.side * p.x0, b = p.side * p.x1;
-      return a < b ? [c + a, c + b] : [c + b, c + a];
+      if (p.side === side && inLapRange(lap, p.from, p.to, lapLen(path))) return p;
     }
-    return [c, c];
-  }, SURFACE_Y - 0.01);
-  pitlane.mesh.visible = false;
-  grp.add(pitlane.mesh);
-
-  const ribbon = buildGroundRibbon(groundTex, (path, s) => {
-    const c = path.centerOffsetAt(s);
-    return [c - layout.roadW / 2, c + layout.roadW / 2];
-  });
-  grp.add(ribbon.mesh);
+    return null;
+  };
+  function updateGround(path) {
+    const { kMin, kMax } = rowWindow(path.pose.s, RIBBON_DS, WINDOW_BEHIND, GROUND_AHEAD);
+    const rows = strips[0].rows;
+    for (let r = 0; r < rows; r++) {
+      const k = Math.min(kMin + r, kMax);     // tail rows degenerate on kMax
+      const s = k * RIBBON_DS;
+      // One pose per station; every strip edge is that pose pushed sideways.
+      const p = path.poseAt(s);
+      const cs = Math.cos(p.theta), sn = Math.sin(p.theta);
+      const h = SURFACE_Y + path.heightAt(s);
+      const c = path.centerOffsetAt(s);
+      const kappa = path.curvatureAt(s);
+      const near = layout.circuit ? cornerKappa(path, s) : 0;
+      const lap = path.lapAt(s);
+      _row.c = c;
+      for (const side of [-1, 1]) {
+        const room = path.sideRoomAt(s, side);
+        _row[side < 0 ? 'L' : 'R'] = rowSide(layout, side, {
+          c, kappa, kappaNear: near, room: room.room, dh: room.dh,
+          pit: layout.circuit ? pitOn(path, lap, side) : null, maxReach: GRASS_W / 2,
+        });
+      }
+      const v = s / (70 / 36);          // one tile ≈ 1.94 m along the road
+      const i = r * 6, j = r * 4;
+      for (const st of strips) {
+        const e = st.pick(_row);
+        const pos = st.positions, uv = st.uvs;
+        // right(θ) = (cosθ, −sinθ) in (x, z)
+        pos[i]     = p.x + e[0] * cs; pos[i + 1] = h + e[2]; pos[i + 2] = p.z - e[0] * sn;
+        pos[i + 3] = p.x + e[1] * cs; pos[i + 4] = h + e[3]; pos[i + 5] = p.z - e[1] * sn;
+        uv[j] = e[0] * U_PER_M;      uv[j + 1] = v;
+        uv[j + 2] = e[1] * U_PER_M;  uv[j + 3] = v;
+      }
+    }
+    for (const st of strips) {
+      st.geo.attributes.position.needsUpdate = true;
+      st.geo.attributes.uv.needsUpdate = true;
+      st.geo.computeVertexNormals();
+    }
+  }
 
   const pools = [];
 
@@ -696,8 +703,15 @@ export function buildTrack() {
             conifers.setMatrixAt(idx, _zero); leafies.setMatrixAt(idx, _zero); trunks.setMatrixAt(idx, _zero);
             continue;
           }
-          const rp = rowPose(path, s, t.lateral + path.centerOffsetAt(s));
-          _p.set(rp.x, GRASS_Y + path.heightAt(s), rp.z);
+          const x = t.lateral + path.centerOffsetAt(s);
+          const room = path.sideRoomAt(s, Math.sign(x));
+          const gh = groundOffset(room.room, room.dh, x);
+          if (gh === null) {                    // that ground belongs to another stretch of track
+            conifers.setMatrixAt(idx, _zero); leafies.setMatrixAt(idx, _zero); trunks.setMatrixAt(idx, _zero);
+            continue;
+          }
+          const rp = rowPose(path, s, x);
+          _p.set(rp.x, GRASS_Y + path.heightAt(s) + gh, rp.z);
           _q.setFromAxisAngle(_yAxis, t.shade * Math.PI * 2);
           _s.set(t.scale, t.scale * (0.9 + 0.3 * t.shade), t.scale);
           _m4.compose(_p, _q, _s);
@@ -866,8 +880,12 @@ export function buildTrack() {
       if (o.key === key) continue;              // track-space position unchanged
       o.key = key;
       const side = o.it.side ?? 1;
-      const rp = rowPose(path, sT, side * (o.it.lateral ?? 0) + path.centerOffsetAt(sT));
-      o.obj.position.set(rp.x, SURFACE_Y + path.heightAt(sT), rp.z);
+      const x = side * (o.it.lateral ?? 0) + path.centerOffsetAt(sT);
+      const room = path.sideRoomAt(sT, Math.sign(x) || 1);
+      const gh = groundOffset(room.room, room.dh, x);
+      if (gh === null) { o.obj.visible = false; o.key = ''; continue; }
+      const rp = rowPose(path, sT, x);
+      o.obj.position.set(rp.x, SURFACE_Y + path.heightAt(sT) + gh, rp.z);
       // Left-hand items are turned round so their local +x still points
       // away from the road.
       o.obj.rotation.y = rp.rotY + (side < 0 ? Math.PI : 0);
@@ -936,17 +954,12 @@ export function buildTrack() {
     scenery = (layout.circuit && circuit && sceneryDefs)
       ? expandScenery(sceneryDefs, circuit)
       : { items: [], pitlanes: [], keepOut: [] };
-    gravel.mesh.visible = !!layout.circuit;
-    pitlane.mesh.visible = !!layout.circuit && scenery.pitlanes.length > 0;
     buildScenery();
   }
 
   /* Re-place every out-of-date row + rebuild the ground ribbons. */
   function update(path) {
-    grass.update(path);
-    gravel.update(path);
-    pitlane.update(path);
-    ribbon.update(path);
+    updateGround(path);
     for (const p of pools) p.update(path);
     updateTrees(path);
     updateScenery(path);

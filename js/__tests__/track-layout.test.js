@@ -169,3 +169,135 @@ describe('scenery expansion', () => {
     expect(barrierBlocked(keepOut, 2000, 1, spa.length)).toBe(false);
   });
 });
+
+import { vergeReach, groundOffset, SHELF, rowSide } from '../track-layout.js';
+
+describe('shared ground between neighbouring stretches of track', () => {
+  it('open country: full reach, level', () => {
+    expect(vergeReach(Infinity, 0, 160, 7)).toEqual({ reach: 160, flat: SHELF, dh: 0 });
+    expect(groundOffset(Infinity, 5, 60)).toBe(0);
+  });
+  it('the road always stands on a level shelf — it can never be buried', () => {
+    for (const room of [30, 60, 80, 200, 900]) for (const dh of [-20, 15]) {
+      const v = vergeReach(room, dh, 160, 7);
+      expect(v.flat).toBeGreaterThanOrEqual(7);            // at least the road + margin
+      expect(v.flat).toBeLessThanOrEqual(v.reach);
+      expect(groundOffset(room, dh, 0)).toBe(0);
+      expect(groundOffset(room, dh, Math.min(5.5, room / 2 - 3))).toBe(0);   // across the asphalt
+    }
+    // With room to spare the shelf covers gravel and barriers too.
+    expect(vergeReach(200, 10, 160, 7).flat).toBe(SHELF);
+    expect(groundOffset(200, 10, 12.5)).toBe(0);
+  });
+  it('a neighbour 80 m away: the bank stops half-way and meets it at the mean height', () => {
+    const v = vergeReach(80, -12, 160, 7);
+    expect(v.reach).toBe(40);
+    expect(v.dh).toBeCloseTo(-6, 9);
+    // The neighbour's bank, looking back at us: same edge point, same height.
+    const w = vergeReach(80, +12, 160, 7);
+    expect(w.reach).toBe(40);
+    expect(-12 + w.dh).toBeCloseTo(v.dh, 9);
+  });
+  it('never narrower than the road + margin, never wider than the strip', () => {
+    expect(vergeReach(6, 3, 160, 7).reach).toBe(7);
+    expect(vergeReach(900, 3, 160, 7).reach).toBe(160);
+    // Capped short of the midpoint ⇒ only part of the rise is reached.
+    const v = vergeReach(900, 9, 160, 7);
+    expect(v.dh).toBeCloseTo(4.5 * (160 - SHELF) / (450 - SHELF), 9);
+  });
+  it('groundOffset: level on the shelf, linear up the bank, null past half-way', () => {
+    expect(groundOffset(80, -12, 20)).toBe(0);
+    expect(groundOffset(80, -12, 31)).toBeCloseTo(-6 * (31 - SHELF) / (40 - SHELF), 9);
+    expect(groundOffset(80, -12, -31)).toBeCloseTo(groundOffset(80, -12, 31), 12);
+    expect(groundOffset(80, -12, 39)).toBeNull();
+    expect(groundOffset(80, -12, 60)).toBeNull();
+    // Matches the strip's own edge height where they meet.
+    const v = vergeReach(80, -12, 160, 7);
+    expect(groundOffset(80, -12, v.reach - 2.01)).toBeCloseTo(v.dh * (v.reach - 2.01 - v.flat) / (v.reach - v.flat), 6);
+  });
+});
+
+describe('Spa: no verge lies across another stretch of track', () => {
+  it('sideRoomAt finds the other leg of the Bruxelles and La Source hairpins', () => {
+    // Bruxelles is a right-hand hairpin: on entry the exit leg is to the right.
+    let found = 0;
+    for (let s = 2960; s < 3200; s += 10) {
+      const r = spa.sideRoomAt(s, 1);
+      if (Number.isFinite(r.room)) { found++; expect(r.room).toBeGreaterThan(15); }
+    }
+    expect(found).toBeGreaterThan(5);
+    // The Kemmel straight is open on both sides.
+    // The Kemmel straight has nothing within the verge's reach on either side.
+    expect(spa.sideRoomAt(2000, 1).room).toBeGreaterThan(200);
+    expect(spa.sideRoomAt(2000, -1).room).toBeGreaterThan(200);
+    expect(buildCircuit({ id: 'c', name: 'c', racingLine: false, points: [0, 0, 500, 0, 500, 1, 0, 1] }).sideRoomAt(100, 1).dh).toBe(0);
+  });
+  it('every verge edge stays clear of every other piece of asphalt', () => {
+    // For each station, the grass edge on each side must be nearer to its
+    // own road than to any other stretch (else it would cover that road).
+    const half = LAYOUTS.circuit.roadW / 2;
+    let worst = Infinity;
+    for (let s = 0; s < spa.length; s += 10) {
+      for (const side of [-1, 1]) {
+        const { room } = spa.sideRoomAt(s, side);
+        const { reach } = vergeReach(room, 0, 160, half + 1.5);
+        if (!Number.isFinite(room)) continue;
+        worst = Math.min(worst, room - reach - half);     // gap left before the other road's edge
+      }
+    }
+    expect(worst).toBeGreaterThan(0);
+  });
+});
+
+describe('rowSide — one side of the ground cross-section', () => {
+  const C = LAYOUTS.circuit, T = LAYOUTS.test;
+  const base = { c: 0, kappa: 0, kappaNear: 0, room: Infinity, dh: 0, pit: null, maxReach: 160 };
+  const ordered = (r) => r.a <= r.z0 && r.z0 <= r.z1 && r.z1 <= r.flat && r.flat <= r.reach;
+  it('open straight: road edge, level shelf, full reach, no zone', () => {
+    const r = rowSide(C, 1, base);
+    expect(r).toMatchObject({ a: 5.5, z0: 5.5, z1: 5.5, zone: 'none', flat: SHELF, reach: 160, dh: 0 });
+  });
+  it('test track: 15 m of asphalt each side, then grass to the edge', () => {
+    const r = rowSide(T, -1, base);
+    expect(r.a).toBe(15);
+    expect(r.zone).toBe('none');
+    expect(r.reach).toBe(160);
+    expect(ordered(r)).toBe(true);
+  });
+  it('gravel appears on the OUTSIDE of a corner only', () => {
+    const left = { ...base, kappa: 1 / 60, kappaNear: 1 / 60 };       // left turn ⇒ outside = right
+    expect(rowSide(C, 1, left).zone).toBe('gravel');
+    expect(rowSide(C, 1, left).z0).toBe(C.gravelFrom);
+    expect(rowSide(C, 1, left).z1).toBe(C.gravelTo);
+    expect(rowSide(C, -1, left).zone).toBe('none');
+  });
+  it('a pit lane takes the zone and wins over gravel', () => {
+    const r = rowSide(C, 1, { ...base, kappa: 1 / 60, kappaNear: 1 / 60, pit: { x0: 9.2, x1: 20.6 } });
+    expect(r.zone).toBe('pit');
+    expect(r.z0).toBe(9.2);
+    expect(r.z1).toBe(20.6);
+    expect(ordered(r)).toBe(true);
+  });
+  it('a close neighbour squeezes everything but keeps the order and the road', () => {
+    for (const room of [20, 30, 44, 60, 100]) for (const c of [-3.5, 0, 3.5]) for (const side of [-1, 1]) {
+      const r = rowSide(C, side, { ...base, c, room, dh: 8, kappa: 1 / 60, kappaNear: 1 / 60, pit: side > 0 ? { x0: 9.2, x1: 20.6 } : null });
+      expect(ordered(r), `room ${room} c ${c} side ${side}`).toBe(true);
+      expect(r.a).toBe(5.5);
+      expect(r.reach).toBeLessThanOrEqual(Math.max(7, (room - side * c) / 2) + 1e-9);
+    }
+  });
+  it('inside of a hairpin: nothing reaches past the centre, order holds, bank flattens', () => {
+    const r = rowSide(C, -1, { ...base, kappa: 1 / 20, kappaNear: 1 / 20, room: 60, dh: 6 });   // left hairpin, inside = left
+    expect(r.reach).toBeLessThanOrEqual(17 + 1e-9);
+    expect(ordered(r)).toBe(true);
+    expect(Math.abs(r.dh)).toBeLessThanOrEqual(3);
+    const out = rowSide(C, 1, { ...base, kappa: 1 / 20, kappaNear: 1 / 20 });
+    expect(out.reach).toBe(160);
+  });
+  it('left and right edges mirror: the two sides never cross at the road', () => {
+    for (const c of [-3.6, 0, 3.6]) {
+      const L = rowSide(C, -1, { ...base, c }), R = rowSide(C, 1, { ...base, c });
+      expect(c - L.a).toBeLessThan(c + R.a);
+    }
+  });
+});
