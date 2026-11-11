@@ -1998,6 +1998,20 @@ export class RainEffect {
 
   setSpeed(speed) { this._speed = speed; }
 
+  /**
+   * Rain intensity 0 (drizzle) … 1 (downpour). Scales how many streaks
+   * fall, how opaque they are, and how thick the spray, rooster tails and
+   * standing-water sheen are. 1 (the default) is the original look.
+   */
+  setIntensity(i) {
+    this._intensity = Math.min(1, Math.max(0, Number.isFinite(i) ? i : 1));
+    const frac = 0.2 + 0.8 * this._intensity;
+    this.droplets?.geometry?.setDrawRange?.(0, Math.max(2, Math.floor(this._dCount * frac)) * 2);
+  }
+
+  /** 1 at full intensity, 0.35 in a drizzle. */
+  _wetScale() { return 0.35 + 0.65 * (this._intensity ?? 1); }
+
   /* Turn coupling — store the REAL centrifugal pseudo-accel a_lat = v·ω.
    * Free water (spray, rooster tails) accumulates it; falling streaks lean. */
   setTurnState(omega, v) { this._turnALat = rainLateralAccel(v, omega); }
@@ -2098,7 +2112,7 @@ export class RainEffect {
     // callers that omit it — gust(0) is exactly zero).
     const t = _t || 0;
     const gust = gustVector(t);
-    this._dMat.opacity = 0.55 * rainDensity(t);
+    this._dMat.opacity = 0.55 * rainDensity(t) * this._wetScale();
 
     // Streak rendering — update tail position then compute head
     const dp = this._dPos;
@@ -2212,9 +2226,9 @@ export class RainEffect {
       sa.aSize.needsUpdate    = true;
       sa.aFade.needsUpdate    = true;
     }
-    this._sMat.uniforms.uOpacity.value = speedFactor * 0.65;
+    this._sMat.uniforms.uOpacity.value = speedFactor * 0.65 * this._wetScale();
 
-    this._wetMat.opacity = speedFactor * 0.40;
+    this._wetMat.opacity = speedFactor * 0.40 * this._wetScale();
 
     this._updateRoosterTails(dt, speedFactor);
   }
@@ -2266,7 +2280,7 @@ export class RainEffect {
       ra.aSize.needsUpdate    = true;
       ra.aFade.needsUpdate    = true;
     }
-    this._roosterMat.uniforms.uOpacity.value = speedFactor * 0.75;
+    this._roosterMat.uniforms.uOpacity.value = speedFactor * 0.75 * this._wetScale();
   }
 
   dispose() {

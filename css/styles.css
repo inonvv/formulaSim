@@ -775,7 +775,7 @@ button:focus-visible, input:focus-visible {
 }
 
 /* ─── Speed + volume sliders ─────────────────────────────────────── */
-#speed-slider, #volume-slider, #section-aero input[type=range] {
+#speed-slider, #volume-slider, #rain-slider, #section-aero input[type=range] {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
@@ -786,6 +786,7 @@ button:focus-visible, input:focus-visible {
   cursor: pointer;
 }
 
+#rain-slider::-webkit-slider-thumb,
 #speed-slider::-webkit-slider-thumb, #volume-slider::-webkit-slider-thumb,
 #section-aero input[type=range]::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -801,12 +802,14 @@ button:focus-visible, input:focus-visible {
 #volume-slider::-webkit-slider-thumb:hover { transform: scale(1.2); }
 
 /* Firefox parity — mirrors the webkit track/thumb above */
+#rain-slider::-moz-range-track,
 #speed-slider::-moz-range-track, #volume-slider::-moz-range-track,
 #section-aero input[type=range]::-moz-range-track {
   height: 4px;
   border-radius: 2px;
   background: rgba(255,255,255,0.1);
 }
+#rain-slider::-moz-range-thumb,
 #speed-slider::-moz-range-thumb, #volume-slider::-moz-range-thumb,
 #section-aero input[type=range]::-moz-range-thumb {
   width: 16px; height: 16px;
@@ -939,6 +942,12 @@ button:focus-visible, input:focus-visible {
 #panel-body::-webkit-scrollbar-thumb { background: var(--panel-border); border-radius: 2px; }
 #panel-body::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
 
+/* ─── Rain intensity sub-control ─────────────────────────────────── */
+.sub-ctrl { display: flex; flex-direction: column; gap: 8px; }
+.sub-ctrl[hidden] { display: none; }
+#rain-slider::-webkit-slider-thumb { background: var(--c-rain); box-shadow: var(--glow) color-mix(in srgb, var(--c-rain) 70%, transparent); }
+#rain-slider::-moz-range-thumb { background: var(--c-rain); box-shadow: var(--glow) color-mix(in srgb, var(--c-rain) 70%, transparent); }
+
 /* ─── Aero setup controls ────────────────────────────────────────── */
 #panel-body #section-aero.collapsed-arcade { display: none; }
 #section-aero input[type=range]::-webkit-slider-thumb { background: var(--c-aero); box-shadow: var(--glow) color-mix(in srgb, var(--c-aero) 70%, transparent); }
@@ -1007,7 +1016,7 @@ button:focus-visible, input:focus-visible {
   border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
 }
 .tm-flag-drs { background: color-mix(in srgb, var(--ok) 22%, transparent); color: #9ff0bf; border-color: color-mix(in srgb, var(--ok) 55%, transparent); }
-.tm-flag-over-grip, .tm-flag-bottoming { background: color-mix(in srgb, var(--accent) 25%, transparent); color: #ffb0b8; border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.tm-flag-over-grip, .tm-flag-bottoming, .tm-flag-aquaplaning { background: color-mix(in srgb, var(--accent) 25%, transparent); color: #ffb0b8; border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
 
 #telemetry-body { padding: 10px 12px 10px; display: flex; flex-direction: column; gap: 10px; }
 .tm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }

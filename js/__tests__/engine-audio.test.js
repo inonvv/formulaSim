@@ -129,15 +129,16 @@ describe('EngineAudio — lazy graph build (EA1)', () => {
     expect(getFactoryCalls()).toBe(1);
     expect(ctx.state).toBe('running');
     const counts = { ...ctx.created };
-    // 3 engine-voice oscillators + 1 idle LFO
-    expect(counts.osc).toBe(4);
-    // shared 1 s white-noise buffer, looped by exhaust + rain chains
+    // 3 engine-voice oscillators + 1 idle LFO + rasp + turbo whistle
+    expect(counts.osc).toBe(6);
+    // shared 1 s white-noise buffer, looped by exhaust + rain + wind + scrub chains
     expect(counts.buffer).toBe(1);
-    expect(counts.bufferSrc).toBe(2);
-    // engine lowpass + exhaust bandpass + rain HP/LP + pop bandpass
-    expect(counts.biquad).toBe(5);
+    expect(counts.bufferSrc).toBe(4);
+    // engine lowpass + exhaust bandpass + rain HP/LP + pop bandpass + wind LP + scrub BP
+    expect(counts.biquad).toBe(7);
     // fund/harm2/sub voice gains + engine + noise + rain + pop + lfo + master
-    expect(counts.gain).toBe(9);
+    // + rasp + turbo + wind + scrub
+    expect(counts.gain).toBe(13);
 
     ea.resume();
     ea.update(0.016);
@@ -509,8 +510,8 @@ describe('EngineAudio — coin pickup + countdown blips (EA8)', () => {
     expect(go.frequency.calls.find(c => c.m === 'setValueAtTime').v).toBeCloseTo(countdownHz(0), 6);
     // one-shots stop themselves — persistent node families untouched
     expect(t3.stopped).toBeGreaterThan(t3.started);
-    expect(ctx.created.biquad).toBe(5);
-    expect(ctx.created.bufferSrc).toBe(2);
+    expect(ctx.created.biquad).toBe(7);
+    expect(ctx.created.bufferSrc).toBe(4);
   });
 
   it('EA8f. one-shots never write params directly (no zipper) — scheduled methods only', () => {
@@ -580,5 +581,178 @@ describe('EngineAudio — high-rev timbre stays civil (EA9)', () => {
     ea.ctx.currentTime = 1;
     ea.update(0.016);
     expect(ea.nodes.harm2Gain.gain.directSets.length).toBe(before);
+  });
+});
+
+/* ── EA10 — driven mode (vehicle model + gearbox) ───────────────── */
+import {
+  VOICES, drivenFundamentalHz, loadGain, loadBrightnessHz, windGain, scrubGain, crackleChance,
+} from '../engine-audio.js';
+import { POWERTRAIN } from '../powertrain.js';
+
+describe('EngineAudio — driven mode pure mappings (EA10)', () => {
+  it('EA10a. fundamental is half the firing frequency, clamped to 28–420 Hz', () => {
+    expect(drivenFundamentalHz('F1', 12000)).toBeCloseTo(300, 9);
+    expect(drivenFundamentalHz('GT', 9000)).toBeCloseTo(225, 9);
+    expect(drivenFundamentalHz('GT', 950)).toBe(28);
+    expect(drivenFundamentalHz('F1', 99999)).toBe(420);
+  });
+  it('EA10b. an upshift drops the note by the ratio step, not to the floor', () => {
+    const p = POWERTRAIN.F1;
+    const before = drivenFundamentalHz('F1', p.shift);
+    const after  = drivenFundamentalHz('F1', p.shift * p.vGear[2] / p.vGear[3]);   // 3rd → 4th
+    expect(after / before).toBeGreaterThan(0.75);
+    expect(after / before).toBeLessThan(0.92);
+  });
+  it('EA10c. load: full throttle is louder and brighter than a lift at the same revs', () => {
+    expect(loadGain(0.8, 1)).toBeGreaterThan(loadGain(0.8, 0) * 2);
+    expect(loadBrightnessHz(0.8, 1)).toBeGreaterThan(loadBrightnessHz(0.8, 0) + 800);
+    for (const r of [0, 0.5, 1, 9]) for (const l of [0, 1, 9]) {
+      expect(loadBrightnessHz(r, l)).toBeLessThanOrEqual(3640 + 1e-9);   // EA9 cap holds
+      expect(loadBrightnessHz(r, l)).toBeGreaterThanOrEqual(350);
+    }
+    expect(loadGain(1, 1)).toBeCloseTo(0.70, 9);
+  });
+  it('EA10d. wind grows with v², is louder in the wet, and is capped', () => {
+    expect(windGain(0, false)).toBe(0);
+    expect(windGain(45, false)).toBeCloseTo(windGain(90, false) / 4, 9);
+    expect(windGain(60, true)).toBeGreaterThan(windGain(60, false));
+    expect(windGain(500, true)).toBeLessThanOrEqual(0.24 + 1e-9);
+  });
+  it('EA10e. tyres are silent until worked hard, and quieter (hiss, not squeal) in the wet', () => {
+    expect(scrubGain(0.5, 50, false)).toBe(0);
+    expect(scrubGain(1.0, 50, false)).toBeGreaterThan(0);
+    expect(scrubGain(1.0, 50, true)).toBeLessThan(scrubGain(1.0, 50, false));
+    expect(scrubGain(1.0, 0, false)).toBe(0);
+    expect(scrubGain(9, 50, false)).toBeLessThanOrEqual(0.12 + 1e-9);
+  });
+  it('EA10f. crackle only on a closed throttle at high revs', () => {
+    expect(crackleChance(VOICES.GT, 0.8, 1, 0.016)).toBe(0);
+    expect(crackleChance(VOICES.GT, 0.2, 0, 0.016)).toBe(0);
+    expect(crackleChance(VOICES.GT, 0.8, 0, 0.016)).toBeGreaterThan(0);
+    expect(crackleChance(VOICES.GT, 0.8, 0, 99)).toBe(1);
+  });
+  it('EA10g. only the turbo cars whistle', () => {
+    expect(VOICES.F1.turbo).toBeGreaterThan(0);
+    expect(VOICES.F2.turbo).toBeGreaterThan(0);
+    expect(VOICES.F3.turbo).toBe(0);
+    expect(VOICES.GT.turbo).toBe(0);
+  });
+});
+
+describe('EngineAudio — driven mode graph behaviour (EA11)', () => {
+  const drive = (o = {}) => ({ throttle: 1, rpm: 10000, rpm01: 0.65, gear: 4, shifted: 0, speedMps: 60, usage: 0.3, wet: false, ...o });
+  const lastTarget = (param) => [...param.calls].reverse().find(c => c.m === 'setTargetAtTime')?.v;
+
+  it('EA11a. setDrive before resume is safe; legacy mode is untouched without it', () => {
+    const { ea, getCtx } = makeEngine();
+    expect(() => ea.setDrive(drive())).not.toThrow();
+    ea.setDrive(null);
+    ea.resume();
+    ea.setSpeed(200);
+    ea.update(0.016);
+    expect(lastTarget(getCtx().oscNodes[0].frequency)).toBeCloseTo(fundamentalHz('F1', 200), 9);
+    expect(ea.debugState().driven).toBe(false);
+  });
+  it('EA11b. pitch follows rpm, not speed; layers get scheduled writes only', () => {
+    const { ea, getCtx } = makeEngine();
+    ea.resume();
+    const ctx = getCtx();
+    ctx.allParams.forEach(p => { p.directSets.length = 0; });
+    ea.setDrive(drive({ rpm: 8000 }));
+    ea.setSpeed(300);                    // ignored for pitch and shifts in driven mode
+    ea.update(0.016);
+    expect(lastTarget(ea.nodes.fund.frequency)).toBeCloseTo(drivenFundamentalHz('F1', 8000), 9);
+    expect(lastTarget(ea.nodes.rasp.frequency)).toBeCloseTo(drivenFundamentalHz('F1', 8000) * 1.5, 9);
+    expect(lastTarget(ea.nodes.windGain.gain)).toBeCloseTo(windGain(60, false), 9);
+    expect(ctx.allParams.every(p => p.directSets.length === 0)).toBe(true);   // EA6 zipper rule
+    expect(ea.debugState().driven).toBe(true);
+  });
+  it('EA11c. lifting off drops the engine level and closes the filter', () => {
+    const { ea } = makeEngine();
+    ea.resume();
+    ea.setDrive(drive({ throttle: 1 }));
+    ea.update(0.016);
+    const gOn = lastTarget(ea.nodes.engineGain.gain), fOn = lastTarget(ea.nodes.lowpass.frequency);
+    ea.setDrive(drive({ throttle: 0 }));
+    ea.update(0.016);
+    expect(lastTarget(ea.nodes.engineGain.gain)).toBeLessThan(gOn * 0.6);
+    expect(lastTarget(ea.nodes.lowpass.frequency)).toBeLessThan(fOn);
+  });
+  it('EA11d. a reported shift blips once; setSpeed gear-band crossings no longer do', () => {
+    const { ea } = makeEngine();
+    ea.resume();
+    ea.setDrive(drive());
+    ea.update(0.016);
+    const ramps = () => ea.nodes.engineGain.gain.calls.filter(c => c.m === 'expRamp').length;
+    const r0 = ramps();
+    ea.setSpeed(49); ea.setSpeed(51); ea.setSpeed(101);      // legacy band crossings
+    expect(ramps()).toBe(r0);
+    ea.setDrive(drive({ gear: 5, shifted: 1 }));
+    expect(ramps()).toBe(r0 + 2);                            // dip + recovery
+    ea.setDrive(drive({ gear: 5, shifted: 0 }));
+    expect(ramps()).toBe(r0 + 2);
+  });
+  it('EA11e. downshift flares the note up, upshift sags it', () => {
+    const { ea } = makeEngine();
+    ea.resume();
+    ea.setDrive(drive({ gear: 3, shifted: -1, rpm: 9000 }));
+    const f = drivenFundamentalHz('F1', 9000);
+    const firstRamp = (calls) => calls.filter(c => c.m === 'expRamp').slice(-2)[0].v;
+    expect(firstRamp(ea.nodes.fund.frequency.calls)).toBeCloseTo(f * 1.10, 6);
+    ea.setDrive(drive({ gear: 4, shifted: 1, rpm: 9000 }));
+    expect(firstRamp(ea.nodes.fund.frequency.calls)).toBeCloseTo(f * 0.88, 6);
+  });
+  it('EA11f. turbo spools with load on the F1 and stays silent on the GT', () => {
+    const { ea } = makeEngine();
+    ea.resume();
+    ea.setDrive(drive({ throttle: 1, rpm01: 0.9 }));
+    for (let i = 0; i < 120; i++) ea.update(0.016);
+    expect(ea.debugState().boost).toBeGreaterThan(0.7);
+    expect(lastTarget(ea.nodes.turboGain.gain)).toBeGreaterThan(0.015);
+    ea.setDrive(drive({ throttle: 0, rpm01: 0.9 }));
+    for (let i = 0; i < 120; i++) ea.update(0.016);
+    expect(ea.debugState().boost).toBeLessThan(0.05);
+    ea.setCarType('GT');
+    ea.setDrive(drive({ throttle: 1, rpm01: 0.9 }));
+    for (let i = 0; i < 120; i++) ea.update(0.016);
+    expect(lastTarget(ea.nodes.turboGain.gain)).toBeLessThan(1e-4);
+  });
+  it('EA11g. overrun crackle fires one-shot pops only off-throttle at revs; never on throttle', () => {
+    const { ea, getCtx } = makeEngine();
+    ea.resume();
+    ea._rng = () => 0;                                        // always under the chance
+    const ctx = getCtx();
+    ea.setDrive(drive({ throttle: 1, rpm01: 0.9 }));
+    const base = ctx.created.bufferSrc;
+    for (let i = 0; i < 10; i++) ea.update(0.016);
+    expect(ctx.created.bufferSrc).toBe(base);
+    ea.setDrive(drive({ throttle: 0, rpm01: 0.9 }));
+    for (let i = 0; i < 10; i++) ea.update(0.016);
+    expect(ctx.created.bufferSrc).toBe(base + 10);
+    ea._rng = () => 0.999999;                                 // never
+    for (let i = 0; i < 10; i++) ea.update(0.016);
+    expect(ctx.created.bufferSrc).toBe(base + 10);
+  });
+  it('EA11h. paused idles the driven engine: idle pitch, no wind, no crackle', () => {
+    const { ea, getCtx } = makeEngine();
+    ea.resume();
+    ea._rng = () => 0;
+    ea.setDrive(drive({ throttle: 0, rpm01: 0.9, speedMps: 80 }));
+    ea.setPaused(true);
+    const base = getCtx().created.bufferSrc;
+    ea.update(0.016);
+    expect(lastTarget(ea.nodes.fund.frequency)).toBeCloseTo(drivenFundamentalHz('F1', POWERTRAIN.F1.idle), 9);
+    expect(lastTarget(ea.nodes.windGain.gain)).toBe(0);
+    expect(getCtx().created.bufferSrc).toBe(base);
+  });
+  it('EA11i. rain layer keeps its exact speed mapping in driven mode', () => {
+    const { ea } = makeEngine();
+    ea.resume();
+    ea.setRain(true);
+    ea.setSpeed(175);
+    ea.setDrive(drive({ wet: true }));
+    ea.update(0.016);
+    expect(lastTarget(ea.nodes.rainGain.gain)).toBeCloseTo(0.04 + 0.06 * 0.5, 9);
   });
 });

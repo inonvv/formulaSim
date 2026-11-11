@@ -15,6 +15,8 @@ Interactive 3D wind-tunnel simulator for racing cars — a cinematic, educationa
 - **Telemetry HUD** — downforce, drag, aero balance, ride height, g-g plot, four tyre-load bars coloured by grip used, throttle/brake, and the top speed of the current setup
 - **Spa-Francorchamps** — the real 7.0 km layout (open centreline data), a computed minimum-curvature racing line, approximate elevation, a lap-time solver that predicts the ideal lap for the current car and setup, a driver that follows it, minimap, corner names and lap timing
 - **Aero setup** — wing level, ride height, yaw (crosswind) and DRS; the numbers, the Cp paint and the streamlines all respond
+- **Engine sound from the model** — pitch from real engine rpm through a per-car gearbox, load (on/off throttle), overrun crackle, turbo whistle on F1/F2, wind roar and tyre scrub
+- **Rain intensity** — drizzle to storm: more streaks, darker light, less grip, aquaplaning at speed, lightning and thunder
 - **Camera modes** — Orbit / Trackside / Cockpit / Drone
 
 ## Getting started
@@ -42,6 +44,8 @@ node scripts/verify-spa.mjs            # drives two laps of Spa in a real browse
 - `js/cfd-effect.js` — CFD pressure visualisation
 - `js/vehicle-model.js` — pure vehicle physics (aero, wheel loads, grip, driver model)
 - `js/telemetry-hud.js` — telemetry view-model + DOM mirror
+- `js/powertrain.js` — gearbox and engine speed (drives the gear readout and the engine sound)
+- `js/weather.js` — rain intensity → lighting, lightning timing
 - `js/circuit.js` — closed-circuit geometry: curvature, elevation, racing line
 - `js/lap-sim.js` — quasi-steady-state lap-time solver
 - `js/circuit-hud.js` — minimap + lap timing

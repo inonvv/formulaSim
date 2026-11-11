@@ -63,6 +63,7 @@ export function telemetryView(vs, type, setup) {
   if (vs?.overLimit) flags.push('OVER GRIP');
   else if (vs?.cornerLimited) flags.push('CORNER LIMIT');
   if (WHEELS.some(k => wheels[k].lifted)) flags.push('WHEEL LIFT');
+  if (vs?.aquaplaning) flags.push('AQUAPLANING');
 
   return {
     downforce: ((aero?.downforce ?? 0) / 1000).toFixed(1),

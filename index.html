@@ -271,6 +271,11 @@
             <span class="env-icon">🔬</span> CFD
           </button>
         </div>
+        <div id="rain-intensity-row" class="sub-ctrl" hidden>
+          <label class="group-label" for="rain-slider">RAIN INTENSITY — <span id="rain-label-val">70</span>%</label>
+          <input type="range" id="rain-slider" min="10" max="100" step="5" value="70" aria-label="Rain intensity percent" />
+          <div class="range-ends"><span>DRIZZLE</span><span>STORM</span></div>
+        </div>
         <label class="group-label">TURNS</label>
         <div class="btn-row" id="turn-btns">
           <button class="preset-btn turn-btn active" data-turn-mode="auto" aria-pressed="true">AUTO</button>
