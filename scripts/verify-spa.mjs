@@ -1,6 +1,6 @@
 /**
  * verify-spa.mjs — headless browser check of circuit mode on the real app:
- * select Spa, drive a full flying lap, compare with the solved ideal lap.
+ * select Spa, drive a run-up plus one full lap, compare with the solved ideal lap.
  *   npm start   (port 3000)   then   node scripts/verify-spa.mjs [outDir]
  */
 import { createRequire } from 'node:module';
@@ -23,6 +23,9 @@ await page.waitForFunction(() => window.__fsim?.state?.carGroup, null, { timeout
 
 // ── Select Spa, ask for full speed
 await page.click('.track-btn[data-track="spa"]');
+// Join 300 m before the line so the flying lap starts almost at once
+// (a standing-start lap first would double this script's run time).
+await page.evaluate(() => { const f = window.__fsim; f.trackPath.setCircuit(f.trackPath.circuit, f.trackPath.circuit.length - 300); });
 await page.evaluate(() => { const s = document.getElementById('speed-slider'); s.value = 350; s.dispatchEvent(new Event('input')); });
 await page.waitForFunction(() => window.__fsim.state.lapPlan, null, { timeout: 60000 });
 const ideal = await page.evaluate(() => window.__fsim.state.lapPlan.lapTime);
@@ -51,7 +54,7 @@ const shot = async (lapS, name) => {
   await page.waitForFunction((s) => { const f = window.__fsim; return f.state.lap.count >= 1 && f.trackPath.lapS >= s && f.trackPath.lapS < s + 400; }, lapS, { timeout: 900000 });
   await page.screenshot({ path: `${OUT}/${name}.png` });
 };
-// Lap 1 is from a standing start; lap 2 is the flying lap we time.
+// The first line crossing ends the 300 m run-up; the next full lap is timed.
 await shot(380, 'spa-la-source');
 await shot(1150, 'spa-raidillon');
 await shot(3850, 'spa-pouhon');

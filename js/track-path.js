@@ -72,6 +72,7 @@ export class TrackPath {
     this._circuit = null;
     this._lapOffset = 0;
     this._lapDist = 0;        // total metres driven on the circuit
+    this._lapStart = 0;       // lap distance where the car joined the circuit
   }
 
   get pose() { return this._car; }
@@ -83,9 +84,10 @@ export class TrackPath {
     return this._circuit ? this._circuit.wrap(this._lapOffset + this._car.s) : 0;
   }
 
-  /** Completed laps since the circuit was selected. */
+  /** Start/finish line crossings since the circuit was selected. */
   get lapCount() {
-    return this._circuit ? Math.floor((this._lapDist + 1e-6) / this._circuit.length) : 0;
+    return this._circuit
+      ? Math.floor((this._lapStart + this._lapDist + 1e-6) / this._circuit.length) : 0;
   }
 
   /**
@@ -97,6 +99,7 @@ export class TrackPath {
   setCircuit(circuit, startS = 0) {
     this._circuit = circuit || null;
     this._lapOffset = circuit ? circuit.wrap(startS) : 0;
+    this._lapStart = this._lapOffset;   // where on the lap the car joined
     this._lapDist = 0;
     this.turns = [];
     this._gapTimer = 0;

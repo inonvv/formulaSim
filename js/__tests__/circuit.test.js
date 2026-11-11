@@ -242,6 +242,17 @@ describe('TrackPath circuit mode', () => {
     expect(Math.hypot(tp.pose.x, tp.pose.z)).toBeLessThan(1.5);
     expect(tp.lapS).toBeLessThan(1);
   });
+  it('joining mid-lap: the lap counts when the start line is crossed, not after a full length', () => {
+    const c = buildCircuit(circleDef(100, 720));
+    const tp = new TrackPath(() => 0.5);
+    tp.setCircuit(c, c.length - 50);
+    expect(tp.lapCount).toBe(0);
+    for (let i = 0; i < 10; i++) tp.update(0.1, 40);    // 40 m — still before the line
+    expect(tp.lapCount).toBe(0);
+    for (let i = 0; i < 5; i++) tp.update(0.1, 40);     // 60 m — crossed
+    expect(tp.lapCount).toBe(1);
+    expect(tp.lapS).toBeCloseTo(10, 6);
+  });
   it('lap distance survives the floating-origin rebase', () => {
     const tp = new TrackPath(() => 0.5);
     tp.setCircuit(buildCircuit(SPA));
