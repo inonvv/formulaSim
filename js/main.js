@@ -30,6 +30,8 @@ import {
   createVehicleState, stepVehicle, lookAheadCap, defaultSetup, normalizeSetup, getVehicleParams,
 } from './vehicle-model.js';
 import { createTelemetryHud, telemetryView, vmaxLabel } from './telemetry-hud.js';
+import { createPowertrainState, stepPowertrain } from './powertrain.js';
+import { blendWeather, rainLightMix, createLightning } from './weather.js';
 import { buildCircuit } from './circuit.js';
 import { solveLap } from './lap-sim.js';
 import { createCircuitHud } from './circuit-hud.js';
@@ -207,6 +209,8 @@ const state = {
   // aeroSetups is keyed by car type so each car remembers its own setup.
   vehicle:    createVehicleState(),
   aeroSetups: {},         // { [carType]: {wing, rideHeightMm, drs, yawDeg} }
+  powertrain: createPowertrainState(),   // gear + engine rpm (powertrain.js)
+  rainIntensity: 0.7,     // 0..1 — how hard it rains while the rain env is on
   brakeHeat:  0,          // 0..1 disc temperature proxy driving the brake glow
   // Circuit mode: 'test' = the random-turn test track, 'spa' = a real lap.
   trackId:    'test',
@@ -232,6 +236,13 @@ if (window.innerWidth <= 640) {
   document.getElementById('telemetry').classList.add('collapsed');
   document.getElementById('telemetry-head').setAttribute('aria-expanded', 'false');
 }
+
+/** Road wetness for the vehicle model: false when dry, else the rain intensity. */
+function wetNow() {
+  return state.activeEnvs.has('rain') ? state.rainIntensity : false;
+}
+const lightning = createLightning();
+window.__fsim.lightning = lightning;   // verify-script hook
 
 /** The active car's aero setup (lazily seeded with the car's reference). */
 function currentSetup() {
@@ -264,7 +275,7 @@ let _capKey = '';
 function stepVehicleModel(dt) {
   const type  = state.carType;
   const setup = currentSetup();
-  const wet   = state.activeEnvs.has('rain');
+  const wet   = wetNow();
   const vs    = state.vehicle;
   const s0    = trackPath.pose.s;
   const kappa = trackPath.curvatureAt(s0);
@@ -572,12 +583,24 @@ function syncEffects() {
   // the vent stream is part of the flow visualisation, not a standalone env.
   vents.setVisible(state.activeEnvs.has('airflow') || state.activeEnvs.has('cfd'));
 
-  // Lighting per weather mode — values from scene-config.js
-  const w = state.activeEnvs.has('rain') ? WEATHER.rain : WEATHER.default;
+  rain.setIntensity?.(state.rainIntensity);
+  applyWeatherLight(0);
+}
+
+/**
+ * Lighting for the current weather — values from scene-config.js, blended
+ * toward the overcast table by how hard it is raining, plus a lightning
+ * flash on top. Called on every UI change and every frame of a storm.
+ */
+function applyWeatherLight(flash) {
+  const raining = state.activeEnvs.has('rain');
+  const w = raining
+    ? blendWeather(WEATHER.default, WEATHER.rain, rainLightMix(state.rainIntensity))
+    : WEATHER.default;
   ambientLight.color.set(w.ambientColor);
-  ambientLight.intensity           = w.ambientIntensity;
+  ambientLight.intensity           = w.ambientIntensity + 5 * flash;
   sunLight.intensity               = w.sunIntensity;
-  renderer.toneMappingExposure     = w.exposure;
+  renderer.toneMappingExposure     = w.exposure * (1 + 0.6 * flash);
 }
 
 /* ── Hover raycasts (shared 10 Hz listener) ──────────────────────
@@ -780,10 +803,12 @@ const GEARS = ['N', '1', '2', '3', '4', '5', '6', '7', '8'];
 function updateHUD(speed) {
   document.getElementById('speed-value').textContent = Math.round(speed);
 
-  const gear = gearFromSpeed(speed);
-  document.getElementById('gear-display').textContent = GEARS[gear];
+  // Gear and revs come from the gearbox model — the same state the engine
+  // sound is synthesised from, so what you see is what you hear.
+  const pt = state.powertrain;
+  document.getElementById('gear-display').textContent = GEARS[pt.gear] ?? String(pt.gear);
 
-  const rpmVal = rpmRatio(speed);
+  const rpmVal = pt.rpm01;
   const fill = document.getElementById('rpm-fill');
   fill.style.width  = `${rpmVal * 100}%`;
   fill.classList.toggle('redline', rpmVal > 0.88);
@@ -906,7 +931,7 @@ const TURN_CHIP_LABELS = { t5: '↩ TURNS 5/30s', t10: '↩ TURNS 10/30s', only:
 function updateChips() {
   const container = document.getElementById('effects-chips');
   container.innerHTML = '';
-  const labels = { airflow: '🌬 AIRFLOW', rain: '🌧 RAIN', cfd: '🔬 CFD' };
+  const labels = { airflow: '🌬 AIRFLOW', rain: `🌧 RAIN ${Math.round(state.rainIntensity * 100)}%`, cfd: '🔬 CFD' };
   state.activeEnvs.forEach(env => {
     const chip = document.createElement('div');
     chip.className = `chip chip-${env}`;
@@ -1271,6 +1296,16 @@ function animate() {
     try { vents.update(dt); }               catch (e) { console.error('[vents.update]', e); }
   }
 
+  // Storm: lightning flashes the whole scene, thunder follows the light.
+  if (state.activeEnvs.has('rain') && !state.paused) {
+    lightning.step(dt, state.rainIntensity);
+    if (lightning.takeThunder()) engineAudio.thunder(lightning.state.distance);
+    if (lightning.state.flash > 0 || state._flashOn) {
+      applyWeatherLight(lightning.state.flash);
+      state._flashOn = lightning.state.flash > 0;
+    }
+  }
+
   // Rain-on-visor lens: ramp toward on/off (tau 0.4 s — no pop when the
   // user switches camera or toggles rain) and only pay for the fullscreen
   // pass while it is actually visible.
@@ -1284,6 +1319,18 @@ function animate() {
   // Engine sound — mirrors the sim every frame: pitch from speed (gear
   // changes blip inside setSpeed), rain layer from the env toggle, paused
   // drops to idle. All no-ops until the pointerdown gesture unlock.
+  // Gearbox + load drive the synth: real rpm, throttle, tyre scrub, wind.
+  {
+    const vs = state.vehicle;
+    const pt = stepPowertrain(state.powertrain, state.carType, state.speed, state.paused ? 0 : vs.throttle);
+    const u = vs.usage;
+    engineAudio.setDrive({
+      throttle: vs.throttle, rpm: pt.rpm, rpm01: pt.rpm01, gear: pt.gear, shifted: pt.shifted,
+      speedMps: vs.v, usage: u ? Math.max(u.FL, u.FR, u.RL, u.RR) : 0,
+      wet: state.activeEnvs.has('rain'),
+    });
+  }
+  engineAudio.setRainIntensity(state.rainIntensity);
   engineAudio.setSpeed(state.speed);
   engineAudio.setRain(state.activeEnvs.has('rain'));
   engineAudio.setPaused(state.paused);
@@ -1624,8 +1671,24 @@ document.querySelectorAll('.env-btn').forEach(btn => {
     }
     updateChips();
     syncEffects();
+    syncRainUI();
   });
 });
+
+/* ── Rain intensity (shown while the rain env is on) ────────────── */
+const rainSlider = document.getElementById('rain-slider');
+function syncRainUI() {
+  document.getElementById('rain-intensity-row').hidden = !state.activeEnvs.has('rain');
+  rainSlider.value = Math.round(state.rainIntensity * 100);
+  document.getElementById('rain-label-val').textContent = Math.round(state.rainIntensity * 100);
+}
+rainSlider.addEventListener('input', () => {
+  state.rainIntensity = Number(rainSlider.value) / 100;
+  syncRainUI();
+  updateChips();
+  syncEffects();
+});
+window.__fsim.setRainIntensity = (i) => { rainSlider.value = Math.round(i * 100); rainSlider.dispatchEvent(new Event('input')); };
 
 /* ── Camera buttons ─────────────────────────────────────────────── */
 document.querySelectorAll('.cam-btn').forEach(btn => {
@@ -1670,6 +1733,8 @@ document.getElementById('reset-btn').addEventListener('click', () => {
     b.setAttribute('aria-pressed', 'false');
   });
   setTrack('test');
+  state.rainIntensity = 0.7;
+  syncRainUI();
   // Aero setups back to each car's reference.
   state.aeroSetups = {};
   syncAeroUI();

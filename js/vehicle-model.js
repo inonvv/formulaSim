@@ -249,12 +249,43 @@ export function wheelLoads(type, aero, ax = 0, ay = 0) {
   };
 }
 
+/**
+ * How wet the road is, 0 (dry) … 1 (monsoon). `wet` may be a boolean
+ * (true = a properly wet track, 0.75) or a rain intensity 0..1.
+ */
+export function wetLevel(wet) {
+  if (wet === true) return 0.75;
+  if (!wet || !Number.isFinite(wet)) return 0;
+  return clamp(wet, 0, 1);
+}
+
+/** Tyre grip multiplier on a wet road: 1 dry → ~0.58 in a downpour. */
+export function wetGripFactor(wet) {
+  const w = wetLevel(wet);
+  return w <= 0 ? 1 : 1 - 0.42 * Math.pow(w, 0.6);
+}
+
+/**
+ * Aquaplaning: in heavy rain (level > 0.5) above a critical speed the
+ * tyres can no longer clear the standing water and ride up on it. Grip
+ * falls away over the next 25 m/s; the heavier the rain, the lower the
+ * speed it starts at (85 → 55 m/s) and the more grip is lost (→ 40 %).
+ * @returns grip multiplier 0.6..1
+ */
+export function aquaplaneFactor(v, wet) {
+  const w = wetLevel(wet);
+  if (w <= 0.5) return 1;
+  const depth = (w - 0.5) / 0.5;
+  const vAq = 85 - 30 * depth;
+  return 1 - 0.4 * depth * clamp((v - vAq) / 25, 0, 1);
+}
+
 /** Tyre friction coefficient at a load — falls as the tyre is loaded up. */
 export function tireMu(type, fz, wet = false) {
   const p = getVehicleParams(type);
   const fz0 = p.mass * G / 4;
   const mu = p.mu * (1 - p.muLoadSens * (fz / fz0 - 1));
-  return Math.max(0.4, mu) * (wet ? 0.62 : 1);
+  return Math.max(0.4, mu) * wetGripFactor(wet);
 }
 
 /** Total horizontal force the four tyres can make at these loads [N]. */
@@ -271,7 +302,7 @@ export function maxLateralAccel(type, setup, v, wet = false) {
   // Two passes: grip → ay → lateral transfer → (slightly lower) grip.
   let ay = gripCapacity(type, wheelLoads(type, aero, 0, 0), wet) / p.mass;
   ay = gripCapacity(type, wheelLoads(type, aero, 0, ay), wet) / p.mass;
-  return ay;
+  return ay * aquaplaneFactor(v, wet);
 }
 
 /**
@@ -304,11 +335,12 @@ export function longAccel(type, setup, v, throttle, brake, wet = false) {
   const loads = wheelLoads(type, aero, 0, 0);
   const dragA = aero.drag / p.mass;
   if (brake > 0) {
-    return -(brake * gripCapacity(type, loads, wet) / p.mass) - dragA;
+    return -(brake * gripCapacity(type, loads, wet) * aquaplaneFactor(v, wet) / p.mass) - dragA;
   }
   const power    = p.powerKW * 1000 * p.driveEff * throttle;
   const fPower   = power / Math.max(v, 4);
-  const fTraction = tireMu(type, loads.RL, wet) * loads.RL + tireMu(type, loads.RR, wet) * loads.RR;
+  const fTraction = (tireMu(type, loads.RL, wet) * loads.RL + tireMu(type, loads.RR, wet) * loads.RR)
+    * aquaplaneFactor(v, wet);
   return Math.min(fPower, fTraction * (throttle > 0 ? 1 : 0)) / p.mass - dragA;
 }
 
@@ -422,6 +454,7 @@ export function stepVehicle(vs, inp) {
   vs.aero  = aero;
   vs.loads = wheelLoads(type, aero, vs.ax, vs.ay);
   vs.usage = tireUsage(type, vs.loads, vs.ax, vs.ay, wet);
+  vs.aquaplaning = aquaplaneFactor(vs.v, wet) < 0.97;
 
   // Chassis attitude from the same forces. Pitch: + = nose UP (squat).
   const D2R = Math.PI / 180;
@@ -441,7 +474,7 @@ export function stepVehicle(vs, inp) {
 export function lookAheadCap(type, setup, v, kappaAhead, wet = false, cache = null) {
   const p = getVehicleParams(type);
   // Conservative braking decel: mechanical grip only (aero is a bonus).
-  const aBrake = 0.85 * p.mu * (wet ? 0.62 : 1) * G;
+  const aBrake = 0.85 * p.mu * wetGripFactor(wet) * G;
   const reach = Math.min(260, Math.max(30, v * v / (2 * aBrake) + 15));
   let cap = Infinity;
   for (let ds = 0; ds <= reach; ds += 5) {

@@ -15,12 +15,25 @@
  *   shift pop:    (one-shot noise burst on upshift) ─ popBP ─ popGain ─ master
  *   idle wobble:  LFO 6 Hz ─ lfoGain (±1.5 Hz, fades out above sf 0.1) → fund.frequency
  *
+ * Driven mode (setDrive — main.js feeds the vehicle model + gearbox every
+ * frame) adds what a speed-only synth cannot do:
+ *   • pitch from real engine rpm (firing frequency), so an upshift drops
+ *     the note by the ratio step and braking steps back up through the box
+ *   • LOAD: on the throttle the engine is loud and bright; on a lift or
+ *     under braking it falls back, darkens and crackles on the overrun
+ *   • rasp voice ×1.5 (the uneven-order growl of a six), per-car level
+ *   • turbo whistle (F1 / F2) that spools with boost
+ *   • wind / road roar that grows with speed², brighter in the wet
+ *   • tyre scrub when the tyres are near their grip limit
+ * Without setDrive every legacy mapping below is unchanged.
+ *
  * All frequency/gain writes after init go through setTargetAtTime (τ 60 ms)
  * or the blip's exponential ramps — never direct `.value =` (zipper noise).
  * No per-frame node creation; the only post-build node is the one-shot
  * upshift pop source (per gear change, not per frame).
  */
 import { gearFromSpeed, rpmRatio, rpmInGear } from './physics.js';
+import { firingHz, getPowertrain } from './powertrain.js';
 
 export const AUDIO_STORE_KEY = 'fsim-audio';
 
@@ -79,6 +92,58 @@ const BLIP_LEN    = 0.08;    // s — shift-blip envelope
 const IDLE_LFO_HZ = 6;
 const IDLE_LFO_AMP = 1.5;    // Hz of wobble on the fundamental
 
+/* ── Driven-mode voice (per car) ─────────────────────────────────── */
+export const VOICES = {
+  F1: { rasp: 0.10, turbo: 1.0, crackle: 0.6, sub: 1.0 },
+  F2: { rasp: 0.16, turbo: 0.8, crackle: 0.4, sub: 1.0 },
+  F3: { rasp: 0.22, turbo: 0.0, crackle: 0.5, sub: 1.1 },
+  GT: { rasp: 0.34, turbo: 0.0, crackle: 0.9, sub: 1.3 },
+};
+const TURBO_MAX   = 0.035;   // whistle level at full boost
+const WIND_MAX    = 0.16;
+const SCRUB_MAX   = 0.12;
+const SCRUB_FROM  = 0.85;    // tyre usage where scrub starts
+const CRACKLE_RATE = 11;     // pops / s at full overrun
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+
+/**
+ * Fundamental [Hz] in driven mode: half the firing frequency (the saw's
+ * 2nd harmonic and the ×2 square then sit ON the firing frequency, which is
+ * the note you hear), kept in the synth's comfortable 28–420 Hz range.
+ */
+export function drivenFundamentalHz(type, rpm) {
+  return Math.min(420, Math.max(28, firingHz(type, rpm) / 2));
+}
+
+/** Engine loudness 0..1 from revs and load (throttle). */
+export function loadGain(rpm01, load) {
+  return (0.20 + 0.50 * clamp01(rpm01)) * (0.42 + 0.58 * clamp01(load));
+}
+
+/** Lowpass cut-off [Hz]: opens with revs AND load, never above 3640. */
+export function loadBrightnessHz(rpm01, load) {
+  const r = clamp01(rpm01), l = clamp01(load);
+  return 350 + 3290 * Math.min(1, r * (0.5 + 0.5 * l) + 0.1 * l);
+}
+
+/** Wind / road roar gain: ∝ v², louder on a wet road. */
+export function windGain(speedMps, wet) {
+  const g = WIND_MAX * Math.min(1, (speedMps / 90) ** 2);
+  return Math.min(WIND_MAX * 1.5, g * (wet ? 1.5 : 1));
+}
+
+/** Tyre scrub gain from the hardest-worked tyre's grip usage. */
+export function scrubGain(usage, speedMps, wet) {
+  const over = Math.max(0, (usage ?? 0) - SCRUB_FROM);
+  return Math.min(SCRUB_MAX, over * 0.6) * Math.min(1, speedMps / 15) * (wet ? 0.4 : 1);
+}
+
+/** Overrun crackle probability for this frame (0 on the throttle). */
+export function crackleChance(voice, rpm01, load, dt) {
+  if (load > 0.08 || rpm01 < 0.45) return 0;
+  return Math.min(1, CRACKLE_RATE * voice.crackle * clamp01(rpm01) * dt);
+}
+
 /* Arcade one-shots (game plan Phase B) */
 const COIN_BASE_HZ = 988;    // B5 — coin-pickup base pitch
 const COIN_GAIN    = 0.15;
@@ -117,6 +182,9 @@ export class EngineAudio {
     this._muted   = DEFAULT_SETTINGS.muted;
     this._volume  = DEFAULT_SETTINGS.volume;
     this._blipUntil = -1;
+    this._drive = null;      // setDrive payload — null ⇒ legacy speed-only mode
+    this._boost = 0;         // turbo spool state 0..1
+    this._rng = Math.random; // injectable (tests)
   }
 
   /** Build the graph on first call (must follow a user gesture). */
@@ -213,6 +281,46 @@ export class EngineAudio {
     n.rainLP.connect(n.rainGain);
     n.rainGain.connect(n.masterGain);
 
+    // ── Driven-mode layers (silent until setDrive feeds them) ─────
+    // Rasp: ×1.5 saw — the uneven-order growl between firing pulses.
+    n.rasp = ctx.createOscillator();
+    n.rasp.type = 'sawtooth';
+    n.rasp.frequency.value = f0 * 1.5;
+    n.raspGain = ctx.createGain();
+    n.raspGain.gain.value = 0;
+    n.rasp.connect(n.raspGain); n.raspGain.connect(n.engineGain);
+
+    // Turbo whistle: pure tone, bypasses the engine lowpass.
+    n.turbo = ctx.createOscillator();
+    n.turbo.type = 'sine';
+    n.turbo.frequency.value = 1400;
+    n.turboGain = ctx.createGain();
+    n.turboGain.gain.value = 0;
+    n.turbo.connect(n.turboGain); n.turboGain.connect(n.masterGain);
+
+    // Wind / road roar: noise → lowpass → windGain.
+    n.windSrc = ctx.createBufferSource();
+    n.windSrc.buffer = n.noiseBuffer;
+    n.windSrc.loop = true;
+    n.windLP = ctx.createBiquadFilter();
+    n.windLP.type = 'lowpass';
+    n.windLP.frequency.value = 300;
+    n.windGain = ctx.createGain();
+    n.windGain.gain.value = 0;
+    n.windSrc.connect(n.windLP); n.windLP.connect(n.windGain); n.windGain.connect(n.masterGain);
+
+    // Tyre scrub: noise → resonant bandpass → scrubGain.
+    n.scrubSrc = ctx.createBufferSource();
+    n.scrubSrc.buffer = n.noiseBuffer;
+    n.scrubSrc.loop = true;
+    n.scrubBP = ctx.createBiquadFilter();
+    n.scrubBP.type = 'bandpass';
+    n.scrubBP.frequency.value = 900;
+    n.scrubBP.Q.value = 3.5;
+    n.scrubGain = ctx.createGain();
+    n.scrubGain.gain.value = 0;
+    n.scrubSrc.connect(n.scrubBP); n.scrubBP.connect(n.scrubGain); n.scrubGain.connect(n.masterGain);
+
     // Upshift "pop" chain — pre-built; only the one-shot source is per-shift.
     n.popBP = ctx.createBiquadFilter();
     n.popBP.type = 'bandpass';
@@ -224,7 +332,8 @@ export class EngineAudio {
     n.popGain.connect(n.masterGain);
 
     n.fund.start(); n.harm2.start(); n.sub.start(); n.lfo.start();
-    n.exhaustSrc.start(); n.rainSrc.start();
+    n.rasp.start(); n.turbo.start();
+    n.exhaustSrc.start(); n.rainSrc.start(); n.windSrc.start(); n.scrubSrc.start();
 
     this.nodes = n;
   }
@@ -238,9 +347,29 @@ export class EngineAudio {
   }
 
   _engineGainTarget() {
+    if (this._drive) {
+      const d = this._driveNow();
+      const base = loadGain(d.rpm01, d.load);
+      return this._paused ? base * 0.5 : base;
+    }
     const sf = rpmRatio(this._effSpeed());
     const base = 0.22 + 0.55 * sf;
     return this._paused ? base * 0.5 : base;
+  }
+
+  /** Driven-mode inputs as the synth should hear them (paused ⇒ idling). */
+  _driveNow() {
+    const d = this._drive;
+    if (this._paused) {
+      return { rpm: getPowertrain(this._carType).idle, rpm01: 0, load: 0, speedMps: 0, usage: 0, wet: d.wet };
+    }
+    return { rpm: d.rpm, rpm01: clamp01(d.rpm01), load: clamp01(d.throttle), speedMps: d.speedMps || 0, usage: d.usage || 0, wet: !!d.wet };
+  }
+
+  _fundHz() {
+    return this._drive
+      ? drivenFundamentalHz(this._carType, this._driveNow().rpm)
+      : fundamentalHz(this._carType, this._effSpeed());
   }
 
   /* ── API ───────────────────────────────────────────────────────── */
@@ -248,6 +377,7 @@ export class EngineAudio {
   /** Store speed; a gear-band crossing triggers the shift blip. */
   setSpeed(kmh) {
     this._speed = kmh;
+    if (this._drive) return;            // driven mode: the gearbox reports its own shifts
     const gear = gearFromSpeed(kmh);
     if (gear !== this._gear) {
       const up = gear > this._gear;
@@ -256,8 +386,50 @@ export class EngineAudio {
     }
   }
 
+  /**
+   * Feed the vehicle model + gearbox (driven mode). Pass null to return to
+   * the legacy speed-only mapping.
+   * @param {{throttle:number, rpm:number, rpm01:number, gear:number,
+   *          shifted:number, speedMps:number, usage:number, wet:boolean}|null} d
+   */
+  setDrive(d) {
+    if (!d) { this._drive = null; return; }
+    this._drive = d;
+    if (d.gear !== this._gear) this._gear = d.gear;
+    if (d.shifted && this.nodes && !this._paused) this._blip(d.shifted > 0);
+  }
+
   setCarType(type) { this._carType = type; }
   setRain(on)      { this._rain = !!on; }
+  /** Rain loudness 0..1 — 1 (default) keeps the original level exactly. */
+  setRainIntensity(i) { this._rainI = Math.min(1, Math.max(0, Number.isFinite(i) ? i : 1)); }
+  _rainScale() { return 0.4 + 0.6 * (this._rainI ?? 1); }
+
+  /**
+   * Thunder: a low rumble with a slow tail. One-shot nodes per strike
+   * (never per frame); scheduled writes only. `distance` 0..1 makes it
+   * quieter and duller, like a strike further off.
+   */
+  thunder(distance = 0.5) {
+    if (!this.nodes) return;
+    const n = this.nodes, t = this.ctx.currentTime;
+    const d = Math.min(1, Math.max(0, distance));
+    const src = this.ctx.createBufferSource();
+    src.buffer = n.noiseBuffer;
+    src.loop = true;
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(220 - 120 * d, t);
+    const g = this.ctx.createGain();
+    const peak = 0.5 - 0.3 * d;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.06);
+    g.gain.exponentialRampToValueAtTime(peak * 0.35, t + 0.5);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 2.6);
+    src.connect(lp); lp.connect(g); g.connect(n.masterGain);
+    src.start(t);
+    src.stop(t + 2.7);
+  }
   setPaused(p)     { this._paused = !!p; }
 
   setMuted(m) {
@@ -287,11 +459,14 @@ export class EngineAudio {
     g.exponentialRampToValueAtTime(base * 0.35, t + BLIP_LEN * 0.375);
     g.exponentialRampToValueAtTime(base, t + BLIP_LEN);
 
-    const freq = fundamentalHz(this._carType, this._effSpeed());
+    const freq = this._fundHz();
     const f = n.fund.frequency;
     f.cancelScheduledValues(t);
     f.setValueAtTime(freq, t);
-    f.exponentialRampToValueAtTime(freq * 0.88, t + BLIP_LEN * 0.375);
+    // Upshift (and every legacy blip): ignition cut, the note sags 12 %.
+    // Driven downshift: a rev-matching blip — the note flares up instead.
+    const flare = (this._drive && !up) ? 1.10 : 0.88;
+    f.exponentialRampToValueAtTime(freq * flare, t + BLIP_LEN * 0.375);
     f.exponentialRampToValueAtTime(freq, t + BLIP_LEN);
 
     this._blipUntil = t + BLIP_LEN;
@@ -344,9 +519,10 @@ export class EngineAudio {
     const t   = this.ctx.currentTime;
     const eff = this._effSpeed();
     const sf  = rpmRatio(eff);
+    const inBlip = t < this._blipUntil;
+    if (this._drive) { this._updateDriven(_dt, t, sf, inBlip); return; }
     const rig = rpmInGear(eff);
     const freq = fundamentalHz(this._carType, eff);
-    const inBlip = t < this._blipUntil;
 
     // Blip owns engineGain + fund.frequency until its ramps finish.
     if (!inBlip) {
@@ -378,7 +554,61 @@ export class EngineAudio {
 
     // Rain layer: bodywork patter, exactly 0.04 + 0.06·sf when raining.
     n.rainGain.gain.setTargetAtTime(
-      this._rain ? 0.04 + 0.06 * sf : 0, t, SMOOTH_TAU);
+      this._rain ? (0.04 + 0.06 * sf) * this._rainScale() : 0, t, SMOOTH_TAU);
+  }
+
+  /** Driven mode: every layer follows revs, load, speed and grip. */
+  _updateDriven(dt, t, sf, inBlip) {
+    const n = this.nodes;
+    const d = this._driveNow();
+    const voice = VOICES[this._carType] || VOICES.F1;
+    const freq = drivenFundamentalHz(this._carType, d.rpm);
+    const set = (param, v) => param.setTargetAtTime(v, t, SMOOTH_TAU);
+
+    if (!inBlip) {
+      set(n.fund.frequency, freq);
+      set(n.engineGain.gain, this._engineGainTarget());
+    }
+    set(n.harm2.frequency, freq * 2);
+    set(n.sub.frequency, freq * 0.5);
+    set(n.rasp.frequency, freq * 1.5);
+    set(n.subGain.gain, SUB_GAIN * Math.min(1.4, voice.sub) * (1 - 0.35 * d.rpm01));
+
+    // Idle wobble only at tick-over.
+    set(n.lfoGain.gain, IDLE_LFO_AMP * Math.max(0, 1 - d.rpm01 / 0.08) * (1 - d.load));
+
+    set(n.lowpass.frequency, loadBrightnessHz(d.rpm01, d.load));
+    set(n.harm2Gain.gain, HARM2_GAIN * (1 - 0.45 * d.rpm01) * (0.6 + 0.4 * d.load));
+    set(n.raspGain.gain, voice.rasp * (0.3 + 0.7 * d.load) * Math.sqrt(d.rpm01));
+
+    // Exhaust rumble follows revs; it thins out off the throttle.
+    set(n.exhaustBP.frequency, 90 + 170 * d.rpm01);
+    set(n.noiseGain.gain, NOISE_MAX * (0.15 + 0.85 * d.rpm01) * (0.5 + 0.5 * d.load));
+
+    // Turbo: boost builds with load × revs, spools up slower than it dumps.
+    const want = voice.turbo * d.load * (0.25 + 0.75 * d.rpm01);
+    const tau = want > this._boost ? 0.35 : 0.15;
+    this._boost += (want - this._boost) * Math.min(1, (dt || 0) / tau);
+    set(n.turbo.frequency, 1400 + 5200 * this._boost);
+    set(n.turboGain.gain, TURBO_MAX * this._boost * this._boost);
+
+    // Wind / road roar and tyre scrub.
+    set(n.windLP.frequency, (d.wet ? 520 : 300) + 1400 * Math.min(1, d.speedMps / 90));
+    set(n.windGain.gain, windGain(d.speedMps, d.wet));
+    set(n.scrubBP.frequency, 800 + 500 * clamp01(d.usage));
+    set(n.scrubGain.gain, scrubGain(d.usage, d.speedMps, d.wet));
+
+    // Rain layer keeps its speed mapping.
+    set(n.rainGain.gain, this._rain ? (0.04 + 0.06 * sf) * this._rainScale() : 0);
+
+    // Overrun crackle: unburnt fuel popping in the exhaust on a closed throttle.
+    if (!this._paused && this._rng() < crackleChance(voice, d.rpm01, d.load, dt || 0)) {
+      const src = this.ctx.createBufferSource();
+      src.buffer = n.noiseBuffer;
+      src.connect(n.popBP);
+      src.start(t);
+      src.stop(t + 0.018 + 0.03 * this._rng());
+    }
   }
 
   /** Verify-script window: current state without poking at private nodes. */
@@ -387,7 +617,10 @@ export class EngineAudio {
       ctxState:      this.ctx ? this.ctx.state : 'idle',
       masterGain:    this.nodes ? this.nodes.masterGain.gain.value : null,
       masterTarget:  this._masterTarget(),
-      fundamentalHz: fundamentalHz(this._carType, this._effSpeed()),
+      fundamentalHz: this._fundHz(),
+      driven:        !!this._drive,
+      load:          this._drive ? this._driveNow().load : null,
+      boost:         this._boost,
       rainGain:      this.nodes ? this.nodes.rainGain.gain.value : null,
       gear:          this._gear,
       muted:         this._muted,
@@ -400,7 +633,8 @@ export class EngineAudio {
     if (n) {
       try {
         n.fund.stop(); n.harm2.stop(); n.sub.stop(); n.lfo.stop();
-        n.exhaustSrc.stop(); n.rainSrc.stop();
+        n.rasp.stop(); n.turbo.stop();
+        n.exhaustSrc.stop(); n.rainSrc.stop(); n.windSrc.stop(); n.scrubSrc.stop();
       } catch { /* already stopped */ }
     }
     if (this.ctx) { try { this.ctx.close(); } catch { /* closed */ } }

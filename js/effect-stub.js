@@ -33,6 +33,7 @@ export class EffectStub {
   setCrosswind() {}
   setSideslip() {}
   setAeroSetup() {}
+  setIntensity() {}
   setFlowCoupling() {}
   sampleFlowAt() { return { vx: 0, vy: 0, vz: 0 }; }
   getFlowEnvelope() { return null; }
