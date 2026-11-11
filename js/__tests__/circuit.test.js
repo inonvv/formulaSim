@@ -265,3 +265,36 @@ describe('TrackPath circuit mode', () => {
     expect(tp.curvatureAt(tp.pose.s)).toBeCloseTo(tp.circuit.kappaAt(2400), 9);
   });
 });
+
+describe('TrackPath elevation', () => {
+  it('is flat (0 height, 0 grade) off-circuit', () => {
+    const tp = new TrackPath(() => 0.5);
+    expect(tp.heightAt(50)).toBe(0);
+    expect(tp.gradeAt(50)).toBe(0);
+  });
+  it('heights are relative to s = 0 and match the circuit profile', () => {
+    const spa = buildCircuit(SPA);
+    const tp = new TrackPath(() => 0.5);
+    tp.setCircuit(spa, 1000);
+    expect(tp.heightAt(0)).toBe(0);
+    expect(tp.heightAt(300)).toBeCloseTo(spa.elevationAt(1300) - spa.elevationAt(1000), 9);
+    expect(tp.heightAt(-100)).toBeCloseTo(spa.elevationAt(900) - spa.elevationAt(1000), 9);
+    expect(tp.gradeAt(200)).toBeCloseTo(spa.gradeAt(1200), 12);
+    expect(tp.gradeAt(200)).toBeGreaterThan(0.1);        // Raidillon climbs
+  });
+  it('world heights are continuous across a floating-origin rebase', () => {
+    const spa = buildCircuit(SPA);
+    const tp = new TrackPath(() => 0.5);
+    tp.setCircuit(spa, 600);
+    for (let i = 0; i < 124; i++) tp.update(0.1, 80);    // 992 m — just before the rebase
+    const ahead = 60;
+    // Height of a point 60 m ahead RELATIVE TO THE CAR must not jump.
+    const rel = () => tp.heightAt(tp.pose.s + ahead) - tp.heightAt(tp.pose.s);
+    const before = rel();
+    tp.update(0.1, 80);
+    expect(tp.rebaseIfNeeded()).toBe(true);
+    expect(tp.heightAt(0)).toBe(0);
+    expect(Math.abs(rel() - before)).toBeLessThan(0.5);  // 8 m further along a smooth profile
+    expect(rel()).toBeCloseTo(spa.elevationAt(tp.lapS + ahead) - spa.elevationAt(tp.lapS), 9);
+  });
+});

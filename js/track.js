@@ -19,7 +19,7 @@ import {
 import { HORIZON_COLOR } from './scene-config.js';
 
 const ROAD_W      = 30;     // full ground width (m)
-const GRASS_W     = 160;    // grass apron width (m) — fills the view to the sides
+const GRASS_W     = 320;    // grass apron width (m) — fills the view to the sides
 const RIBBON_DS   = 2;      // ground ribbon row spacing (m)
 const SURFACE_Y   = -0.34;
 const GRASS_Y     = SURFACE_Y - 0.04;   // under the asphalt, no z-fight
@@ -225,6 +225,20 @@ export function buildSkyline() {
   disc.position.y = GRASS_Y - 0.06;
   group.add(disc);
 
+  // Skirt: the same hazy green continued straight down from the foot of the
+  // panorama. Invisible on flat ground (the disc covers it); on a circuit
+  // with elevation the disc is dropped below the lowest road in view
+  // (setGroundDrop) and the world pitches with the slope — the skirt keeps
+  // the horizon closed instead of showing sky under the hills.
+  const SKIRT_H = 140;
+  const skirtGeo = new THREE.CylinderGeometry(SKYLINE_R, SKYLINE_R, SKIRT_H, 64, 1, true);
+  const skirt = new THREE.Mesh(skirtGeo, new THREE.MeshBasicMaterial({ color: 0x4a7a40, side: THREE.BackSide, fog: false }));
+  skirt.position.y = GRASS_Y - 0.1 - SKIRT_H / 2;
+  group.add(skirt);
+  const discBaseY = disc.position.y;
+  /** Lower the far ground by d metres (0 = flat test track). */
+  function setGroundDrop(d) { disc.position.y = discBaseY - Math.max(0, d || 0); }
+
   const cylGeo = new THREE.CylinderGeometry(SKYLINE_R, SKYLINE_R, SKYLINE_H, 64, 1, true);
   // fog: false — the far ring IS the horizon backdrop; the arcade fog ends
   // at 330 < 350, so a fogged panorama would collapse to a flat colour band
@@ -250,11 +264,11 @@ export function buildSkyline() {
   near.visible = false;
   group.add(near);
 
-  return { group, near };
+  return { group, near, setGroundDrop };
 }
 
 /* ── Ground ribbon — path-following textured strip (asphalt or grass) ── */
-function buildGroundRibbon(groundTex, width = ROAD_W, y = SURFACE_Y, uRepeat = 18) {
+function buildGroundRibbon(groundTex, width = ROAD_W, y = SURFACE_Y, uRepeat = 18, matOpts = {}) {
   const rows = poolSize(RIBBON_DS);            // fixed vertex count
   const positions = new Float32Array(rows * 2 * 3);
   const uvs       = new Float32Array(rows * 2 * 2);
@@ -273,6 +287,7 @@ function buildGroundRibbon(groundTex, width = ROAD_W, y = SURFACE_Y, uRepeat = 1
     roughness: 0.88,
     metalness: 0.04,
     side: THREE.DoubleSide,
+    ...matOpts,
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
@@ -286,8 +301,9 @@ function buildGroundRibbon(groundTex, width = ROAD_W, y = SURFACE_Y, uRepeat = 1
       const L = rowPose(path, s, -width / 2);
       const R = rowPose(path, s,  width / 2);
       const i = r * 2 * 3;
-      positions[i]     = L.x; positions[i + 1] = y; positions[i + 2] = L.z;
-      positions[i + 3] = R.x; positions[i + 4] = y; positions[i + 5] = R.z;
+      const h = y + path.heightAt(s);   // real road height (0 on the flat test track)
+      positions[i]     = L.x; positions[i + 1] = h; positions[i + 2] = L.z;
+      positions[i + 3] = R.x; positions[i + 4] = h; positions[i + 5] = R.z;
       const j = r * 2 * 2;
       // matches the old PlaneGeometry(30,70) + repeat(18,36): one tile ≈ 1.67×1.94 m
       const v = s / (70 / 36);
@@ -329,9 +345,15 @@ function makeRowPool({ spacing, build, place }) {
 
 /* Position a row object at grid line k with lateral offset and yaw. */
 function placeRow(obj, k, spacing, lateralX, y, path) {
-  const rp = rowPose(path, k * spacing, lateralX);
-  obj.position.set(rp.x, y, rp.z);
+  const s = k * spacing;
+  const rp = rowPose(path, s, lateralX);
+  obj.position.set(rp.x, y + path.heightAt(s), rp.z);
+  // Yaw with the road, then pitch with its slope (YXZ: the pitch is about
+  // the row's own lateral axis) so paint and kerbs lie ON a gradient
+  // instead of half-buried in it. Both are 0 on the flat test track.
+  obj.rotation.order = 'YXZ';
   obj.rotation.y = rp.rotY;
+  obj.rotation.x = Math.atan(path.gradeAt(s));
 }
 
 export function buildTrack() {
@@ -341,7 +363,11 @@ export function buildTrack() {
   // Grass apron first (renders under the asphalt): same path-following
   // ribbon, much wider, slightly lower — replaces the bare sky-bright void
   // either side of the road. Tile density matches the asphalt (~1.67 m/tile).
-  const grass = buildGroundRibbon(makeGrassTexture(), GRASS_W, GRASS_Y, GRASS_W / (30 / 18));
+  // Matte, no sky reflection: at grazing angles the environment map washed
+  // the grass out to near-white, which read as a pale strip against the
+  // (unlit) far ground wherever the two met.
+  const grass = buildGroundRibbon(makeGrassTexture(), GRASS_W, GRASS_Y, GRASS_W / (30 / 18),
+    { roughness: 1, metalness: 0, envMapIntensity: 0.12, color: 0x537649 });
   grp.add(grass.mesh);
 
   const groundTex = makeAsphaltTexture();

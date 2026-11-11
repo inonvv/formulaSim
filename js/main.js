@@ -1056,16 +1056,23 @@ function updateTrack(dt) {
   if (trackPath.rebaseIfNeeded()) coinField.rebase(sPreRebase);
   const w = trackPath.worldTransform();
   trackGroup.rotation.y = w.rotY;
-  // Circuit gradient: the car stays level at the origin and the WORLD
-  // pitches about it by the local slope (+ = road ahead climbs). Euler XYZ
-  // applies the yaw first, then this pitch; the translation is pitched too.
+  // Circuit elevation. Every row of track carries its REAL height
+  // (track.js reads trackPath.heightAt), so crests and dips are true
+  // geometry. The car never moves or tilts: the whole world — track AND
+  // horizon — is lowered by the car's height and pitched by −slope about
+  // the car, so the road under the wheels is level and everything else
+  // sits where the terrain puts it. Euler XYZ applies the yaw first, then
+  // this pitch; the translation is pitched with it.
   const circuitNow = trackPath.circuit;
   const pitchTarget = circuitNow ? Math.atan(circuitNow.gradeAt(trackPath.lapS)) : 0;
   state.gradeVis += (pitchTarget - state.gradeVis) * Math.min(1, dt / 0.25);
   if (Math.abs(state.gradeVis) < 1e-5 && pitchTarget === 0) state.gradeVis = 0;
-  const gp = state.gradeVis;
-  trackGroup.rotation.x = gp;
-  trackGroup.position.set(w.x, -w.z * Math.sin(gp), w.z * Math.cos(gp));
+  const phi = -state.gradeVis;
+  const hCar = trackPath.heightAt(trackPath.pose.s);
+  const cPhi = Math.cos(phi), sPhi = Math.sin(phi);
+  trackGroup.rotation.x = phi;
+  trackGroup.position.set(w.x, -hCar * cPhi - w.z * sPhi, -hCar * sPhi + w.z * cPhi);
+  skyline.group.rotation.x = phi;
   // Lap clock + circuit HUD.
   if (circuitNow) {
     state.lap.time += dt;
@@ -1527,6 +1534,10 @@ function setTrack(id) {
   // void — level it now rather than easing out of a hill that is gone.
   state.gradeVis = 0;
   trackGroup.rotation.x = 0;
+  skyline.group.rotation.x = 0;
+  // Far ground drops below the lowest road that can be in view on a
+  // circuit (≈18 % × 160 m ahead), so a descent is never hidden under it.
+  skyline.setGroundDrop(circuit ? 45 : 0);
   document.body.classList.toggle('on-circuit', !!circuit);
   document.querySelectorAll('.track-btn').forEach(b => {
     const on = b.dataset.track === id;

@@ -73,6 +73,7 @@ export class TrackPath {
     this._lapOffset = 0;
     this._lapDist = 0;        // total metres driven on the circuit
     this._lapStart = 0;       // lap distance where the car joined the circuit
+    this._h0 = 0;             // circuit elevation at track-space s = 0
   }
 
   get pose() { return this._car; }
@@ -100,6 +101,7 @@ export class TrackPath {
     this._circuit = circuit || null;
     this._lapOffset = circuit ? circuit.wrap(startS) : 0;
     this._lapStart = this._lapOffset;   // where on the lap the car joined
+    this._h0 = circuit ? circuit.elevationAt(this._lapOffset) : 0;
     this._lapDist = 0;
     this.turns = [];
     this._gapTimer = 0;
@@ -126,6 +128,20 @@ export class TrackPath {
   }
 
   _uniform(a, b) { return a + this._rng() * (b - a); }
+
+  /**
+   * Road height [m] at track-space s, relative to the height at s = 0 of the
+   * current epoch (so rows keep their y until the next rebase). 0 off-circuit.
+   */
+  heightAt(s) {
+    if (!this._circuit) return 0;
+    return this._circuit.elevationAt(this._lapOffset + s) - this._h0;
+  }
+
+  /** Road gradient dh/ds at track-space s (+ = uphill). 0 off-circuit. */
+  gradeAt(s) {
+    return this._circuit ? this._circuit.gradeAt(this._lapOffset + s) : 0;
+  }
 
   /* κ(s) from the emitted turn list (turns never overlap). */
   curvatureAt(s) {
@@ -297,7 +313,10 @@ export class TrackPath {
     this.turns = this.turns
       .filter(t => t.s1 > sc - 50)
       .map(t => ({ ...t, s0: t.s0 - sc, s1: t.s1 - sc, emitS: t.emitS - sc }));
-    if (this._circuit) this._lapOffset = this._circuit.wrap(this._lapOffset + sc);
+    if (this._circuit) {
+      this._lapOffset = this._circuit.wrap(this._lapOffset + sc);
+      this._h0 = this._circuit.elevationAt(this._lapOffset);   // heights re-root with s
+    }
     const seed = remap(this._car);
     this._knots = [{ s: 0, x: seed.x, z: seed.z, theta: seed.theta }];
     this._knotsBack = [];
@@ -321,7 +340,9 @@ export function rowPose(path, s, lateralX) {
 
 /* ── Sliding furniture window (row pools) ────────────────────────── */
 
-export const WINDOW_BEHIND = 35;  // m of track kept behind the car
+export const WINDOW_BEHIND = 120; // m of track kept behind the car — orbit /
+                                  // trackside cameras look BACK along the
+                                  // road; at 35 m it visibly ended there
 export const WINDOW_AHEAD  = 160; // m ahead — the row-window edge must sit
                                   // near the horizon: at 41 m the road/grass
                                   // visibly ENDED at a border line in front
