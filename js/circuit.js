@@ -94,6 +94,45 @@ export function buildCircuit(def, ds = 5) {
     return table[i % N] * (1 - t) + table[(i + 1) % N] * t;
   };
 
+  // ── Side room: how far the ground to each side belongs to THIS stretch
+  // of road before another stretch takes over. A lap doubles back on itself
+  // (hairpins, parallel straights); without this a wide grass verge from
+  // one leg lies across the asphalt of the other. For every sample, the
+  // nearest other piece of track roughly abeam (within ±ABEAM m along the
+  // tangent, more than MIN_GAP m away along the lap) on each side.
+  const ABEAM = 22, MIN_GAP = 45;
+  const roomL = new Float32Array(N).fill(Infinity), roomR = new Float32Array(N).fill(Infinity);
+  const nbL = new Int32Array(N).fill(-1), nbR = new Int32Array(N).fill(-1);
+  {
+    const gap = Math.ceil(MIN_GAP / step);
+    for (let i = 0; i < N; i++) {
+      const tx = at(x, i + 1) - at(x, i - 1), ty = at(y, i + 1) - at(y, i - 1);
+      const tl = Math.hypot(tx, ty) || 1;
+      const ux = tx / tl, uy = ty / tl;          // tangent; left normal = (−uy, ux)
+      for (let j = 0; j < N; j++) {
+        const d = Math.abs(j - i);
+        if (Math.min(d, N - d) <= gap) continue;
+        const dx = x[j] - x[i], dy = y[j] - y[i];
+        const along = dx * ux + dy * uy;
+        if (along > ABEAM || along < -ABEAM) continue;
+        const left = -dx * uy + dy * ux;         // + = to the left
+        if (left > 2 && left < roomL[i]) { roomL[i] = left; nbL[i] = j; }
+        else if (left < -2 && -left < roomR[i]) { roomR[i] = -left; nbR[i] = j; }
+      }
+    }
+    // The verge edge must not saw-tooth from sample to sample: take the
+    // tightest room within ±4 samples.
+    for (const [room, nb] of [[roomL, nbL], [roomR, nbR]]) {
+      const src = Float32Array.from(room), srcNb = Int32Array.from(nb);
+      for (let i = 0; i < N; i++) {
+        for (let k = -4; k <= 4; k++) {
+          const j = ((i + k) % N + N) % N;
+          if (src[j] < room[i]) { room[i] = src[j]; nb[i] = srcNb[j]; }
+        }
+      }
+    }
+  }
+
   const corners = def.corners || [];
   return {
     id: def.id, name: def.name, length, step, count: N, widthM: def.widthM ?? 12,
@@ -103,6 +142,20 @@ export function buildCircuit(def, ds = 5) {
     xyAt: (s) => ({ x: lerpTable(x, s), y: lerpTable(y, s) }),
     elevationAt,
     gradeAt: (s) => (elevationAt(s + 2.5) - elevationAt(s - 2.5)) / 5,
+    /**
+     * Room to one side of the line at lap distance s (side +1 = right,
+     * −1 = left): { room, dh } — distance [m] to the nearest OTHER stretch
+     * of track abeam (Infinity if none) and how much higher (+) that
+     * stretch is. The ground between two stretches is shared half-and-half.
+     */
+    sideRoomAt: (sIn, side) => {
+      const f = (((sIn % length) + length) % length) / step;
+      const i = Math.round(f) % N;
+      const room = side > 0 ? roomR[i] : roomL[i];
+      const j = side > 0 ? nbR[i] : nbL[i];
+      if (j < 0 || !Number.isFinite(room)) return { room: Infinity, dh: 0 };
+      return { room, dh: elevationAt(j * step) - elevationAt(i * step) };
+    },
     /** Signed slide of the driven line from the centreline [m], + = left. */
     lineOffsetAt: (s) => (lineOffset ? lerpTable(lineOffset, s) : 0),
     /**
