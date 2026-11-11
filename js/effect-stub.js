@@ -34,6 +34,7 @@ export class EffectStub {
   setSideslip() {}
   setAeroSetup() {}
   setIntensity() {}
+  setTurnFlow() {}
   setFlowCoupling() {}
   sampleFlowAt() { return { vx: 0, vy: 0, vz: 0 }; }
   getFlowEnvelope() { return null; }

@@ -13,6 +13,7 @@
  */
 
 import * as THREE from 'three';
+import { flowYawAt, localQScale } from './flow-asymmetry.js';
 import { topViewVelocity, pressureCoeff, cpToColor, vortexVelocity, sumVelocity } from './airflow-core.js';
 
 /* ── Helpers ──────────────────────────────────────────────────────── */
@@ -603,8 +604,13 @@ export function computePatchCp(p, lx, ly, speedFactor, modifiers = [], vortexCor
  *                                β = atan2(−vx, vFwd): strafe right (vx > 0)
  *                                ⇒ β < 0 ⇒ the +x side face gains impact.
  */
-export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor, shadow = 1, beta = 0, aero = null) {
+export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor, shadow = 1, beta = 0, aero = null, turn = null) {
   if (!speedFactor) return 0;
+  // Cornering (flow-asymmetry.js): the air arrives on a curve. The flow
+  // yaw varies along the car — and is used as-is, without the 5° arcade
+  // gate — and the local dynamic pressure rises toward the outside of the
+  // turn. `turn` = { kappa, slip, zRear }; null ⇒ straight-line flow.
+  if (turn) beta = flowYawAt(z, turn.kappa, turn.slip, turn.zRear) + beta;
   // Aero-setup gains (vehicle-model.js aeroCoeffs().gains): wing level and
   // DRS scale the wing suction peaks, dynamic ride height the underbody.
   const gFront = aero?.frontWing ?? 1;
@@ -685,7 +691,7 @@ export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor
     // suppressed on wing suction sides (accelerating flow, not blunt-body).
     // Arcade sideslip (Phase C): above the 5° gate the flow dir rotates to
     // (sinβ, 0, cosβ) — facing = −n·d picks up the strafe wind's side bias.
-    const facing = (Math.abs(beta) > SIDESLIP_GATE
+    const facing = ((turn ? beta !== 0 : Math.abs(beta) > SIDESLIP_GATE)
       ? Math.max(0, -(nx * Math.sin(beta) + nz * Math.cos(beta)))
       : Math.max(0, -nz)) * shadow;
     if (facing > 0) {
@@ -713,6 +719,9 @@ export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor
   // suction and the underbody ground-effect gain.
   if (leW > 0) cp = cp + (0.90 - cp) * leW;
 
+  // Outside of the turn meets faster air ⇒ every pressure there is larger.
+  if (turn) cp *= localQScale(x, turn.kappa);
+
   return cp * speedFactor;
 }
 
@@ -730,10 +739,10 @@ export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor
  * @param {number} beta   — sideslip the surface was painted with
  * @param {object} aero   — aero-setup gains the surface was painted with
  */
-export function probeCp(hit, type, anchors, sf, baseY = 0, beta = 0, aero = null) {
+export function probeCp(hit, type, anchors, sf, baseY = 0, beta = 0, aero = null, turn = null) {
   const p = hit?.point ?? { x: 0, y: 0, z: 0 };
   const n = hit?.face?.normal ?? { x: 0, y: 1, z: 0 };
-  return computeSurfaceCp(p.x, p.y - baseY, p.z, n.x, n.y, n.z, type, anchors, sf, 1, beta, aero);
+  return computeSurfaceCp(p.x, p.y - baseY, p.z, n.x, n.y, n.z, type, anchors, sf, 1, beta, aero, turn);
 }
 
 /**
@@ -768,6 +777,7 @@ export class CfdEffect {
     this._modifiers      = [];     // Phase C: injected via setModifiers()
     this._beta           = 0;      // arcade sideslip (rad), gated + quantised
     this._aero           = null;   // aero-setup gains (setAeroSetup); null ≡ reference
+    this._turn           = null;   // cornering flow (setTurnFlow); null ≡ straight line
     this._betaDirty      = false;  // pending sideslip-driven repaint
     this._betaClock      = SIDESLIP_REPAINT_MIN; // sim time since last β repaint (starts elapsed)
     this._occupancy      = null;   // world-frame body SDF (setOccupancy)
@@ -878,6 +888,23 @@ export class CfdEffect {
   }
 
   /**
+   * Cornering flow from the vehicle model ({kappa, slip, zRear} — see
+   * flow-asymmetry.js). Quantised (κ to 1/500 m⁻¹, slip to 1°) so a corner
+   * repaints a handful of times, not every frame; below a whisper of
+   * curvature the straight-line paint is restored exactly.
+   */
+  setTurnFlow(turn) {
+    const k = Math.round((turn?.kappa || 0) * 500) / 500;
+    const s = Math.round((turn?.slip || 0) * 57.2958) / 57.2958;
+    const next = (k === 0 && s === 0) ? null : { kappa: k, slip: s, zRear: turn.zRear ?? 1.8 };
+    const cur = this._turn;
+    if (!next && !cur) return;
+    if (next && cur && next.kappa === cur.kappa && next.slip === cur.slip) return;
+    this._turn      = next;
+    this._betaDirty = true;   // throttled repaint path
+  }
+
+  /**
    * Phase C: inject the analytical modifier list produced by
    * AirflowEffect.getModifiers() so the CFD Cp map reflects the same
    * feature-aware flow (sinks at inlets, sources at outlets, wing dipoles).
@@ -924,7 +951,7 @@ export class CfdEffect {
     if (!hits.length) return null;
     const sf = Math.min(this._speed / 350, 1);
     return {
-      cp:    probeCp(hits[0], this._type, this._anchors, sf, this._baseY, this._beta, this._aero),
+      cp:    probeCp(hits[0], this._type, this._anchors, sf, this._baseY, this._beta, this._aero, this._turn),
       point: hits[0].point,
     };
   }
@@ -1200,7 +1227,7 @@ export class CfdEffect {
         }
         const cp = computeSurfaceCp(
           px, py, pz, vnx, vny, vnz,
-          this._type, this._anchors, speedFactor, shadow, this._beta, this._aero,
+          this._type, this._anchors, speedFactor, shadow, this._beta, this._aero, this._turn,
         );
         // Emphasis map: cpRef scaled by the current speed's attainable peak
         // so the heat-point pattern is legible at 100 km/h too.

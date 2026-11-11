@@ -32,6 +32,8 @@ import {
 import { createTelemetryHud, telemetryView, vmaxLabel } from './telemetry-hud.js';
 import { createPowertrainState, stepPowertrain } from './powertrain.js';
 import { blendWeather, rainLightMix, createLightning } from './weather.js';
+import { WakeEffect } from './wake-effect.js';
+import { turnFlow } from './flow-asymmetry.js';
 import { buildCircuit } from './circuit.js';
 import { solveLap } from './lap-sim.js';
 import { createCircuitHud } from './circuit-hud.js';
@@ -473,6 +475,7 @@ async function spawnCar(type) {
   cfd.setModifiers(airflow.getModifiers());
   rain.setCarType(type, state.carMeasure);
   vents.setCarType(type, state.carMeasure);
+  wake.setCarType(type, state.carMeasure);
 
   // Propagate ground-lift: all effect groups author coords in car-local
   // space (y=0 at ground-contact plane). Shift them onto the world surface
@@ -481,6 +484,7 @@ async function spawnCar(type) {
   airflow.setBaseY(baseY);
   cfd.setBaseY(baseY);
   vents.setBaseY(baseY);
+  wake.setBaseY(baseY);
 
   // Refresh orbit target to the current car's cockpit anchor so the
   // camera pivots around the actual car, not a hardcoded y=0.4.
@@ -502,7 +506,7 @@ async function spawnCar(type) {
 // Lives in effect-stub.js (node-testable — main.js can't load outside the
 // browser); effect-stub.test.js source-scans this file to keep it complete.
 
-let airflow, rain, cfd, vents;
+let airflow, rain, cfd, vents, wake;
 try { airflow = new AirflowEffect(scene); }
 catch (e) { console.error('[AirflowEffect] constructor failed:', e); airflow = new EffectStub(); }
 try { rain = new RainEffect(scene); }
@@ -511,6 +515,10 @@ try { cfd = new CfdEffect(scene); }
 catch (e) { console.error('[CfdEffect] constructor failed:', e); cfd = new EffectStub(); }
 try { vents = new VentEmitterSystem(scene); }
 catch (e) { console.error('[VentEmitterSystem] constructor failed:', e); vents = new EffectStub(); }
+// Dirty air: the car's wake, from the front tyres to the plume behind it.
+try { wake = new WakeEffect(scene); }
+catch (e) { console.error('[WakeEffect] constructor failed:', e); wake = new EffectStub(); }
+window.__fsim.wake = wake;
 
 /* ── Engine sound (Web Audio synth — engine-audio.js) ───────────────
    NOT an effect: no scene nodes, so no EffectStub fallback. The graph is
@@ -570,11 +578,14 @@ function syncEffects() {
   rain.setSpeed(sp);
   cfd.setSpeed(sp);
   vents.setSpeed(sp);
+  wake.setSpeed(sp);
+  wake.setVisible(state.activeEnvs.has('wake'));
   airflow.setVisible(state.activeEnvs.has('airflow'));
   rain.setVisible(state.activeEnvs.has('rain'));
   cfd.setVisible(state.activeEnvs.has('cfd'));
   // CFD legend follows the env toggle; the probe tooltip never outlives it.
   syncCfdLegend(document.getElementById('cfd-legend'), state.activeEnvs.has('cfd'));
+  document.getElementById('wake-legend').classList.toggle('show', state.activeEnvs.has('wake') && state.mode === 'sim');
   if (!state.activeEnvs.has('cfd')) {
     document.getElementById('cfd-probe-tip')?.classList.remove('show');
   }
@@ -931,7 +942,7 @@ const TURN_CHIP_LABELS = { t5: '↩ TURNS 5/30s', t10: '↩ TURNS 10/30s', only:
 function updateChips() {
   const container = document.getElementById('effects-chips');
   container.innerHTML = '';
-  const labels = { airflow: '🌬 AIRFLOW', rain: `🌧 RAIN ${Math.round(state.rainIntensity * 100)}%`, cfd: '🔬 CFD' };
+  const labels = { airflow: '🌬 AIRFLOW', rain: `🌧 RAIN ${Math.round(state.rainIntensity * 100)}%`, cfd: '🔬 CFD', wake: '🌀 DIRTY AIR' };
   state.activeEnvs.forEach(env => {
     const chip = document.createElement('div');
     chip.className = `chip chip-${env}`;
@@ -1266,7 +1277,10 @@ function animate() {
     // update(); without this the vent streams freeze at the last-clicked
     // speed while state.speed lerps toward its target.
     vents.setSpeed(state.speed);
-    airflow.setPathBend?.(pathBendTable(trackPath));
+    wake.setSpeed(state.speed);
+    const bendTable = pathBendTable(trackPath);
+    wake.setPathBend?.(bendTable);
+    airflow.setPathBend?.(bendTable);
     airflow.setTurnState?.(turnOmega, state.speed / 3.6);
     rain.setTurnState?.(turnOmega, state.speed / 3.6);
     // ARCADE crosswind (Phase C) — the strafe's apparent wind, one sign
@@ -1289,11 +1303,32 @@ function animate() {
     if (gains) {
       airflow.setAeroSetup?.(gains);
       cfd.setAeroSetup?.(gains);
+      wake.setAeroSetup?.(gains);
+    }
+    wake.setCrosswind?.(xWind);
+    // Adaptive airflow: in a corner the air arrives on a curve — the
+    // outside of the car meets faster air and the flow yaw changes along
+    // its length (flow-asymmetry.js). The pressure paint shows the left /
+    // right difference; the wake turns with the steered, loaded tyres.
+    {
+      const vs = state.vehicle;
+      const kappaNow = state.mode === 'sim' ? trackPath.curvatureAt(trackPath.pose.s) : 0;
+      cfd.setTurnFlow?.(turnFlow(kappaNow, vs.ay, vs.ayMax, state.carMeasure?.rearAxleZ));
+      // True steer angle (wheelbase × curvature) — the on-screen wheels turn
+      // further than that for legibility. Tyre loads are taken relative to
+      // the front-axle mean, so downforce does not hide the left/right split.
+      const meanF = vs.loads ? Math.max(1, (vs.loads.FL + vs.loads.FR) / 2) : 1;
+      wake.setTurnFlow?.({
+        steer: Math.atan((getVehicleParams(state.carType).wheelbase) * kappaNow),
+        loadL: vs.loads ? vs.loads.FL / meanF : 1,
+        loadR: vs.loads ? vs.loads.FR / meanF : 1,
+      });
     }
     try { airflow.update(dt, state.time); } catch (e) { console.error('[airflow.update]', e); }
     try { rain.update(dt, state.time); }    catch (e) { console.error('[rain.update]', e); }
     try { cfd.update(dt, state.time); }     catch (e) { console.error('[cfd.update]', e); }
     try { vents.update(dt); }               catch (e) { console.error('[vents.update]', e); }
+    try { wake.update(dt, state.time); }    catch (e) { console.error('[wake.update]', e); }
   }
 
   // Storm: lightning flashes the whole scene, thunder follows the light.
