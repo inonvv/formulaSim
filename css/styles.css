@@ -18,6 +18,7 @@
   --c-rain: #44aaff;
   --c-cfd: #ff4400;
   --c-turns: #ff6b00;
+  --c-aero: #4fd1c5;
   --ok: #27ae60;
   --warn: #f39c12;
   /* Shared rhythm tokens */
@@ -440,6 +441,7 @@ body {
 .chip-airflow  { border-color: var(--c-airflow); color: #a3c8ff; background: color-mix(in srgb, var(--c-airflow) 12%, transparent); }
 .chip-rain     { border-color: var(--c-rain);    color: #bfe6ff; background: color-mix(in srgb, var(--c-rain) 12%, transparent); }
 .chip-cfd      { border-color: var(--c-cfd);     color: #ff9a70; background: color-mix(in srgb, var(--c-cfd) 10%, transparent); }
+.chip-drs      { border-color: var(--ok);        color: #9ff0bf; background: color-mix(in srgb, var(--ok) 10%, transparent); }
 .chip-turns    { border-color: var(--c-turns);   color: #ffbb80; background: color-mix(in srgb, var(--c-turns) 10%, transparent); }
 
 @keyframes chipIn {
@@ -450,8 +452,10 @@ body {
 /* ─── CFD legend (colorbar, bottom-left, CFD env only) ───────────── */
 #cfd-legend {
   position: fixed;
-  left: 24px;
-  bottom: 96px;
+  /* Beside the telemetry panel (24 + 248 + 12) — the bottom-left corner
+     belongs to it on short viewports. */
+  left: 284px;
+  top: 92px;
   display: flex;
   align-items: stretch;
   gap: 8px;
@@ -771,7 +775,7 @@ button:focus-visible, input:focus-visible {
 }
 
 /* ─── Speed + volume sliders ─────────────────────────────────────── */
-#speed-slider, #volume-slider {
+#speed-slider, #volume-slider, #section-aero input[type=range] {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
@@ -782,7 +786,8 @@ button:focus-visible, input:focus-visible {
   cursor: pointer;
 }
 
-#speed-slider::-webkit-slider-thumb, #volume-slider::-webkit-slider-thumb {
+#speed-slider::-webkit-slider-thumb, #volume-slider::-webkit-slider-thumb,
+#section-aero input[type=range]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 16px; height: 16px;
@@ -796,12 +801,14 @@ button:focus-visible, input:focus-visible {
 #volume-slider::-webkit-slider-thumb:hover { transform: scale(1.2); }
 
 /* Firefox parity — mirrors the webkit track/thumb above */
-#speed-slider::-moz-range-track, #volume-slider::-moz-range-track {
+#speed-slider::-moz-range-track, #volume-slider::-moz-range-track,
+#section-aero input[type=range]::-moz-range-track {
   height: 4px;
   border-radius: 2px;
   background: rgba(255,255,255,0.1);
 }
-#speed-slider::-moz-range-thumb, #volume-slider::-moz-range-thumb {
+#speed-slider::-moz-range-thumb, #volume-slider::-moz-range-thumb,
+#section-aero input[type=range]::-moz-range-thumb {
   width: 16px; height: 16px;
   border: none;
   border-radius: 50%;
@@ -931,6 +938,160 @@ button:focus-visible, input:focus-visible {
 #panel-body::-webkit-scrollbar-track { background: transparent; }
 #panel-body::-webkit-scrollbar-thumb { background: var(--panel-border); border-radius: 2px; }
 #panel-body::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
+
+/* ─── Aero setup controls ────────────────────────────────────────── */
+#panel-body #section-aero.collapsed-arcade { display: none; }
+#section-aero input[type=range]::-webkit-slider-thumb { background: var(--c-aero); box-shadow: var(--glow) color-mix(in srgb, var(--c-aero) 70%, transparent); }
+#section-aero input[type=range]::-moz-range-thumb { background: var(--c-aero); box-shadow: var(--glow) color-mix(in srgb, var(--c-aero) 70%, transparent); }
+.range-ends {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.55rem;
+  letter-spacing: 0.12em;
+  color: var(--dim);
+  margin-top: -4px;
+}
+.drs-btn.active {
+  background: color-mix(in srgb, var(--ok) 18%, transparent);
+  border-color: var(--ok);
+  color: #9ff0bf;
+  box-shadow: var(--glow) color-mix(in srgb, var(--ok) 30%, transparent);
+}
+.drs-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* ─── Telemetry panel (top-left, under the car badge) ────────────── */
+#telemetry {
+  position: fixed;
+  top: 92px;
+  left: 24px;
+  width: 248px;
+  background: var(--overlay-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  backdrop-filter: blur(12px);
+  z-index: 10;
+  font-family: var(--mono);
+  overflow: hidden;
+}
+#telemetry.hidden-arcade { display: none; }
+#telemetry-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--panel-border);
+  color: var(--dim);
+  font: inherit;
+  font-size: var(--label-fs);
+  letter-spacing: var(--label-track);
+  cursor: pointer;
+  text-align: left;
+}
+#telemetry-head:hover { color: var(--text); }
+#telemetry.collapsed #telemetry-head { border-bottom-color: transparent; }
+.tm-title { flex: 0 0 auto; }
+#tm-flags { flex: 1 1 auto; display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.tm-caret { transition: transform var(--ease); }
+#telemetry.collapsed .tm-caret { transform: rotate(-90deg); }
+#telemetry.collapsed #telemetry-body { display: none; }
+.tm-flag {
+  font-size: 0.52rem;
+  letter-spacing: 0.1em;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+  color: #ffd38a;
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+}
+.tm-flag-drs { background: color-mix(in srgb, var(--ok) 22%, transparent); color: #9ff0bf; border-color: color-mix(in srgb, var(--ok) 55%, transparent); }
+.tm-flag-over-grip, .tm-flag-bottoming { background: color-mix(in srgb, var(--accent) 25%, transparent); color: #ffb0b8; border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+
+#telemetry-body { padding: 10px 12px 10px; display: flex; flex-direction: column; gap: 10px; }
+.tm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+.tm-cell { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.tm-k { font-size: 0.55rem; letter-spacing: 0.16em; color: var(--dim); }
+.tm-n { display: flex; align-items: baseline; gap: 4px; }
+.tm-v { font-size: 1.35rem; font-weight: 700; color: #fff; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.tm-u { font-size: 0.6rem; color: var(--dim); }
+.tm-sub { font-size: 0.56rem; color: var(--dim); white-space: nowrap; }
+.tm-cell-df .tm-v { color: #7fc4ff; }
+.tm-cell-drag .tm-v { color: #ff9a70; }
+
+.tm-dyn { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; border-top: 1px solid var(--panel-border); padding-top: 10px; }
+.tm-gg-wrap, .tm-wheels-wrap { display: flex; flex-direction: column; gap: 6px; align-items: center; }
+#tm-gg {
+  position: relative;
+  width: 96px; height: 96px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.22);
+  background: radial-gradient(circle, rgba(255,255,255,0.05), transparent 70%);
+}
+.tm-gg-ring { position: absolute; border-radius: 50%; border: 1px dashed rgba(255,255,255,0.12); }
+.tm-gg-ring-1 { inset: 33.3%; }
+.tm-gg-ring-2 { inset: 16.6%; }
+.tm-gg-cross-h, .tm-gg-cross-v { position: absolute; background: rgba(255,255,255,0.10); }
+.tm-gg-cross-h { left: 0; right: 0; top: 50%; height: 1px; }
+.tm-gg-cross-v { top: 0; bottom: 0; left: 50%; width: 1px; }
+#tm-gg-dot {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 10px; height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent), 0 0 2px #fff inset;
+}
+#tm-gg-scale { position: absolute; right: -2px; bottom: -3px; font-size: 0.5rem; color: var(--dim); }
+.tm-gg-read { display: flex; flex-direction: column; font-size: 0.58rem; color: var(--dim); gap: 1px; align-items: center; }
+.tm-gg-read b { color: #fff; font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+
+#tm-wheels {
+  position: relative;
+  width: 96px; height: 96px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 8px 30px;
+}
+.tm-car-outline {
+  position: absolute;
+  left: 50%; top: 4px; bottom: 4px;
+  width: 18px;
+  margin-left: -9px;
+  border-radius: 9px 9px 5px 5px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.04);
+}
+.tm-wheel { display: flex; align-items: flex-end; gap: 3px; font-size: 0.58rem; color: #fff; font-variant-numeric: tabular-nums; }
+.tm-w-fl, .tm-w-rl { flex-direction: row-reverse; }
+.tm-wbar {
+  position: relative;
+  width: 9px; height: 100%;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.08);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.tm-wfill { position: absolute; left: 0; right: 0; bottom: 0; height: 0%; background: var(--ok); border-radius: 3px; }
+
+.tm-pedals { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 6px; align-items: center; }
+.tm-pbar { height: 5px; border-radius: 3px; background: rgba(255,255,255,0.08); overflow: hidden; }
+#tm-thr, #tm-brk { height: 100%; width: 0%; border-radius: 3px; }
+#tm-thr { background: var(--ok); }
+#tm-brk { background: var(--accent); }
+.tm-foot { font-size: 0.58rem; color: var(--dim); border-top: 1px solid var(--panel-border); padding-top: 8px; }
+.tm-foot b { color: #fff; font-size: 0.72rem; }
+
+/* Short viewports: drop the pedal row + footer before the panel hits the HUD */
+@media (max-height: 760px) {
+  .tm-pedals, .tm-foot { display: none; }
+}
+@media (max-height: 620px) {
+  .tm-dyn { display: none; }
+}
 
 /* ─── Responsive: tablet ≤ 900px ────────────────────────────────── */
 @media (max-width: 900px) {
@@ -1080,6 +1241,12 @@ button:focus-visible, input:focus-visible {
 
   /* ── Car badge ── */
   #car-badge { top: 16px; left: 16px; }
+  #cfd-legend { left: 12px; top: auto; bottom: 150px; }
+  /* Telemetry: compact strip under the badge; tap the header to expand */
+  #telemetry { top: 64px; left: 12px; width: 210px; }
+  .tm-v { font-size: 1.1rem; }
+  #tm-gg, #tm-wheels { width: 80px; height: 80px; }
+  .tm-pedals, .tm-foot { display: none; }
   #car-badge-type { font-size: 1.6rem; }
 
   /* ── Effects chips ── */

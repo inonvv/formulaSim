@@ -16,7 +16,7 @@ import { buildCar, getCarMeta, clampToVMax, WHEEL_NAMES, buildSteeringWheel } fr
 import { CAR_MANIFEST } from './car-manifest.js';
 import { createDebugOverlay } from './debug-overlay.js';
 import { buildTrack, buildSkyline, SKYLINE_NEAR_R } from './track.js';
-import { TrackPath, TURN_CFG, rowPose, steerAngleRad, rollAngleRad, smoothAngle, cameraBankRad, pathBendTable, turnEdgeCounter } from './track-path.js';
+import { TrackPath, TURN_CFG, rowPose, steerAngleRad, smoothAngle, cameraBankRad, pathBendTable, turnEdgeCounter } from './track-path.js';
 import { AirflowEffect, RainEffect } from './effects.js';
 import { RainLensShader, rainLensIntensity, lensActive } from './rain-lens.js';
 import { CfdEffect, syncCfdLegend } from './cfd-effect.js';
@@ -25,7 +25,11 @@ import { buildOccupancy } from './body-sdf.js';
 import { collectOccupancyMeshes } from './car-loader.js';
 import { createSwapGuard } from './swap-guard.js';
 import { EffectStub } from './effect-stub.js';
-import { gearFromSpeed, wheelRotationRate, aeroSquishFactor, rpmRatio, lerpSpeed } from './physics.js';
+import { gearFromSpeed, wheelRotationRate, rpmRatio, lerpSpeed } from './physics.js';
+import {
+  createVehicleState, stepVehicle, lookAheadCap, defaultSetup, normalizeSetup, getVehicleParams,
+} from './vehicle-model.js';
+import { createTelemetryHud, telemetryView, vmaxLabel } from './telemetry-hud.js';
 import {
   createGame, lateralStep, tiltStep, worldOffsetX,
   fovStep, FOV_CFG, cameraShake, nearParallaxStep,
@@ -194,6 +198,11 @@ const state = {
   fovVis:     FOV_CFG.BASE,           // smoothed arcade FOV (fovStep, tau 0.45 s)
   _nearDrift: 0,          // near parallax ring forward-drift accumulator (rad)
   _shakeApplied: new THREE.Vector3(), // last frame's camera-shake offset (undone each frame)
+  // Computed vehicle model (vehicle-model.js): forces, wheel loads, attitude.
+  // aeroSetups is keyed by car type so each car remembers its own setup.
+  vehicle:    createVehicleState(),
+  aeroSetups: {},         // { [carType]: {wing, rideHeightMm, drs, yawDeg} }
+  brakeHeat:  0,          // 0..1 disc temperature proxy driving the brake glow
   infoMode:   false,      // P6 educational layer — part cards on hover
   _infoTargets: [],       // cached raycast subset: occupancy meshes + wheel groups
   // Engine-sound settings — persisted to localStorage('fsim-audio'), restored
@@ -205,6 +214,50 @@ const state = {
 // Verify-script hook: headless scripts read sim state (turn count, steering
 // wheel pose, measured anchors) without faking DOM interactions.
 window.__fsim.state = state;
+
+// Telemetry readout — created before animate() first runs (it updates per frame).
+const telemetryHud = createTelemetryHud(document);
+// Phones: start collapsed (header + flags only) so the car stays visible.
+if (window.innerWidth <= 640) {
+  document.getElementById('telemetry').classList.add('collapsed');
+  document.getElementById('telemetry-head').setAttribute('aria-expanded', 'false');
+}
+
+/** The active car's aero setup (lazily seeded with the car's reference). */
+function currentSetup() {
+  return state.aeroSetups[state.carType]
+    || (state.aeroSetups[state.carType] = defaultSetup(state.carType));
+}
+
+/* Corner-limit memo for the look-ahead driver — valid for one
+   (car, setup, grip) combination; cleared whenever any of them changes. */
+const _capCache = new Map();
+let _capKey = '';
+
+/**
+ * Advance the vehicle model one frame and publish state.speed from it.
+ * SIM: a driver model chases the selected target speed with real power /
+ * traction / drag limits and brakes for the corners it can see ahead.
+ * ARCADE: speed keeps its game-tuned lerp; the model only observes it.
+ */
+function stepVehicleModel(dt) {
+  const type  = state.carType;
+  const setup = currentSetup();
+  const wet   = state.activeEnvs.has('rain');
+  const vs    = state.vehicle;
+  const s0    = trackPath.pose.s;
+  const kappa = trackPath.curvatureAt(s0);
+  if (state.mode === 'arcade') {
+    state.speed = lerpSpeed(state.speed, state.targetSpeed, 60, 90, dt);
+    stepVehicle(vs, { type, setup, wet, dt, targetV: state.targetSpeed / 3.6, kappa: 0, forcedV: state.speed / 3.6 });
+    return;
+  }
+  const key = `${type}|${setup.wing}|${setup.rideHeightMm}|${setup.drs}|${setup.yawDeg}|${wet}`;
+  if (key !== _capKey) { _capCache.clear(); _capKey = key; }
+  const capV = lookAheadCap(type, setup, vs.v, ds => trackPath.curvatureAt(s0 + ds), wet, _capCache);
+  stepVehicle(vs, { type, setup, wet, dt, targetV: state.targetSpeed / 3.6, kappa, capV });
+  state.speed = vs.v * 3.6;
+}
 
 /* ── ARCADE game (pure state machine — main.js only wires it) ───── */
 const game = createGame();
@@ -815,6 +868,12 @@ function updateChips() {
     chip.textContent = labels[env];
     container.appendChild(chip);
   });
+  if (currentSetup().drs) {
+    const chip = document.createElement('div');
+    chip.className = 'chip chip-drs';
+    chip.textContent = 'DRS OPEN';
+    container.appendChild(chip);
+  }
   if (state.turnMode !== 'auto') {           // scene must mirror the selection
     const chip = document.createElement('div');
     chip.className = 'chip chip-turns';
@@ -845,29 +904,43 @@ function animateCar(dt) {
     if (w) w.rotation.x += dRot;
   });
 
-  // ─ Brake glow
-  const speedFactor = speed / 350;
-  const brakeGlow   = Math.max(0, (speedFactor - 0.28) / 0.72);
+  // ─ Brake glow — discs heat with braking POWER (pedal × speed) and cool
+  //   slowly, so they light up into a braking zone and fade down the straight.
+  const vs = state.vehicle;
+  const heatIn = vs.brake * Math.min(speed / 250, 1);
+  const tauHeat = heatIn > state.brakeHeat ? 0.35 : 2.5;
+  state.brakeHeat += (heatIn - state.brakeHeat) * Math.min(1, dt / tauHeat);
+  const brakeGlow = Math.min(1, state.brakeHeat * 1.3);
   Object.values(state.brakes).forEach(b => {
     // Guard: a future GLB extraction could surface a brake_* parent Group
     // without an immediate .material. Skip it rather than throw every frame.
-    if (b?.material) b.material.emissiveIntensity = brakeGlow * brakeGlow * 1.2;
+    if (b?.material) b.material.emissiveIntensity = brakeGlow * 1.6;
   });
 
   // ─ Idle vibration — OFFSET from userData.baseY so we preserve ground contact.
   //   Overwriting position.y (old bug) dropped the car onto Y=0 and floated/sunk it.
   const baseY = state.carGroup.userData.baseY ?? state.carGroup.position.y;
-  if (speed < 5) {
-    state.carGroup.position.y = baseY + Math.sin(t * 28) * 0.003;
-  } else {
-    state.carGroup.position.y = baseY;
+  // ─ Aero heave — downforce compresses the springs: the BODY sinks by the
+  //   model's dynamic ride-height loss while the tyres stay on the road
+  //   (wheels get the opposite offset in their parent's frame).
+  const heave = vs.heaveM || 0;
+  const idle  = speed < 5 ? Math.sin(t * 28) * 0.003 : 0;
+  state.carGroup.position.y = baseY + idle - heave;
+  for (const w of Object.values(state.wheels)) {
+    if (!w) continue;
+    if (w.userData._restY === undefined) {
+      w.userData._restY = w.position.y;
+      // Local metres per world metre in the wheel's parent frame (GLB nodes
+      // can carry a scale) — measured once per wheel.
+      const ps = w.parent ? w.parent.getWorldScale(_tmpScale).y : 1;
+      w.userData._heaveK = ps > 1e-6 ? 1 / ps : 1;
+    }
+    w.position.y = w.userData._restY + heave * w.userData._heaveK;
   }
 
-  // ─ Speed-based body roll / aero compression
-  state.carGroup.scale.y = aeroSquishFactor(speed);
-
-  // ─ Slight forward lean at speed
-  state.carGroup.rotation.x = -rpmRatio(speed) * 0.025;
+  // ─ Pitch from the model: squat under power, dive under braking, plus the
+  //   aero rake change (front and rear springs compress by different amounts).
+  state.carGroup.rotation.x = vs.pitchRad || 0;
 
   // ─ Turn pose — driven by the path curvature under the car.
   //   Steer the front wheels (YXZ so the spin axle tilts with the steer),
@@ -889,7 +962,9 @@ function animateCar(dt) {
   // wheel top left, matching the front wheels. (The plan's authored −2.5
   // sign fails that check; verified in the P7 cockpit shot.)
   if (state.steeringWheel) state.steeringWheel.rotation.z = state.steerVis * 2.5;
-  state.rollVis = smoothAngle(state.rollVis, rollAngleRad(mps, omega), dt);
+  // Body roll from the model's lateral g × the car's roll gradient (a stiff
+  // F1 barely leans; the GT visibly does). Left turn ⇒ right side down (−z).
+  state.rollVis = smoothAngle(state.rollVis, -(vs.rollRad || 0), dt);
   state.carGroup.rotation.z = state.rollVis;
   // Nose-in yaw ≤4° — clamp the ratio: the REAL_CORNER's fixed R 85 geometry
   // can push ω to ~3× MAX_YAW_RATE at top speed.
@@ -986,6 +1061,7 @@ function updateTrack(dt) {
 const clock = new THREE.Clock();
 const _shakeRight = new THREE.Vector3();   // camera-local shake basis temps
 const _shakeUp    = new THREE.Vector3();
+const _tmpScale   = new THREE.Vector3();   // wheel parent world-scale probe
 
 function animate() {
   requestAnimationFrame(animate);
@@ -993,8 +1069,9 @@ function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
   if (!state.paused) state.time += dt;
 
-  // Smooth speed towards target
-  state.speed = lerpSpeed(state.speed, state.targetSpeed, 60, 90, dt);
+  // Vehicle model — integrates speed from real force limits (sim) and
+  // refreshes forces / wheel loads / attitude for everything below.
+  stepVehicleModel(dt);
 
   // ARCADE: advance the game clock, then integrate the strafe BEFORE
   // updateTrack so the world offset uses this frame's playerX.
@@ -1098,9 +1175,20 @@ function animate() {
     // dir by β = atan2(−vx, vFwd) (gated at 5° inside setSideslip). Sim:
     // strafeVx is 0 ⇒ every call is the identity.
     const strafeVx = state.mode === 'arcade' ? game.lateral.vx : 0;
-    airflow.setCrosswind?.(-strafeVx);
-    rain.setCrosswind?.(-strafeVx);
-    cfd.setSideslip?.(Math.atan2(-strafeVx, Math.max(state.speed / 3.6, 1)));
+    // Wind-tunnel yaw (AERO SETUP): the model is turned ψ to the stream, so
+    // the air gains a lateral component v·tanψ — same channel as the strafe.
+    const vFwd  = state.speed / 3.6;
+    const xWind = -strafeVx + vFwd * Math.tan(currentSetup().yawDeg * Math.PI / 180);
+    airflow.setCrosswind?.(xWind);
+    rain.setCrosswind?.(xWind);
+    cfd.setSideslip?.(Math.atan2(xWind, Math.max(vFwd, 1)));
+    // Aero setup → flow picture: wing level / DRS / dynamic ride height
+    // scale the wing circulation, wake upwash and the Cp paint.
+    const gains = state.vehicle.aero?.gains;
+    if (gains) {
+      airflow.setAeroSetup?.(gains);
+      cfd.setAeroSetup?.(gains);
+    }
     try { airflow.update(dt, state.time); } catch (e) { console.error('[airflow.update]', e); }
     try { rain.update(dt, state.time); }    catch (e) { console.error('[rain.update]', e); }
     try { cfd.update(dt, state.time); }     catch (e) { console.error('[cfd.update]', e); }
@@ -1127,6 +1215,7 @@ function animate() {
 
   // HUD
   updateHUD(state.speed);
+  telemetryHud.update(telemetryView(state.vehicle, state.carType, currentSetup()), dt);
   updateArcadeHud(dt);
 
   composer.render();
@@ -1165,8 +1254,11 @@ document.querySelectorAll('.car-btn').forEach(btn => {
         b.classList.toggle('active', on);
         b.setAttribute('aria-pressed', String(on));
       });
+      syncAeroUI();
       return;
     }
+    // Aero controls follow the new car (its own remembered setup + ranges).
+    syncAeroUI();
     // Re-clamp the speed target to the NEW car's vMax (e.g. 350 → 310 on GT).
     // setSpeed calls syncEffects itself.
     setSpeed(state.targetSpeed);
@@ -1185,6 +1277,9 @@ function setMode(mode) {
   // Arcade COLLAPSES (not destroys) the env/CFD controls — effect state is
   // preserved and the scene keeps mirroring it (core principle).
   document.getElementById('section-env').classList.toggle('collapsed-arcade', mode === 'arcade');
+  // Aero setup + telemetry are sim tools — hidden (state preserved) in arcade.
+  document.getElementById('section-aero').classList.toggle('collapsed-arcade', mode === 'arcade');
+  document.getElementById('telemetry').classList.toggle('hidden-arcade', mode === 'arcade');
   if (mode === 'arcade') {
     // Fresh run: zero the coin field / scoring / rolling counter, then
     // straight into the countdown (its overlay + ticks land next frame).
@@ -1290,6 +1385,45 @@ speedSlider.addEventListener('input', () => setSpeed(Number(speedSlider.value)))
 document.querySelectorAll('#speed-presets .preset-btn').forEach(btn => {
   btn.addEventListener('click', () => setSpeed(Number(btn.dataset.speed)));
 });
+
+/* ── AERO SETUP (wing / ride height / yaw / DRS) ─────────────────── */
+const wingSlider = document.getElementById('wing-slider');
+const rideSlider = document.getElementById('ride-slider');
+const yawSlider  = document.getElementById('yaw-slider');
+const drsBtn     = document.getElementById('drs-btn');
+
+/** Mirror the active car's setup into every aero control + readout. */
+function syncAeroUI() {
+  const p = getVehicleParams(state.carType);
+  const s = currentSetup();
+  wingSlider.value = Math.round(s.wing * 100);
+  document.getElementById('wing-label-val').textContent = Math.round(s.wing * 100);
+  rideSlider.min = p.ride.min;
+  rideSlider.max = p.ride.max;
+  rideSlider.value = s.rideHeightMm;
+  document.getElementById('ride-label-val').textContent = Math.round(s.rideHeightMm);
+  yawSlider.value = s.yawDeg;
+  document.getElementById('yaw-label-val').textContent = s.yawDeg;
+  drsBtn.disabled = !p.hasDRS;
+  drsBtn.classList.toggle('active', s.drs);
+  drsBtn.setAttribute('aria-pressed', String(s.drs));
+  drsBtn.textContent = s.drs ? 'DRS OPEN' : 'DRS CLOSED';
+  telemetryHud.setVmax(vmaxLabel(state.carType, s));
+  updateChips();
+}
+
+function setAero(patch) {
+  state.aeroSetups[state.carType] = normalizeSetup(state.carType, { ...currentSetup(), ...patch });
+  syncAeroUI();
+}
+
+wingSlider.addEventListener('input', () => setAero({ wing: Number(wingSlider.value) / 100 }));
+rideSlider.addEventListener('input', () => setAero({ rideHeightMm: Number(rideSlider.value) }));
+yawSlider.addEventListener('input',  () => setAero({ yawDeg: Number(yawSlider.value) }));
+drsBtn.addEventListener('click',     () => setAero({ drs: !currentSetup().drs }));
+document.getElementById('aero-reset-btn').addEventListener('click', () => setAero(defaultSetup(state.carType)));
+syncAeroUI();
+window.__fsim.setAero = setAero;   // verify-script hook
 
 /* ── TURNS frequency ────────────────────────────────────────────── */
 function applyTurnMode(mode) {
@@ -1402,6 +1536,9 @@ document.getElementById('reset-btn').addEventListener('click', () => {
     b.classList.remove('active');
     b.setAttribute('aria-pressed', 'false');
   });
+  // Aero setups back to each car's reference.
+  state.aeroSetups = {};
+  syncAeroUI();
   // Back to the default turn schedule — reset means the full selection resets
   applyTurnMode('auto');
   // Zero the turn tally with the rest of the session state.

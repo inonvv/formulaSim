@@ -484,7 +484,16 @@ const UNDERBODY_ROLES = new Set(['floor', 'diffuser']);
  * @param {Array}  vortexCores — VORTEX_CORES[type] entries for vortex perturbation
  * @returns {number} pressure coefficient
  */
-export function computePatchCp(p, lx, ly, speedFactor, modifiers = [], vortexCores = [], type = 'F1') {
+/** Aero-setup gain for a patch role (wing level / DRS / ride height). */
+export function roleAeroGain(role, aero) {
+  if (!aero) return 1;
+  if (role === 'frontWing' || role === 'frontWingFlap') return aero.frontWing ?? 1;
+  if (role === 'rearWing'  || role === 'rearWingFlap')  return aero.rearWing  ?? 1;
+  if (role === 'floor'     || role === 'diffuser')      return aero.floor     ?? 1;
+  return 1;
+}
+
+export function computePatchCp(p, lx, ly, speedFactor, modifiers = [], vortexCores = [], type = 'F1', aero = null) {
   const roleDef = getRoleCp(type, p.role);
   const hw = p.w / 2;
   const hh = p.h / 2;
@@ -540,7 +549,9 @@ export function computePatchCp(p, lx, ly, speedFactor, modifiers = [], vortexCor
     }
   }
 
-  return cp;
+  // Aero setup: wing level / DRS scale the wing loading, ride height the
+  // underbody suction. Identity (×1) at the reference setup.
+  return cp * roleAeroGain(p.role, aero);
 }
 
 /**
@@ -592,8 +603,13 @@ export function computePatchCp(p, lx, ly, speedFactor, modifiers = [], vortexCor
  *                                β = atan2(−vx, vFwd): strafe right (vx > 0)
  *                                ⇒ β < 0 ⇒ the +x side face gains impact.
  */
-export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor, shadow = 1, beta = 0) {
+export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor, shadow = 1, beta = 0, aero = null) {
   if (!speedFactor) return 0;
+  // Aero-setup gains (vehicle-model.js aeroCoeffs().gains): wing level and
+  // DRS scale the wing suction peaks, dynamic ride height the underbody.
+  const gFront = aero?.frontWing ?? 1;
+  const gRear  = aero?.rearWing  ?? 1;
+  const gFloor = aero?.floor     ?? 1;
 
   const floorY  = Number.isFinite(anchors?.floor?.y) ? anchors.floor.y : 0.03;
   const isUnder = ny < -0.35 || y < floorY + 0.05;
@@ -631,7 +647,7 @@ export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor
           const zp = g.minZ + 0.25 * chord;
           const sig = 0.35 * chord;
           const w = Math.exp(-((z - zp) ** 2) / (2 * sig * sig));
-          wingSuction -= 0.95 * w * gate;
+          wingSuction -= 0.95 * w * gate * gRear;
           sGate = Math.max(sGate, gate * w);
         }
       }
@@ -654,7 +670,7 @@ export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor
             const zp = g.minZ + 0.25 * chord;
             const sig = 0.35 * chord;
             const w = Math.exp(-((z - zp) ** 2) / (2 * sig * sig));
-            wingSuction -= 1.10 * w * gate;
+            wingSuction -= 1.10 * w * gate * gFront;
             sGate = Math.max(sGate, gate * w);
           }
         }
@@ -691,7 +707,7 @@ export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor
 
   cp += wingSuction;
 
-  if (isUnder) cp *= 1 + speedFactor * speedFactor * 0.30;
+  if (isUnder) cp *= (1 + speedFactor * speedFactor * 0.30) * gFloor;
 
   // LE stagnation stripe LAST — the true heat line on the wing wins over
   // suction and the underbody ground-effect gain.
@@ -711,11 +727,13 @@ export function computeSurfaceCp(x, y, z, nx, ny, nz, type, anchors, speedFactor
  * @param {object} anchors
  * @param {number} sf     — speedFactor [0, 1]
  * @param {number} baseY  — CFD group lift (world y = car-local y + baseY)
+ * @param {number} beta   — sideslip the surface was painted with
+ * @param {object} aero   — aero-setup gains the surface was painted with
  */
-export function probeCp(hit, type, anchors, sf, baseY = 0) {
+export function probeCp(hit, type, anchors, sf, baseY = 0, beta = 0, aero = null) {
   const p = hit?.point ?? { x: 0, y: 0, z: 0 };
   const n = hit?.face?.normal ?? { x: 0, y: 1, z: 0 };
-  return computeSurfaceCp(p.x, p.y - baseY, p.z, n.x, n.y, n.z, type, anchors, sf);
+  return computeSurfaceCp(p.x, p.y - baseY, p.z, n.x, n.y, n.z, type, anchors, sf, 1, beta, aero);
 }
 
 /**
@@ -749,6 +767,7 @@ export class CfdEffect {
     this._measure        = null;   // full measure (axle fields → tire proxies)
     this._modifiers      = [];     // Phase C: injected via setModifiers()
     this._beta           = 0;      // arcade sideslip (rad), gated + quantised
+    this._aero           = null;   // aero-setup gains (setAeroSetup); null ≡ reference
     this._betaDirty      = false;  // pending sideslip-driven repaint
     this._betaClock      = SIDESLIP_REPAINT_MIN; // sim time since last β repaint (starts elapsed)
     this._occupancy      = null;   // world-frame body SDF (setOccupancy)
@@ -844,6 +863,21 @@ export class CfdEffect {
   }
 
   /**
+   * Aero-setup gains from the vehicle model ({frontWing, rearWing, floor},
+   * each ×1 at the reference setup). Quantised to 0.04 so the continuously
+   * varying dynamic ride height cannot trigger a full-surface repaint every
+   * frame; a real change repaints through the same throttle as sideslip.
+   */
+  setAeroSetup(gains) {
+    const q = (v) => Math.round((Number.isFinite(v) ? v : 1) / 0.04) * 0.04;
+    const next = { frontWing: q(gains?.frontWing), rearWing: q(gains?.rearWing), floor: q(gains?.floor) };
+    const cur = this._aero;
+    if (cur && cur.frontWing === next.frontWing && cur.rearWing === next.rearWing && cur.floor === next.floor) return;
+    this._aero      = next;
+    this._betaDirty = true;   // reuse the throttled repaint path
+  }
+
+  /**
    * Phase C: inject the analytical modifier list produced by
    * AirflowEffect.getModifiers() so the CFD Cp map reflects the same
    * feature-aware flow (sinks at inlets, sources at outlets, wing dipoles).
@@ -890,7 +924,7 @@ export class CfdEffect {
     if (!hits.length) return null;
     const sf = Math.min(this._speed / 350, 1);
     return {
-      cp:    probeCp(hits[0], this._type, this._anchors, sf, this._baseY),
+      cp:    probeCp(hits[0], this._type, this._anchors, sf, this._baseY, this._beta, this._aero),
       point: hits[0].point,
     };
   }
@@ -1166,7 +1200,7 @@ export class CfdEffect {
         }
         const cp = computeSurfaceCp(
           px, py, pz, vnx, vny, vnz,
-          this._type, this._anchors, speedFactor, shadow, this._beta,
+          this._type, this._anchors, speedFactor, shadow, this._beta, this._aero,
         );
         // Emphasis map: cpRef scaled by the current speed's attainable peak
         // so the heat-point pattern is legible at 100 km/h too.
@@ -1272,7 +1306,7 @@ export class CfdEffect {
       for (let vi = 0; vi < count; vi++) {
         const lx = pos[vi * 3];
         const ly = pos[vi * 3 + 1];
-        const cp = computePatchCp(p, lx, ly, speedFactor, this._modifiers, vortexCores, this._type);
+        const cp = computePatchCp(p, lx, ly, speedFactor, this._modifiers, vortexCores, this._type, this._aero);
         // Same emphasis map as the body-surface overlay — the procedural
         // fallback must stay visually consistent with the GLB path.
         const c  = cpToEmphasisColor(cp, 0.9 * speedFactor, 2.2 * speedFactor);

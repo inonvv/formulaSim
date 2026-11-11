@@ -32,6 +32,7 @@ export class EffectStub {
   setPathBend() {}
   setCrosswind() {}
   setSideslip() {}
+  setAeroSetup() {}
   setFlowCoupling() {}
   sampleFlowAt() { return { vx: 0, vy: 0, vz: 0 }; }
   getFlowEnvelope() { return null; }
