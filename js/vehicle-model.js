@@ -449,6 +449,7 @@ export function stepVehicle(vs, inp) {
   const ayDemand = vs.v * vs.v * (inp.kappa || 0);
   vs.overLimit = Math.abs(ayDemand) > ayMax * 1.02;
   vs.ay = clamp(ayDemand, -ayMax, ayMax);
+  vs.kappa = inp.kappa || 0;
   vs.ayMax = ayMax;
 
   vs.aero  = aero;

@@ -7,6 +7,7 @@
  *     no-op-write guards so an unchanged value never touches the DOM.
  */
 import { G, getVehicleParams, topSpeed } from './vehicle-model.js';
+import { sideSplit } from './flow-asymmetry.js';
 
 const WHEELS = ['FL', 'FR', 'RL', 'RR'];
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
@@ -72,6 +73,11 @@ export function telemetryView(vs, type, setup) {
     dragPower: `${Math.round(aero?.dragPowerKW ?? 0)} kW to push air`,
     balance: `${Math.round((aero?.balance ?? p.frontWeight) * 100)}`,
     ld: `L/D ${(aero?.ld ?? 0).toFixed(2)}`,
+    // Left : right share of the aero load from the cornering speed gradient.
+    sides: (() => {
+      const sp = sideSplit(vs?.kappa ?? 0, p.track / 2);
+      return `L ${Math.round(sp.left * 100)} : R ${Math.round(sp.right * 100)}`;
+    })(),
     ride: `${Math.round(aero?.rideMm ?? setup?.rideHeightMm ?? p.ride.nominal)}`,
     rideSub: `set ${Math.round(setup?.rideHeightMm ?? p.ride.nominal)} mm`,
     latG: Math.abs(ayG).toFixed(1),
@@ -141,7 +147,7 @@ export function createTelemetryHud(doc = document) {
       clock = 0;
       text(el.df, 'df', view.downforce);      text(el.dfw, 'dfw', view.downforceWeights);
       text(el.drag, 'drag', view.drag);       text(el.dragp, 'dragp', view.dragPower);
-      text(el.bal, 'bal', view.balance);      text(el.ld, 'ld', view.ld);
+      text(el.bal, 'bal', view.balance);      text(el.ld, 'ld', `${view.ld} · ${view.sides}`);
       text(el.ride, 'ride', view.ride);       text(el.rides, 'rides', view.rideSub);
       text(el.lat, 'lat', view.latG);         text(el.lon, 'lon', view.longG);
       text(el.ggs, 'ggs', `${view.ggScale} g`);

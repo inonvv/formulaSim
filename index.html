@@ -170,6 +170,14 @@
     </div>
   </div>
 
+  <!-- ── Dirty-air legend (visible only while the wake env is active) ── -->
+  <div id="wake-legend">
+    <div class="wake-legend-title">DIRTY AIR</div>
+    <div class="wake-legend-bar"></div>
+    <div class="wake-legend-labels"><span>clean</span><span>energy lost</span></div>
+    <div class="wake-legend-note">Modelled pathlines: front tyres &rarr; sidepods &rarr; rear wing &rarr; wake</div>
+  </div>
+
   <!-- ── CFD hover probe tooltip ───────────────────────────────── -->
   <div id="cfd-probe-tip"></div>
 
@@ -269,6 +277,9 @@
           </button>
           <button class="env-btn" id="btn-cfd" data-env="cfd" aria-pressed="false">
             <span class="env-icon">🔬</span> CFD
+          </button>
+          <button class="env-btn" id="btn-wake" data-env="wake" aria-pressed="false">
+            <span class="env-icon">🌀</span> Dirty air
           </button>
         </div>
         <div id="rain-intensity-row" class="sub-ctrl" hidden>

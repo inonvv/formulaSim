@@ -19,6 +19,7 @@
   --c-cfd: #ff4400;
   --c-turns: #ff6b00;
   --c-aero: #4fd1c5;
+  --c-wake: #ff5a7a;
   --ok: #27ae60;
   --warn: #f39c12;
   /* Shared rhythm tokens */
@@ -942,6 +943,38 @@ button:focus-visible, input:focus-visible {
 #panel-body::-webkit-scrollbar-thumb { background: var(--panel-border); border-radius: 2px; }
 #panel-body::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
 
+/* ─── Dirty-air (wake) env + legend ──────────────────────────────── */
+.env-btn.active[data-env="wake"] {
+  background: color-mix(in srgb, var(--c-wake) 15%, transparent);
+  border-color: var(--c-wake);
+  color: #ffc9d4;
+  box-shadow: var(--glow) color-mix(in srgb, var(--c-wake) 28%, transparent);
+}
+.chip-wake { border-color: var(--c-wake); color: #7a1230; background: color-mix(in srgb, var(--c-wake) 55%, white); font-weight: 700; }
+#wake-legend {
+  position: fixed;
+  /* Right of the CFD legend (284 + ~140 + gap), level with the telemetry. */
+  left: 438px;
+  top: 92px;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--c-wake) 40%, transparent);
+  background: rgba(10,10,15,0.72);
+  backdrop-filter: blur(6px);
+  z-index: 10;
+  pointer-events: none;
+  font-family: var(--mono);
+  width: 250px;
+}
+#wake-legend.show { display: flex; }
+.wake-legend-title { font-size: var(--label-fs); letter-spacing: var(--label-track); color: #ffc9d4; }
+.wake-legend-bar { height: 8px; border-radius: 4px; background: linear-gradient(90deg, #8ce0ff, #ffc738, #ff3861); }
+.wake-legend-labels { display: flex; justify-content: space-between; font-size: 0.58rem; color: var(--dim); }
+.wake-legend-note { font-size: 0.55rem; color: var(--dim); line-height: 1.35; }
+
 /* ─── Rain intensity sub-control ─────────────────────────────────── */
 .sub-ctrl { display: flex; flex-direction: column; gap: 8px; }
 .sub-ctrl[hidden] { display: none; }
@@ -1324,6 +1357,8 @@ button:focus-visible, input:focus-visible {
   /* ── Car badge ── */
   #car-badge { top: 16px; left: 16px; }
   #cfd-legend { left: 12px; top: auto; bottom: 150px; }
+  #wake-legend { left: auto; right: 12px; top: auto; bottom: 150px; width: 170px; padding: 6px 8px; }
+  .wake-legend-note { display: none; }
   /* Circuit HUD: compact card, top-right under the camera label */
   #circuit-hud { left: auto; right: 12px; top: 52px; bottom: auto; width: 150px; }
   #circuit-hud .ch-head { flex-direction: column; gap: 2px; padding: 6px 8px; }
